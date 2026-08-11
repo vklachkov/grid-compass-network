@@ -1,5 +1,7 @@
 const MORE: u8 = 1;
+const TRANSPORT_HEADER_LEN: usize = 4;
 const MAX_REQUEST: usize = 64 * 1024;
+const MAX_TAG_VALUE: usize = u16::MAX as usize - 1;
 
 pub struct MailServer {
     fragments: Vec<Pending>,
@@ -26,6 +28,10 @@ impl MailServer {
         let Some(message) = MailMessage::from_outgoing(mail_id(self.next_mail_id), data) else {
             return false;
         };
+        // TODO: fragment large Mail responses to the PDL payload limit instead of rejecting them.
+        if !message.fits_vipc_payload() {
+            return false;
+        }
         self.next_mail_id = self.next_mail_id.wrapping_add(1).max(2);
         self.messages.push(message);
         true
@@ -207,8 +213,6 @@ struct MailMessage {
     subject: Vec<u8>,
     body: Vec<u8>,
     read: bool,
-    #[allow(dead_code)]
-    original: Vec<u8>,
 }
 
 impl MailMessage {
@@ -220,7 +224,6 @@ impl MailMessage {
             subject: b"Demo mail".to_vec(),
             body: DEMO_MAIL_BODY.to_vec(),
             read: false,
-            original: Vec::new(),
         }
     }
 
@@ -235,8 +238,17 @@ impl MailMessage {
             subject,
             body,
             read: false,
-            original,
         })
+    }
+
+    fn fits_vipc_payload(&self) -> bool {
+        self.recipient.len() <= MAX_TAG_VALUE
+            && self.sender.len() <= MAX_TAG_VALUE
+            && self.subject.len() <= MAX_TAG_VALUE
+            && self.body.len() <= MAX_TAG_VALUE
+            && mail_detail_len(self)
+                .checked_add(TRANSPORT_HEADER_LEN)
+                .is_some_and(|length| length <= u16::MAX as usize)
     }
 }
 
@@ -331,8 +343,28 @@ fn empty_mail_result() -> Vec<u8> {
     app_frame(0xfd, b"z")
 }
 
+fn mail_detail_len(message: &MailMessage) -> usize {
+    let tagged_records = [
+        message.recipient.len(),
+        message.sender.len(),
+        message.sender.len(),
+        message.subject.len(),
+        message.body.len(),
+    ];
+
+    // `b` header, five tagged fields, `z`, then the raw body drained by GRiDMail.
+    15 + tagged_records
+        .iter()
+        .map(|length| 4 + length)
+        .sum::<usize>()
+        + 4
+        + message.body.len()
+}
+
 fn mail_detail(message: &MailMessage) -> Vec<u8> {
-    let mut data = mail_header(message);
+    debug_assert!(message.fits_vipc_payload());
+    let mut data = Vec::with_capacity(mail_detail_len(message));
+    data.extend(mail_header(message));
     for (tag, value) in [
         (b't', message.recipient.as_slice()),
         (b'f', message.sender.as_slice()),
@@ -352,7 +384,7 @@ fn mail_detail(message: &MailMessage) -> Vec<u8> {
 }
 
 fn transport(flags: u8, connection_id: u8, data: &[u8]) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(data.len() + 4);
+    let mut payload = Vec::with_capacity(data.len() + TRANSPORT_HEADER_LEN);
     payload.extend([flags, connection_id, 0, 0]);
     payload.extend_from_slice(data);
     payload
@@ -610,6 +642,22 @@ mod tests {
         assert!(first[0].payload.ends_with(DEMO_MAIL_BODY));
         assert!(second[0].payload.ends_with(b"Second body"));
         assert_eq!(third[0].payload, transport(0, 5, &empty_mail_result()));
+    }
+
+    #[test]
+    fn rejects_mail_that_cannot_fit_in_one_vipc_response() {
+        let body = vec![b'x'; 40_000];
+        let mut outgoing = Vec::new();
+        outgoing.extend(app_frame(0xfd, b"tUser"));
+        outgoing.extend(app_frame(0xfd, b"sLarge"));
+        let mut body_record = vec![b'n'];
+        body_record.extend(body);
+        outgoing.extend(app_frame(0xfd, &body_record));
+        outgoing.extend(app_frame(0xfd, b"z"));
+
+        let mut mail = MailServer::new();
+        assert!(!mail.accept_outgoing(outgoing));
+        assert_eq!(mail.messages.len(), 1);
     }
 
     #[test]

@@ -10,6 +10,13 @@ const HARD_DISK: &[&str] = &[
 ];
 const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
 
+const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
+const VFS_OK: u16 = 0;
+const VFS_ERROR_FILE_NOT_OPEN: u16 = 205;
+const VFS_ERROR_BAD_CONNECTION: u16 = 221;
+const VFS_ERROR_BAD_PARAMETER: u16 = 225;
+const VFS_ERROR_DEVICE_FULL: u16 = 41;
+
 pub struct Vfs {
     connection_id: NonZeroU16,
     files: HashMap<NonZeroU16, VfsFileDescriptor>,
@@ -22,6 +29,7 @@ struct VfsFileDescriptor {
     data: Vec<u8>,
     position: usize,
     open: bool,
+    write_failed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,24 +168,33 @@ impl Vfs {
         header: &VfsRequestHeader,
         body: VfsWriteRequest<'_>,
     ) -> OutgoingMessageBody {
-        if let Some(file) =
-            NonZeroU16::new(header.servers_conn_id).and_then(|conn_id| self.files.get_mut(&conn_id))
+        let error = match NonZeroU16::new(header.servers_conn_id)
+            .and_then(|conn_id| self.files.get_mut(&conn_id))
         {
-            let end = file.position.saturating_add(body.data.len());
-            if file.open && file.resource == VfsResource::MailObject && end <= 16 * 1024 * 1024 {
-                if file.data.len() < end {
-                    file.data.resize(end, 0);
+            None => VFS_ERROR_BAD_CONNECTION,
+            Some(file) if !file.open => VFS_ERROR_FILE_NOT_OPEN,
+            Some(file) if file.resource != VfsResource::MailObject => VFS_ERROR_BAD_PARAMETER,
+            Some(file) => match file.position.checked_add(body.data.len()) {
+                Some(end) if end <= MAX_MAIL_OBJECT_SIZE => {
+                    if file.data.len() < end {
+                        file.data.resize(end, 0);
+                    }
+                    file.data[file.position..end].copy_from_slice(body.data);
+                    file.position = end;
+                    VFS_OK
                 }
-                file.data[file.position..end].copy_from_slice(body.data);
-                file.position = end;
-            }
-        }
+                _ => {
+                    file.write_failed = true;
+                    VFS_ERROR_DEVICE_FULL
+                }
+            },
+        };
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Write as u16,
             servers_conn_id: header.servers_conn_id,
             requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
+            error,
         })
     }
 
@@ -211,14 +228,37 @@ impl Vfs {
         })
     }
 
-    fn seek(&mut self, header: &VfsRequestHeader, _body: VfsSeekRequest) -> OutgoingMessageBody {
-        // TODO
+    fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> OutgoingMessageBody {
+        let error = match NonZeroU16::new(header.servers_conn_id)
+            .and_then(|conn_id| self.files.get_mut(&conn_id))
+        {
+            None => VFS_ERROR_BAD_CONNECTION,
+            Some(file) if !file.open => VFS_ERROR_FILE_NOT_OPEN,
+            Some(file) => {
+                let offset = usize::try_from(body.position).ok();
+                let position = match body.mode {
+                    1 => offset.and_then(|offset| file.position.checked_sub(offset)),
+                    2 => offset,
+                    3 => offset.and_then(|offset| file.position.checked_add(offset)),
+                    4 => offset.and_then(|offset| file.data.len().checked_sub(offset)),
+                    _ => None,
+                };
+
+                match position.filter(|position| *position <= MAX_MAIL_OBJECT_SIZE) {
+                    Some(position) => {
+                        file.position = position;
+                        VFS_OK
+                    }
+                    None => VFS_ERROR_BAD_PARAMETER,
+                }
+            }
+        };
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Seek as u16,
             servers_conn_id: header.servers_conn_id,
             requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
+            error,
         })
     }
 
@@ -241,6 +281,7 @@ impl Vfs {
                 data: Vec::new(),
                 position: 0,
                 open: false,
+                write_failed: false,
             },
         );
 
@@ -258,10 +299,11 @@ impl Vfs {
     fn detach(&mut self, header: &VfsRequestHeader) -> OutgoingMessageBody {
         if let Some(file) =
             NonZeroU16::new(header.servers_conn_id).and_then(|conn_id| self.files.remove(&conn_id))
+            && file.resource == VfsResource::MailObject
+            && !file.write_failed
+            && !file.data.is_empty()
         {
-            if file.resource == VfsResource::MailObject && !file.data.is_empty() {
-                self.finalized_mail = Some(file.data);
-            }
+            self.finalized_mail = Some(file.data);
         }
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
@@ -383,5 +425,93 @@ mod tests {
         });
         assert_eq!(vfs.take_finalized_mail(), Some(b"first second".to_vec()));
         assert_eq!(vfs.take_finalized_mail(), None);
+    }
+
+    #[test]
+    fn write_errors_do_not_commit_partial_mail() {
+        let mut vfs = Vfs::new();
+        let response = vfs.write(
+            &header(VfsRequestCode::Write, 999),
+            VfsWriteRequest { data: b"lost" },
+        );
+        let OutgoingMessageBody::VfsSimple(response) = response else {
+            panic!("write returned a non-simple response");
+        };
+        assert_eq!(response.error, VFS_ERROR_BAD_CONNECTION);
+
+        let path =
+            Path::try_from_slice(b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~").unwrap();
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Attach, 0),
+            body: VfsRequestBody::Attach(VfsAttachRequest {
+                mode: 4,
+                access: VfsAccessMode::Write as u8,
+                password: [0; 17],
+                path,
+            }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Open, 1),
+            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+        });
+        vfs.files
+            .get_mut(&NonZeroU16::new(1).unwrap())
+            .unwrap()
+            .position = MAX_MAIL_OBJECT_SIZE;
+        let response = vfs.write(
+            &header(VfsRequestCode::Write, 1),
+            VfsWriteRequest { data: b"too much" },
+        );
+        let OutgoingMessageBody::VfsSimple(response) = response else {
+            panic!("write returned a non-simple response");
+        };
+        assert_eq!(response.error, VFS_ERROR_DEVICE_FULL);
+
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Detach, 1),
+            body: VfsRequestBody::Detach,
+        });
+        assert_eq!(vfs.take_finalized_mail(), None);
+    }
+
+    #[test]
+    fn seek_updates_the_next_write_position() {
+        let path =
+            Path::try_from_slice(b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~").unwrap();
+        let mut vfs = Vfs::new();
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Attach, 0),
+            body: VfsRequestBody::Attach(VfsAttachRequest {
+                mode: 4,
+                access: VfsAccessMode::Write as u8,
+                password: [0; 17],
+                path,
+            }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Open, 1),
+            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Write, 1),
+            body: VfsRequestBody::Write(VfsWriteRequest { data: b"abcdef" }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Seek, 1),
+            body: VfsRequestBody::Seek(VfsSeekRequest {
+                mode: 1,
+                position: 3,
+            }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Write, 1),
+            body: VfsRequestBody::Write(VfsWriteRequest { data: b"XYZ" }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Detach, 1),
+            body: VfsRequestBody::Detach,
+        });
+
+        assert_eq!(vfs.take_finalized_mail(), Some(b"abcXYZ".to_vec()));
     }
 }

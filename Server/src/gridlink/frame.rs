@@ -6,7 +6,7 @@ use super::{error::FrameError, raw_frame::RawFrame, utils::ReadExt};
 pub const EOM_FLAG_ON: u8 = 1;
 
 /// Phone data link protocol version bytes.
-const PDL_VERSION: [u8; 2] = [b'0', b'2'];
+const PDL_VERSION: [u8; 2] = *b"02";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Frame<'a> {
@@ -53,7 +53,7 @@ impl<'a> Frame<'a> {
         Frame {
             flags: EOM_FLAG_ON,
             window_size: 1,
-            seq_number: seq_number,
+            seq_number,
             body: FrameBody::Rfc(RfcFrameBody {
                 connection_id: conn_id,
                 version: PDL_VERSION,
@@ -65,7 +65,7 @@ impl<'a> Frame<'a> {
         Self {
             flags: EOM_FLAG_ON,
             window_size: b'A',
-            seq_number: seq_number,
+            seq_number,
             body: FrameBody::Ack(ShortFrameBody {
                 connection_id: conn_id,
             }),
@@ -74,9 +74,9 @@ impl<'a> Frame<'a> {
 
     pub fn data(flags: u8, seq_number: u8, body: &'a [u8]) -> Self {
         Self {
-            flags: flags,
+            flags,
             window_size: b'D',
-            seq_number: seq_number,
+            seq_number,
             body: FrameBody::Data(body),
         }
     }
@@ -122,9 +122,9 @@ impl<'a> Frame<'a> {
         })
     }
 
-    pub fn to_raw(&self) -> RawFrame {
+    pub fn into_raw(self) -> RawFrame {
         let mut data = Vec::with_capacity(5);
-        data.push(self.body.to_repr());
+        data.push(self.body.repr());
         data.push(self.flags);
         data.push(self.window_size);
         data.push(self.seq_number);
@@ -147,7 +147,7 @@ impl<'a> Frame<'a> {
 }
 
 impl FrameBody<'_> {
-    fn to_repr(&self) -> u8 {
+    fn repr(self) -> u8 {
         (match self {
             FrameBody::Rfc(_) => FrameType::Rfc,
             FrameBody::Ack(_) => FrameType::Ack,

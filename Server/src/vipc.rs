@@ -21,10 +21,10 @@ impl Vipc {
         let responses = match message.body {
             IncomingMessageBody::Vfs(req) => {
                 let response = self.vfs.process_request(req);
-                if let Some(data) = self.vfs.take_finalized_mail() {
-                    if !self.mail.accept_outgoing(data) {
-                        info!("session: discarded malformed outgoing mail object");
-                    }
+                if let Some(data) = self.vfs.take_finalized_mail()
+                    && !self.mail.accept_outgoing(data)
+                {
+                    info!("session: discarded malformed outgoing mail object");
                 }
                 vec![OutgoingMessage {
                     note: message.note,

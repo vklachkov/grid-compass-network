@@ -79,7 +79,7 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
     let vfs = Box::new(Vfs::new());
 
     let mut session = Session {
-        client: client,
+        client,
         // TODO: automatically choose the connection ID from the available IDs.
         connection_id: 0x7B,
         last_seq_number: 0x1C,
@@ -104,7 +104,7 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
                 return Err(err);
             }
             Err(err) => {
-                return Err(io::Error::new(io::ErrorKind::Other, err));
+                return Err(io::Error::other(err));
             }
         }
     }
@@ -123,7 +123,7 @@ impl Session {
         match self.process_frame_(raw) {
             Ok(result) => Ok(result),
             Err(FrameError::Io(err)) => Err(err),
-            Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+            Err(err) => Err(io::Error::other(err)),
         }
     }
 
@@ -136,7 +136,7 @@ impl Session {
             FrameBody::Rfc(_) => {
                 self.recv_sequence = self.last_seq_number;
                 Frame::rfc(self.connection_id, self.last_seq_number)
-                    .to_raw()
+                    .into_raw()
                     .write_to_io(&mut self.client)?;
             }
             FrameBody::Ack(_) => {
@@ -147,7 +147,7 @@ impl Session {
             }
             FrameBody::Ping(_) => {
                 Frame::ack(self.connection_id, frame.seq_number)
-                    .to_raw()
+                    .into_raw()
                     .write_to_io(&mut self.client)?;
             }
             FrameBody::Data(data) => {
@@ -165,14 +165,14 @@ impl Session {
                         frame.seq_number
                     );
                     Frame::ack(self.connection_id, self.recv_sequence)
-                        .to_raw()
+                        .into_raw()
                         .write_to_io(&mut self.client)?;
                     return Ok(ProcessFrameResult::Continue);
                 }
 
                 self.recv_sequence = frame.seq_number;
                 Frame::ack(self.connection_id, self.recv_sequence)
-                    .to_raw()
+                    .into_raw()
                     .write_to_io(&mut self.client)?;
                 self.process_data_frame(data)?;
             }
@@ -284,7 +284,7 @@ impl Session {
         self.last_seq_number = self.last_seq_number.wrapping_add(1);
 
         Frame::data(EOM_FLAG_ON, self.last_seq_number, body)
-            .to_raw()
+            .into_raw()
             .write_to_io(&mut self.client)?;
 
         Ok(())

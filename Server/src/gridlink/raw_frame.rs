@@ -178,7 +178,7 @@ mod tests {
         data_frame.extend(1u16.to_le_bytes());
         data_frame.extend(vipc);
 
-        let frame = crate::gridlink::Frame::data(1, 54, &data_frame).to_raw();
+        let frame = crate::gridlink::Frame::data(1, 54, &data_frame).into_raw();
         assert_eq!(frame.data.len(), 528);
 
         let mut encoded = Vec::new();

@@ -10,13 +10,13 @@ pub trait ReadExt: io::Read {
 
     /// Reads a little-endian u16 value.
     fn read_u16(&mut self) -> io::Result<u16> {
-        let buffer = self.read_array()?;
+        let buffer = ReadExt::read_array(self)?;
         Ok(u16::from_le_bytes(buffer))
     }
 
     /// Reads a little-endian u32 value.
     fn read_u32(&mut self) -> io::Result<u32> {
-        let buffer = self.read_array()?;
+        let buffer = ReadExt::read_array(self)?;
         Ok(u32::from_le_bytes(buffer))
     }
 

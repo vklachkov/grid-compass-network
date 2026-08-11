@@ -15,8 +15,8 @@ const ETX: u8 = 0x03;
 /// Size of the preallocated buffer for a frame.
 const AVERAGE_FRAME_SIZE: usize = 64;
 
-/// Number of bytes after which the reader returns an error.
-const MAX_FRAME_SIZE: usize = 512;
+/// Four-byte PDL header plus the maximum 526-byte DLC data area.
+const MAX_FRAME_SIZE: usize = 4 + 526;
 
 #[derive(Clone, Debug)]
 pub struct RawFrame {
@@ -49,21 +49,15 @@ impl RawFrame {
         let mut buffer = Vec::with_capacity(AVERAGE_FRAME_SIZE);
 
         loop {
-            if buffer.len() >= MAX_FRAME_SIZE {
-                return Err(FrameError::FrameTooLarge {
-                    max: MAX_FRAME_SIZE,
-                });
-            }
-
             let byte = src.read_u8()?;
             if byte != DLE {
-                buffer.push(byte);
+                Self::push_unstuffed(&mut buffer, byte)?;
                 continue;
             }
 
             let byte = src.read_u8()?;
             match byte {
-                DLE => buffer.push(DLE),
+                DLE => Self::push_unstuffed(&mut buffer, DLE)?,
                 STX => buffer.clear(),
                 ETX => break,
                 _ => {
@@ -73,6 +67,17 @@ impl RawFrame {
         }
 
         Ok(buffer)
+    }
+
+    fn push_unstuffed(buffer: &mut Vec<u8>, byte: u8) -> Result<(), FrameError> {
+        if buffer.len() >= MAX_FRAME_SIZE {
+            return Err(FrameError::FrameTooLarge {
+                max: MAX_FRAME_SIZE,
+            });
+        }
+
+        buffer.push(byte);
+        Ok(())
     }
 
     /// Stuffs and writes frame data to an I/O destination.
@@ -96,7 +101,7 @@ impl RawFrame {
     }
 
     fn write_stuffed(mut dst: impl io::Write, data: &[u8], crc: u16) -> Result<(), FrameError> {
-        println!("write data stuffed: {data:02x?}");
+        info!("write data stuffed: {data:02x?}");
 
         dst.write_all(&[DLE, STX])?;
         dst.write_all(data)?;
@@ -124,4 +129,78 @@ fn crc16(data: &[u8]) -> u16 {
     }
 
     crc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_maximum_unstuffed_frame() {
+        let data = vec![DLE; MAX_FRAME_SIZE];
+        let mut encoded = Vec::new();
+        RawFrame::new(data.clone())
+            .write_to_io(&mut encoded)
+            .unwrap();
+
+        let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.data, data);
+    }
+
+    #[test]
+    fn rejects_frame_one_byte_over_maximum() {
+        let mut encoded = vec![DLE, STX];
+        encoded.extend(std::iter::repeat_n(0x55, MAX_FRAME_SIZE + 1));
+
+        assert!(matches!(
+            RawFrame::read_from_io(encoded.as_slice()),
+            Err(FrameError::FrameTooLarge {
+                max: MAX_FRAME_SIZE
+            })
+        ));
+    }
+
+    #[test]
+    fn accepts_full_vfs_write_frame() {
+        let mut vipc = Vec::with_capacity(518);
+        vipc.extend(83u16.to_le_bytes());
+        vipc.extend(3u16.to_le_bytes());
+        vipc.extend(512u16.to_le_bytes());
+        vipc.extend(5u16.to_le_bytes());
+        vipc.extend(0x7db2u16.to_le_bytes());
+        vipc.extend(3u16.to_le_bytes());
+        vipc.extend(504u16.to_le_bytes());
+        vipc.extend(std::iter::repeat_n(DLE, 504));
+
+        let mut data_frame = Vec::with_capacity(524);
+        data_frame.extend(0u16.to_le_bytes());
+        data_frame.extend(0x6542u16.to_le_bytes());
+        data_frame.extend(1u16.to_le_bytes());
+        data_frame.extend(vipc);
+
+        let frame = crate::gridlink::Frame::data(1, 54, &data_frame).to_raw();
+        assert_eq!(frame.data.len(), 528);
+
+        let mut encoded = Vec::new();
+        frame.write_to_io(&mut encoded).unwrap();
+        let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
+        let parsed = crate::gridlink::Frame::try_from_raw(&decoded).unwrap();
+        let crate::gridlink::FrameBody::Data(data) = parsed.body else {
+            panic!("expected data frame");
+        };
+        let crate::gridlink::data_frame::DataFrameRequest::Msg { payload, .. } =
+            crate::gridlink::data_frame::DataFrameRequest::try_from_slice(data).unwrap()
+        else {
+            panic!("expected VIPC message");
+        };
+        let message = crate::gridlink::vipc::IncomingMessage::try_from_slice(payload).unwrap();
+        let crate::gridlink::vipc::IncomingMessageBody::Vfs(request) = message.body else {
+            panic!("expected VFS request");
+        };
+        let crate::gridlink::vipc::VfsRequestBody::Write(write) = request.body else {
+            panic!("expected VFS write");
+        };
+        assert_eq!(write.data.len(), 504);
+        assert!(write.data.iter().all(|&byte| byte == DLE));
+    }
 }

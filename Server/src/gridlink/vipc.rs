@@ -12,6 +12,7 @@ use super::{
 #[repr(u16)]
 enum MessageClassType {
     Vfs = 83,
+    Mail = 0x7444,
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,7 @@ pub struct IncomingMessage<'a> {
 #[derive(Clone, Debug)]
 pub enum IncomingMessageBody<'a> {
     Vfs(VfsRequest<'a>),
+    Mail(&'a [u8]),
     Unsupported(UnknownRequest<'a>),
 }
 
@@ -209,8 +211,8 @@ pub enum VfsObjectMode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct UnknownRequest<'a> {
-    class: u16,
-    payload: &'a [u8],
+    pub class: u16,
+    pub payload: &'a [u8],
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +223,10 @@ pub struct OutgoingMessage {
 
 #[derive(Clone, Debug)]
 pub enum OutgoingMessageBody {
+    Mail {
+        payload: Vec<u8>,
+    },
+
     // SimpleRespType
     VfsSimple(VfsResponseHeader),
 
@@ -297,6 +303,7 @@ impl<'a> IncomingMessage<'a> {
             Some(MessageClassType::Vfs) => {
                 IncomingMessageBody::Vfs(Self::read_vfs_request(payload)?)
             }
+            Some(MessageClassType::Mail) => IncomingMessageBody::Mail(payload),
             None => {
                 IncomingMessageBody::Unsupported(UnknownRequest { class, payload }) //
             }
@@ -493,6 +500,7 @@ impl OutgoingMessage {
         data.extend(payload_length.to_le_bytes());
 
         match &self.body {
+            OutgoingMessageBody::Mail { payload, .. } => data.extend_from_slice(payload),
             OutgoingMessageBody::VfsSimple(response) => {
                 Self::write_header(&mut data, response);
             }
@@ -516,6 +524,7 @@ impl OutgoingMessage {
 
     fn class(&self) -> u16 {
         match &self.body {
+            OutgoingMessageBody::Mail { .. } => MessageClassType::Mail as u16,
             OutgoingMessageBody::VfsSimple(_) => MessageClassType::Vfs as u16,
             OutgoingMessageBody::VfsGetStatus(_) => MessageClassType::Vfs as u16,
             OutgoingMessageBody::VfsReadDirPage(_) => MessageClassType::Vfs as u16,
@@ -526,6 +535,9 @@ impl OutgoingMessage {
     fn payload_length(&self) -> u16 {
         // TODO: Remove magic numbers.
         match &self.body {
+            OutgoingMessageBody::Mail { payload, .. } => {
+                u16::try_from(payload.len()).expect("VIPC payload exceeds u16 length")
+            }
             OutgoingMessageBody::VfsSimple(_) => 8,
             OutgoingMessageBody::VfsGetStatus(_) => 25,
             OutgoingMessageBody::VfsReadDirPage(response) => {

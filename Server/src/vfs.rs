@@ -13,11 +13,15 @@ const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
 pub struct Vfs {
     connection_id: NonZeroU16,
     files: HashMap<NonZeroU16, VfsFileDescriptor>,
+    finalized_mail: Option<Vec<u8>>,
 }
 
 struct VfsFileDescriptor {
     resource: VfsResource,
     read_dir_page_offset: usize,
+    data: Vec<u8>,
+    position: usize,
+    open: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +29,7 @@ enum VfsResource {
     Resources,
     HardDisk,
     HardDiskFiles,
+    MailObject,
     Unknown,
 }
 
@@ -33,7 +38,12 @@ impl Vfs {
         Self {
             connection_id: NonZeroU16::MIN,
             files: HashMap::new(),
+            finalized_mail: None,
         }
+    }
+
+    pub fn take_finalized_mail(&mut self) -> Option<Vec<u8>> {
+        self.finalized_mail.take()
     }
 
     pub fn process_request(&mut self, req: VfsRequest) -> OutgoingMessageBody {
@@ -78,7 +88,11 @@ impl Vfs {
     }
 
     fn open(&mut self, header: &VfsRequestHeader, _body: VfsOpenRequest) -> OutgoingMessageBody {
-        // TODO
+        if let Some(file) =
+            NonZeroU16::new(header.servers_conn_id).and_then(|conn_id| self.files.get_mut(&conn_id))
+        {
+            file.open = true;
+        }
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Open as u16,
@@ -144,9 +158,20 @@ impl Vfs {
     fn write(
         &mut self,
         header: &VfsRequestHeader,
-        _body: VfsWriteRequest<'_>,
+        body: VfsWriteRequest<'_>,
     ) -> OutgoingMessageBody {
-        // TODO
+        if let Some(file) =
+            NonZeroU16::new(header.servers_conn_id).and_then(|conn_id| self.files.get_mut(&conn_id))
+        {
+            let end = file.position.saturating_add(body.data.len());
+            if file.open && file.resource == VfsResource::MailObject && end <= 16 * 1024 * 1024 {
+                if file.data.len() < end {
+                    file.data.resize(end, 0);
+                }
+                file.data[file.position..end].copy_from_slice(body.data);
+                file.position = end;
+            }
+        }
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Write as u16,
@@ -213,6 +238,9 @@ impl Vfs {
             VfsFileDescriptor {
                 resource: VfsResource::from_components(&body.path.components),
                 read_dir_page_offset: 0,
+                data: Vec::new(),
+                position: 0,
+                open: false,
             },
         );
 
@@ -228,7 +256,13 @@ impl Vfs {
     }
 
     fn detach(&mut self, header: &VfsRequestHeader) -> OutgoingMessageBody {
-        // TODO
+        if let Some(file) =
+            NonZeroU16::new(header.servers_conn_id).and_then(|conn_id| self.files.remove(&conn_id))
+        {
+            if file.resource == VfsResource::MailObject && !file.data.is_empty() {
+                self.finalized_mail = Some(file.data);
+            }
+        }
 
         OutgoingMessageBody::VfsSimple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Detach as u16,
@@ -260,7 +294,7 @@ impl VfsFileDescriptor {
             VfsResource::Resources => RESOURCES,
             VfsResource::HardDisk => HARD_DISK,
             VfsResource::HardDiskFiles => HARD_DISK_FILES,
-            VfsResource::Unknown => return Vec::new(),
+            VfsResource::MailObject | VfsResource::Unknown => return Vec::new(),
         };
 
         let mut page = Vec::new();
@@ -294,8 +328,60 @@ impl VfsResource {
             && components[1] == b"Folder 3~Subject~"
         {
             Self::HardDiskFiles
+        } else if components.len() >= 3 && components[0] == b"Mail" && components[1] == b"Mail" {
+            Self::MailObject
         } else {
             Self::Unknown
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gridlink::Path;
+
+    fn header(request: VfsRequestCode, server: u16) -> VfsRequestHeader {
+        VfsRequestHeader {
+            request: request as u16,
+            requestors_conn_id: 0x7e00,
+            servers_conn_id: server,
+        }
+    }
+
+    #[test]
+    fn writable_mail_object_is_finalized_on_detach() {
+        let path =
+            Path::try_from_slice(b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~").unwrap();
+        let mut vfs = Vfs::new();
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Attach, 0),
+            body: VfsRequestBody::Attach(VfsAttachRequest {
+                mode: 4,
+                access: VfsAccessMode::Write as u8,
+                password: [0; 17],
+                path,
+            }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Open, 1),
+            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Write, 1),
+            body: VfsRequestBody::Write(VfsWriteRequest { data: b"first " }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Write, 1),
+            body: VfsRequestBody::Write(VfsWriteRequest { data: b"second" }),
+        });
+
+        assert_eq!(vfs.take_finalized_mail(), None);
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Detach, 1),
+            body: VfsRequestBody::Detach,
+        });
+        assert_eq!(vfs.take_finalized_mail(), Some(b"first second".to_vec()));
+        assert_eq!(vfs.take_finalized_mail(), None);
     }
 }

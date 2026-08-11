@@ -1,12 +1,10 @@
-mod gridlink;
-mod vfs;
-mod vipc;
-
 use std::{
     io,
     net::{SocketAddr, TcpListener, TcpStream},
     process::ExitCode,
+    sync::OnceLock,
     thread,
+    time::Instant,
 };
 
 use bstr::BStr;
@@ -14,6 +12,25 @@ use bstr::BStr;
 use gridlink::*;
 use vfs::Vfs;
 use vipc::Vipc;
+
+static STARTED_AT: OnceLock<Instant> = OnceLock::new();
+
+macro_rules! info {
+    ($($arg:tt)*) => {
+        println!("[{:>10.3}] {}", crate::STARTED_AT.get_or_init(std::time::Instant::now).elapsed().as_secs_f64(), format_args!($($arg)*))
+    };
+}
+
+macro_rules! error {
+    ($($arg:tt)*) => {
+        eprintln!("[{:>10.3}] {}", crate::STARTED_AT.get_or_init(std::time::Instant::now).elapsed().as_secs_f64(), format_args!($($arg)*))
+    };
+}
+
+mod gridlink;
+mod mail;
+mod vfs;
+mod vipc;
 
 #[derive(PartialEq, Eq)]
 enum ProcessFrameResult {
@@ -25,7 +42,7 @@ fn main() -> ExitCode {
     match server() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Fatal error: {err}");
+            error!("Fatal error: {err}");
             ExitCode::FAILURE
         }
     }
@@ -38,15 +55,15 @@ fn server() -> io::Result<()> {
 
     let listener = TcpListener::bind(&addr)?;
 
-    println!("Start GRiD Server at {addr}");
+    info!("Start GRiD Server at {addr}");
     loop {
         match listener.accept() {
             Ok((client, addr)) => {
-                println!("Accepted client {addr}");
+                info!("Accepted client {addr}");
                 thread::spawn(move || worker(client, addr));
             }
             Err(err) => {
-                eprintln!("Failed to accept client: {err}");
+                error!("Failed to accept client: {err}");
             }
         };
     }
@@ -54,7 +71,7 @@ fn server() -> io::Result<()> {
 
 fn worker(client: TcpStream, addr: SocketAddr) {
     if let Err(err) = try_worker(client, addr) {
-        eprintln!("worker({addr}): fatal error: {err}");
+        error!("worker({addr}): fatal error: {err}");
     }
 }
 
@@ -66,6 +83,7 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
         // TODO: automatically choose the connection ID from the available IDs.
         connection_id: 0x7B,
         last_seq_number: 0x1C,
+        recv_sequence: 0x1C,
         vipc: Box::new(Vipc::new(vfs)),
     };
 
@@ -74,12 +92,12 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
             Ok(frame) => {
                 // println!("worker({addr}): received new frame");
                 if session.process_frame(frame)? == ProcessFrameResult::Disconnect {
-                    println!("worker({addr}): disconnect");
+                    info!("worker({addr}): disconnect");
                     return Ok(());
                 }
             }
             Err(FrameError::UnexpectedEof) => {
-                println!("worker({addr}): connection closed");
+                info!("worker({addr}): connection closed");
                 return Ok(());
             }
             Err(FrameError::Io(err)) => {
@@ -96,6 +114,7 @@ struct Session {
     client: TcpStream,
     connection_id: u8,
     last_seq_number: u8,
+    recv_sequence: u8,
     vipc: Box<Vipc>,
 }
 
@@ -111,10 +130,11 @@ impl Session {
     fn process_frame_(&mut self, raw: RawFrame) -> Result<ProcessFrameResult, FrameError> {
         let frame = Frame::try_from_raw(&raw)?;
 
-        println!("session: received {frame:?}");
+        info!("session: received {frame:?}");
 
         match frame.body {
             FrameBody::Rfc(_) => {
+                self.recv_sequence = self.last_seq_number;
                 Frame::rfc(self.connection_id, self.last_seq_number)
                     .to_raw()
                     .write_to_io(&mut self.client)?;
@@ -131,10 +151,29 @@ impl Session {
                     .write_to_io(&mut self.client)?;
             }
             FrameBody::Data(data) => {
-                Frame::ack(self.connection_id, frame.seq_number)
+                let expected = self.recv_sequence.wrapping_add(1);
+                if frame.seq_number == self.recv_sequence {
+                    info!(
+                        "session: ignored duplicate data frame seq={}",
+                        frame.seq_number
+                    );
+                    return Ok(ProcessFrameResult::Continue);
+                }
+                if frame.seq_number != expected {
+                    info!(
+                        "session: ignored out-of-sequence data frame seq={}, expected={expected}",
+                        frame.seq_number
+                    );
+                    Frame::ack(self.connection_id, self.recv_sequence)
+                        .to_raw()
+                        .write_to_io(&mut self.client)?;
+                    return Ok(ProcessFrameResult::Continue);
+                }
+
+                self.recv_sequence = frame.seq_number;
+                Frame::ack(self.connection_id, self.recv_sequence)
                     .to_raw()
                     .write_to_io(&mut self.client)?;
-
                 self.process_data_frame(data)?;
             }
         }
@@ -146,7 +185,7 @@ impl Session {
     fn process_data_frame(&mut self, data: &[u8]) -> Result<(), FrameError> {
         let req = DataFrameRequest::try_from_slice(data)?;
 
-        println!("session: received request {req:?}");
+        info!("session: received request {req:?}");
 
         match req {
             DataFrameRequest::Connect { header, path } => {
@@ -168,7 +207,7 @@ impl Session {
     }
 
     fn connect(&mut self, remote_path_id: u16, path: &BStr) -> Result<(), FrameError> {
-        println!("session: requested connect to {path}");
+        info!("session: requested connect to {path}");
 
         // TODO: proper connect to resource.
 
@@ -186,7 +225,7 @@ impl Session {
     }
 
     fn disconnect(&mut self, remote_path_id: u16, _reason: u16) -> Result<(), FrameError> {
-        println!("session: requested disconnect");
+        info!("session: requested disconnect");
 
         // TODO: proper disconnect from resource.
 
@@ -203,7 +242,7 @@ impl Session {
     }
 
     fn sign_on(&mut self, _properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
-        println!("session: requested sign on");
+        info!("session: requested sign on");
 
         // TODO: Check credentials.
 
@@ -218,7 +257,7 @@ impl Session {
     }
 
     fn sign_off(&mut self) -> Result<(), FrameError> {
-        println!("session: requested sign off");
+        info!("session: requested sign off");
 
         // TODO: Sign off properly.
 
@@ -226,19 +265,19 @@ impl Session {
     }
 
     fn process_msg(&mut self, header: ConnectHeader, payload: &[u8]) -> Result<(), FrameError> {
-        let Some(outgoing) = self.vipc.process_message(payload)? else {
-            return Ok(());
-        };
+        for outgoing in self.vipc.process_message(payload)? {
+            let response = DataFrameResponse::Msg {
+                header: ConnectHeader {
+                    local_path_id: header.remote_path_id,
+                    remote_path_id: header.local_path_id,
+                },
+                payload: outgoing.to_bytes(),
+            };
 
-        let response = DataFrameResponse::Msg {
-            header: ConnectHeader {
-                local_path_id: header.remote_path_id,
-                remote_path_id: header.local_path_id,
-            },
-            payload: outgoing.to_bytes(),
-        };
+            self.write_response(&response.to_bytes())?;
+        }
 
-        self.write_response(&response.to_bytes())
+        Ok(())
     }
 
     fn write_response(&mut self, body: &[u8]) -> Result<(), FrameError> {

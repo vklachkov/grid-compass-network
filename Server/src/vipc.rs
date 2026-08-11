@@ -1,30 +1,164 @@
-use crate::{gridlink::FrameError, gridlink::vipc::*, vfs::Vfs};
+use crate::{gridlink::FrameError, gridlink::vipc::*, mail::MailServer, vfs::Vfs};
 
 pub struct Vipc {
     vfs: Box<Vfs>,
+    mail: MailServer,
 }
 
 impl Vipc {
     pub fn new(vfs: Box<Vfs>) -> Self {
-        Self { vfs }
+        Self {
+            vfs,
+            mail: MailServer::new(),
+        }
     }
 
-    pub fn process_message(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<Option<OutgoingMessage>, FrameError> {
+    pub fn process_message(&mut self, payload: &[u8]) -> Result<Vec<OutgoingMessage>, FrameError> {
         let message = IncomingMessage::try_from_slice(payload)?;
 
-        println!("session: received vipc message: {message:?}");
+        info!("session: received vipc message: {message:?}");
 
-        let response = match message.body {
-            IncomingMessageBody::Vfs(req) => Some(self.vfs.process_request(req)),
-            IncomingMessageBody::Unsupported(_raw) => None,
+        let responses = match message.body {
+            IncomingMessageBody::Vfs(req) => {
+                let response = self.vfs.process_request(req);
+                if let Some(data) = self.vfs.take_finalized_mail() {
+                    if !self.mail.accept_outgoing(data) {
+                        info!("session: discarded malformed outgoing mail object");
+                    }
+                }
+                vec![OutgoingMessage {
+                    note: message.note,
+                    body: response,
+                }]
+            }
+            IncomingMessageBody::Mail(payload) => self
+                .mail
+                .process(message.note, payload)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|response| OutgoingMessage {
+                    note: 0x8000 | response.note,
+                    body: OutgoingMessageBody::Mail {
+                        payload: response.payload,
+                    },
+                })
+                .collect(),
+            IncomingMessageBody::Unsupported(_) => Vec::new(),
         };
 
-        Ok(response.map(|r| OutgoingMessage {
-            note: message.note,
-            body: r,
-        }))
+        Ok(responses)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_mail_initialization_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [
+            0x44, 0x74, 0, 0, 11, 0, 0, 5, 0, 0, 0xfe, 4, 0, b'a', 0x88, 0x2c, 1,
+        ];
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [0x44, 0x74, 0, 0x80, 8, 0, 0, 5, 0, 0, 0xfe, 1, 0, b'z']
+        );
+    }
+
+    #[test]
+    fn serializes_initial_message_drain_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [0x44, 0x74, 0x10, 0, 4, 0, 0, 1, 0, 0];
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [0x44, 0x74, 0x10, 0x80, 8, 0, 0, 1, 0, 0, 0xfd, 1, 0, b'z']
+        );
+    }
+
+    fn tagged(tag: u8, value: &[u8]) -> Vec<u8> {
+        let mut data = vec![0xfd];
+        data.extend(((value.len() + 1) as u16).to_le_bytes());
+        data.push(tag);
+        data.extend_from_slice(value);
+        data
+    }
+
+    fn vfs_message(note: u16, payload: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend(83u16.to_le_bytes());
+        data.extend(note.to_le_bytes());
+        data.extend((payload.len() as u16).to_le_bytes());
+        data.extend_from_slice(payload);
+        data
+    }
+
+    #[test]
+    fn finalized_vfs_mail_appears_in_mail_list() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let path = b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~";
+        let mut attach = vec![8, 0, 0, 0x7e, 0, 0, 4, 2];
+        attach.extend([0; 17]);
+        attach.push(path.len() as u8);
+        attach.extend_from_slice(path);
+        vipc.process_message(&vfs_message(1, &attach)).unwrap();
+
+        vipc.process_message(&vfs_message(2, &[2, 0, 0, 0x7e, 1, 0, 1]))
+            .unwrap();
+
+        let mut outgoing = tagged(b't', b"User");
+        outgoing.extend(tagged(b's', b"Sent through VFS"));
+        outgoing.extend(tagged(b'n', b"Stored body"));
+        outgoing.extend(tagged(b'z', b""));
+        let mut write = vec![5, 0, 0, 0x7e, 1, 0];
+        write.extend((outgoing.len() as u16).to_le_bytes());
+        write.extend(outgoing);
+        vipc.process_message(&vfs_message(3, &write)).unwrap();
+        vipc.process_message(&vfs_message(4, &[9, 0, 0, 0x7e, 1, 0]))
+            .unwrap();
+
+        let request = [
+            0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0,
+        ];
+        let responses = vipc.process_message(&request).unwrap();
+        assert_eq!(responses.len(), 2);
+        let first = responses[0].to_bytes();
+        let second = responses[1].to_bytes();
+        assert_eq!(first[6] & 1, 1);
+        assert_eq!(second[6] & 1, 0);
+        assert!(
+            second
+                .windows(b"Sent through VFS".len())
+                .any(|bytes| bytes == b"Sent through VFS")
+        );
+    }
+
+    #[test]
+    fn serializes_demo_mail_list_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [
+            0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 1, 0, 1, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [
+                0x44, 0x74, 7, 0x80, 56, 0, 0, 5, 0, 0, 0xfd, 12, 0, b'b', 1, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 0xfd, 17, 0, b'k', b'G', b'R', b'i', b'D', b' ', b'M', b'a', b'i', b'l',
+                b' ', b'S', b'e', b'r', b'v', b'e', b'r', 0xfd, 10, 0, b's', b'D', b'e', b'm',
+                b'o', b' ', b'm', b'a', b'i', b'l', 0xfd, 1, 0, b'z',
+            ]
+        );
     }
 }

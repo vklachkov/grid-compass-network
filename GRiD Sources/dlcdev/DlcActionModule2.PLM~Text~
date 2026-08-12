@@ -1,0 +1,626 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Data Link Action Module 2')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*               COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    DlcActionModule2.         1/22/83
+*
+*    contains:  PriAcProcessAck, PriAcProcessBusyAck,
+*               PriAcProcessInfo, PriAcProcessNoBuf,
+*               PriAcProcessNoRsp.
+*
+*               SecAcProcessAck, SecAcProcessBusyAck,
+*               SecAcProcessConnect, SecAcProcessInfo,
+*               SecAcProcessNoBuf.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcActionModule2: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`commondefines.inc~text~)
+$INCLUDE(``ccIncs`dlcmsgdefines.inc~text~)
+$INCLUDE(``ccIncs`dlcframedefines.inc~text~)
+$INCLUDE(``ccIncs`macDefines.inc~text~)
+$INCLUDE(``ccIncs`machinedefines.inc~text~)
+$INCLUDE(``ccIncs`generalModule.inc~text~)
+$INCLUDE(``ccIncs`MacModule.inc~text~)
+$INCLUDE(``ccIncs`DlcActionModule1.inc~text~)
+$INCLUDE(``ccIncs`DlcActionModule3.inc~text~)
+$INCLUDE(``ccIncs`TimerModule.inc~text~)
+$INCLUDE(``ccIncs`UtlModule.inc~text~)
+$INCLUDE(``incs`OsPlmProcs.inc~text~)
+$INCLUDE(``incs`MovRtns.Plm.inc~text~)
+$IF primary
+$INCLUDE(``ccIncs`priStandEvdefines.inc~text~)
+$ENDIF
+$IF secondary
+$INCLUDE(``ccIncs`secStandEvdefines.inc~text~)
+$ENDIF
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcProcessAck, SecAcProcessAck
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This action processes the received supervisory
+*               Receive Ready frame, including checking the N(r).
+*
+*    Inputs:    SELECTOR to state machine control block.
+*               Selector to the dlc receive message control block.
+*
+*    Algorithm:
+*     1) Process Acknowledgement.
+*     2) If valid acknowledgement then 
+*         cause event of check poll.
+*     3) Else cause event of received invalid with appropriate error.
+*     4) Set remote busy to false.
+*     5) Free received message control block.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcProcessAck: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB);
+	IF error = validNr THEN
+	DO;
+		machine.currentRetries = machine.maxRetries;
+		CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+	END;
+	ELSE 
+		DO;
+			IF error = invalidNr THEN error = eDlcInvalidRecvdNr;
+			ELSE
+				IF error = retryAck THEN error = eDlcUnproductiveSend;
+					CALL GenCauseEvent(pMachine, priExRecvdInvalid, error);
+		END;
+	CALL AcFreeCB(pMachine, pDlCB);
+	machine.remoteBusy = FALSE;
+
+END PriAcProcessAck;
+
+$ENDIF
+$IF secondary
+/*-----------------------------------------------------------------------*/
+
+SecAcProcessAck: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcSecondaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB); 
+	IF ((error = validNr) OR (error = retryAck)) THEN
+		CALL GenCauseEvent(pMachine, secExCheckPoll, 0);
+	ELSE
+		CALL GenCauseEvent(pMachine, secExCmdrReason,
+			eDlcInvalidRecvdNr);
+	CALL AcFreeCB(pMachine, pDlCB);
+	machine.remoteBusy = FALSE;
+
+END SecAcProcessAck;
+
+$ENDIF
+/*-----------------------------------------------------------------------*/
+
+AcProcessAck: PROCEDURE(pMachine, pRecvdDlCB) WORD REENTRANT;
+DCL pMachine	SELECTOR,
+	pRecvdDlCB	SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	recvdDlCB	BASED pRecvdDlCB STRUCTURE (DlCBgenDescriptor,DlCBIoDataParams);
+DCL pDlCB		SELECTOR,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+
+DCL pBuf		POINTER;
+DCL buf			BASED pBuf STRUCTURE (dlcHeaderFormat);
+DCL error		WORD;
+
+DCL (recvdNr, ackedNs, sentNs, curVs, loVs, done) BYTE;
+
+/*
+  1) set return error code to ok.
+  2) If selector to recvd dlCB is not null then
+   1) get pointer to buffer.
+   2) If received p/f bit on then abort response timer.
+   3) get N(r) field from control byte.
+   4) get last sent V(s) and current V(s).
+   5) adjust all three for modulo rap.
+   6) If received N(r) is between last acked V(s) and current V(s) then
+       error is valid N(r),
+   7) else error is invalid N(r).
+   8) If valid N(r) then
+    1) Do while outstanding queue is not empty and not done.
+     1) Get sent N(s) value of head of outstanding queue.
+     2) Adjust for modulo rap.
+     3) If received N(r) is greater than sent N(s) then
+      1) Take request off of outstanding queue.
+      2) If send status is frame has been sent then
+          return request to user.
+      3) Else move request to acked queue.
+     4) Else done = true.
+     (This assumes two-way alternate packet exchange)
+  3) If outstanding queue is not empty then
+   1) Move outstanding queue to top of send queue and put any
+       new send requests at end of send queue.
+   2) Reset V(s) back to last acknowledged V(s).
+  4) Else set last acknowledged V(s) to current V(s).
+  5) If error is ok then reset retry counter.
+*/
+
+	error = validNr;
+	IF pRecvdDlCB <> null THEN
+	DO;
+		IF ((recvdDlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr) THEN
+			pBuf = recvdDlCB.pBuffer;
+		ELSE
+			pBuf = @recvdDlCB.pBuffer;
+
+		IF (buf.ctlField AND pfBit) <> 0 THEN
+			CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+
+		/* adjust for modulo rap around */
+		loVs = machine.lastAckedNs;
+		curVs = machine.Vs;
+		IF curVs < loVs THEN curVs = curVs + dlcModulo;
+		recvdNr = SHR((buf.ctlField AND nrMask), 5);
+		IF recvdNr < loVs THEN recvdNr = recvdNr + dlcModulo;
+
+		/* V(s) has already been incremented, so its value is next N(s), */
+		/* since received N(r) is next expected N(s), they should be equal */
+		IF recvdNr <= curVs THEN error = validNr;
+		ELSE
+			error = invalidNr;
+
+		IF error = validNr THEN
+		DO;
+			done = FALSE;
+			DO WHILE (machine.outstandingQhead(0) <> null) AND (NOT done);
+				pDlCB = machine.outStandingQhead(0);
+				IF ((dlCB.dataLength AND bufferTypeMask) =
+														msgWithBufferPtr) THEN
+					pBuf = dlCB.pBuffer;
+				ELSE
+					pBuf = @dlCB.pBuffer;
+				ackedNs, sentNs = SHR((buf.ctlField AND nsMask), 1);
+				IF sentNs < loVs THEN sentNs = SentNs + dlcModulo;
+				IF recvdNr > sentNs THEN
+				DO;
+					machine.lastAckedNs = ackedNs;
+					pDlCB = UtlPopQ(@machine.outStandingQhead);
+					IF dlCB.reqError = intCmpStatusSent THEN
+						CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+					ELSE
+						CALL UtlPutQ(@machine.ackedQhead, pDlCB);
+				END;
+				ELSE
+					done = TRUE;
+			END;
+		END;
+	END;
+
+	IF machine.outstandingQhead(0) <> null THEN
+	DO;
+		/* first put send and unk-acked requests back in order */
+		IF machine.sendQhead(0) <> null THEN
+			CALL UtlConCatQues(@machine.outstandingQhead, @machine.sendQhead);
+		/* now place ordered requests on send queue */
+		CALL UtlConCatQues(@machine.sendQhead, @machine.outstandingQhead);
+		/* reset V(s) back to one greater than last sent and acked N(s) */
+		machine.vs = (machine.lastAckedNs + 1) MOD dlcModulo;
+		IF error = validNr THEN error = retryAck;
+	END;
+
+	RETURN error;
+
+END AcProcessAck;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcProcessBusyAck, SecAcProcessBusyAck
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This action processes the received supervisory
+*               Receive Ready frame, including checking the N(r).
+*
+*    Inputs:    SELECTOR to state machine control block.
+*               Selector to the dlc receive message control block.
+*
+*    Algorithm:
+*     1) Process received acknowledgement.
+*     2) If acknowledgement ok then
+*         cause event of check poll.
+*     3) Else cause event of received invalid with appropriate error.
+*     4) Increment received Rnr counter.
+*     5) Set remote busy to true.
+*     6) free the receive message control block.
+*     7) Set idle poll flag to true to cause greater defer time out.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcProcessBusyAck: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB);
+	IF error = validNr THEN
+	DO;
+		machine.currentRetries = machine.maxRetries;
+		CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+	END;
+	ELSE
+		DO;
+			IF error = invalidNr THEN error = eDlcInvalidRecvdNr;
+			ELSE
+				IF error = retryAck THEN error = eDlcUnproductiveSend;
+			CALL GenCauseEvent(pMachine, priExRecvdInvalid, error);
+		END;
+	CALL AcFreeCB(pMachine, pDlCB);
+	machine.rnrRecvCounter = machine.rnrRecvCounter + 1;
+	machine.remoteBusy = TRUE;
+	machine.idlePoll = TRUE; /* cause defer to occur */
+
+END PriAcProcessBusyAck;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcProcessBusyAck: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcSecondaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB); 
+	IF ((error = validNr) OR (error = retryAck)) THEN
+		CALL GenCauseEvent(pMachine, secExCheckPoll, 0);
+	ELSE
+		CALL GenCauseEvent(pMachine, secExCmdrReason, eDlcInvalidRecvdNr);
+	CALL AcFreeCB(pMachine, pDlCB);
+	machine.rnrRecvCounter = machine.rnrRecvCounter + 1;
+	machine.remoteBusy = TRUE;
+
+END SecAcProcessBusyAck;
+$ENDIF
+
+$IF secondary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   SecAcProcessConnect
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Remote primary has granted the connection.
+*               Positively Reply to primary and report
+*               success to user.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Free received message control block.
+*     2) Abort response timer.
+*     3) If user Connect request is pending then
+*         Return user request.
+*     4) Transmit Unsequenced acknowledgement frame response.
+*
+*------------------------------------------------------------------------*/
+
+SecAcProcessConnect: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcSecondaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL AcFreeCB(pMachine, pDlCB); /* free recvd frame CB */
+	CALL TmrAbortTimeout(pMachine, tmrUserTimer);
+	pDlCB = machine.userRequestCB;
+	IF pDlCB <> null THEN
+	DO;
+		CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+		machine.userRequestCB = null;
+	END;
+	pDlCB = GenBuildTransmitRequest(pMachine, machine.LinkAddress,
+											cUaF, msgNoBufferPtr, NIL, 0);
+	CALL MacTransmitFrame(pDlCB);
+
+END SecAcProcessConnect;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcProcessInfo, SecAcProcessInfo
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*
+*    purpose:   This action processes the received information
+*               frame, including checking the N(r) and N(s), and
+*               possibly returning the completion to the client.
+*
+*    Inputs:    SELECTOR to state machine control block.
+*               Selector to the dlc receive message control block.
+*
+*    Algorithm:
+*     1) Process received acknowledgement and info frame.
+*     2) If error is ok then
+*         Cause event of check poll.
+*     3) Else cause event of invalid receive with appropriate error.
+*     4) If error is not retryAck (translated to eDlcUnProductiveSend) then
+*         free received message control block.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcProcessInfo: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessInfo(pMachine, pDlCB);
+	IF error = validNs THEN 
+	DO;
+		machine.currentRetries = machine.maxRetries;
+		CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+	END;
+	ELSE
+		DO;
+			IF error = invalidNr THEN error = eDlcInvalidRecvdNr;
+			ELSE
+				IF error = invalidNs THEN error = eDlcInvalidRecvdNs;
+			ELSE
+				IF error = wrongNs THEN error = eDlcUnProductiveRecv;
+			ELSE
+				IF error = retryAck THEN error = eDlcUnProductiveSend;
+			ELSE
+				IF error = lengthError THEN error = eDlcBadLength;
+			CALL GenCauseEvent(pMachine, PriExRecvdInvalid, error);
+			IF error <> eDlcUnProductiveSend THEN
+				CALL AcFreeCB(pMachine, pDLCB);
+		END;
+
+END PriAcProcessInfo;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcProcessInfo: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL error		WORD;
+
+	error = AcProcessInfo(pMachine, pDlCB);
+	IF ((error = invalidNs) OR (error = invalidNr)) THEN
+	DO;
+		IF error = invalidNr THEN error = eDlcInvalidRecvdNr;
+		ELSE
+			IF error = invalidNs THEN error = eDlcInvalidRecvdNs;
+		CALL GenCauseEvent(pMachine, secExCmdrReason, error);
+		CALL AcFreeCB(pMachine, pDLCB);
+	END;
+	ELSE
+		CALL GenCauseEvent(pMachine, secExCheckPoll, 0);
+
+END SecAcProcessInfo;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+AcProcessInfo: PROCEDURE(pMachine, pDlCB) WORD REENTRANT;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+
+DCL error		WORD;
+DCL recvLength	WORD;
+DCL pBuffer		POINTER;
+DCL buffer		BASED pBuffer STRUCTURE (dlcHeaderFormat);
+DCL recvdNs		BYTE;
+
+/*
+  1) Process received acknowledgement.
+  2) If error is valid N(r) or retry Ack then
+   1) If length error in received info frame then
+    1) Count Mac length error.
+    2) Set error to length error.
+   2) Else if received N(s) is equal expected V(r) then
+    1) Return received info frame to user.
+    2) Increment V(r).
+   3) else if received N(s) is within receive window then
+    1) error = wrong N(s).
+    2) Count Mac error as missed frame.
+   4) Else error = invalid N(s).
+  3) IF error is ok then
+      Set Idle poll to false, since something was received.
+*/
+
+	error = AcProcessAck(pMachine, pDlCB);
+	IF (error = validNr) OR (error = retryAck) THEN
+	DO;
+		recvLength = dlCB.dataLength AND lengthMask;
+		IF (dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr THEN
+			pBuffer = dlCB.pBuffer;
+		ELSE
+			pBuffer = @dlCB.pBuffer;
+		IF ((recvLength >= dlcHeaderSize) AND (recvLength <> 
+									(buffer.lengthField + dlcHeaderSize))) THEN
+		DO;
+			error = MacCountError(dlCB.linkNumber, fiCmpBadSize);
+			error = lengthError;   /* ignore mac error code */
+		END;
+		ELSE
+			DO;
+				recvdNs = SHR((buffer.ctlField AND nsMask), 1);
+				IF recvdNs = machine.Vr THEN
+				DO;
+					dlCB.msgFormat = dlcReceive;
+					dlCB.stationNumber = machine.stationNumber;
+					dlCB.dataLength = (dlCB.dataLength AND bufferTypeMask) 
+												OR (recvLength - dlcHeaderSize);
+					CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+					machine.Vr = (machine.Vr + 1) MOD dlcModulo;
+				END;
+				ELSE
+					DO;
+						IF recvdNs < machine.vr THEN
+							recvdNs = recvdNs + dlcModulo;
+						IF recvdNs > machine.vr + machine.receiveWindow THEN
+						DO;
+							/* outside of receive window */
+							error = invalidNs;
+						END;
+						ELSE 
+							DO;
+								/* inside window, but missed frame(s) */
+								error = MacCountError(dlCB.linkNumber,
+														fiCmpOutOfSequence);
+								error = wrongNs;  /* ignore mac error code */
+							END;
+					END;
+			END;
+	END;
+
+	IF error = validNr THEN
+	DO;
+		machine.idlePoll = FALSE;
+		error = validNs;
+	END;
+	RETURN error;
+
+END AcProcessInfo;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcProcessNoBuf, SecAcProcessNoBuf
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*
+*    purpose:   This action processes the received information
+*               frame without buffer, including checking the
+*               N(r). The primary machine is set busy.
+*
+*    Inputs:    SELECTOR to state machine control block.
+*               Selector to the dlc receive message control block.
+*
+*    Algorithm:
+*     1) Process received acknowledgement.
+*     2) If error is ok then cause event of check poll,
+*     3) Else cause event of received invalid with appropriate error.
+*     4) Free received message control block.
+*     5) Set idle poll flag, to delay next poll.
+*
+*------------------------------------------------------------------------*/
+
+$IF primary
+PriAcProcessNoBuf: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB); 
+	IF error = validNr THEN
+	DO;
+		machine.currentRetries = machine.maxRetries;
+		CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+	END;
+	ELSE
+		DO;
+			IF error = invalidNr THEN error = eDlcInvalidRecvdNr;
+			ELSE
+				IF error = retryAck THEN error = eDlcUnproductiveSend;
+			CALL GenCauseEvent(pMachine, priExRecvdInvalid, error);
+		END;
+	CALL AcFreeCB(pMachine, pDLCB);
+	machine.idlePoll = TRUE;
+
+END PriAcProcessNoBuf;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcProcessNoBuf: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcSecondaryMachineType;
+DCL error		WORD;
+
+	error = AcProcessAck(pMachine, pDlCB); 
+	IF ((error = validNr) OR (error = retryAck)) THEN
+		CALL GenCauseEvent(pMachine, secExCheckPoll, 0);
+	ELSE
+		CALL GenCauseEvent(pMachine, secExCmdrReason, error);
+	CALL AcFreeCB(pMachine, pDLCB);
+	machine.idlePoll = TRUE;
+
+END SecAcProcessNoBuf;
+
+$ENDIF
+$IF primary
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcProcessNoRsp
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This action processes the response timed out event.
+*
+*    Inputs:    SELECTOR to state machine control block and 
+*
+*    Algorithm:
+*     1) Process Negative acknowledgement (nothing received).
+*     2) Cause event of received invalid, error of response time out.
+*     3) Set idle poll flag, to delay next poll.
+*
+*------------------------------------------------------------------------*/
+
+PriAcProcessNoRsp: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+
+	/* zzz dont treat no response as negative response !!!
+	DCL error WORD;
+	error = AcProcessAck(pMachine, null);
+	*/
+
+	CALL GenCauseEvent(pMachine, priExRecvdInvalid, eDlcResponseTimeOut);
+	machine.idlePoll = TRUE;
+	machine.remoteBusy = TRUE;
+
+END PriAcProcessNoRsp;
+$ENDIF
+
+END DlcActionModule2;

@@ -1,0 +1,37 @@
+$SAVE nolist
+/* Declarations for Standard laguage construcnt and literals for OSCalls */
+
+Declare	AS literally 'literally';
+
+Declare
+      	lit       	AS 'literally',
+      	dcl       	AS 'declare',
+      	true      	AS '0ffh',
+      	false     	AS '0',
+		NULL      	AS '0ffffh',
+		NULLBYTE    AS '0ffh',
+		NULLWORD    AS '0ffffh',
+		NULLPTR		AS '0fffffh',
+		NIL			AS '0fffffh',
+
+      	PTR       	AS 'POINTER',
+
+      	BOOL	   	AS 'Byte',
+      	BOOLEAN   	AS 'Byte',
+
+		CharStr		AS '(*) BYTE DATA',
+
+      	REPEAT		AS  'DO; LOOPLAB:',
+      	UNTIL		AS  'ENDLAB: IF NOT (',
+      	VALID		AS  ') THEN GOTO LOOPLAB;  EXITLAB: END',
+      	ISTRUE		AS	'VALID',
+
+      	BREAK   	AS  'GOTO EXITLAB',
+      	LOOP	   	AS  'GOTO ENDLAB',
+
+      	FOREVER		AS 'WHILE true',
+      
+      	CLEAN    	AS 'PUBLIC REENTRANT',
+      	BEGIN		AS ' ';
+
+$RESTORE

@@ -1,0 +1,148 @@
+/* This is cp.misc.ext.inc */
+
+/* Compass Prom parameter values  */
+
+/* CpCatchAll command parms  */
+
+DCL readDelayTime   LIT '0';      /* Keyboard delay time. */
+DCL setDelayTime    LIT '1';      /* Keyboard delay time. */
+DCL readLastKey     LIT '2';      /* Last keyboard key.   */
+DCL enableKeyboard  LIT '5';      /* enable keyboard      */
+DCL enableFeature   LIT '1';      /* enable feature       */
+DCL disableFeature  LIT '0';      /* disable feature      */
+
+
+/* Interrupt controller id's  */
+
+DCL mathChipID       LIT '0';      /* 8087 interrupt ID.     */
+DCL gpibID           LIT '1';      /* Gpib interrupt ID.     */
+DCL keyboardID       LIT '2';      /* Keyboard interrupt ID  */
+DCL verticalSyncID   LIT '3';      
+DCL modemID          LIT '4';    
+DCL bubbleID         LIT '5';
+DCL serialPortID     LIT '6';
+DCL ringIndicateID   LIT '7';
+DCL messageID        LIT '8';
+
+/* Interrupt characteristics   */
+
+DCL edgeTriggered    LIT '0';      /* edge triggered interrupt  */
+DCL levelTriggered   LIT '1';      /* level triggered interrupt */
+
+/* Real Time clock Mode  */
+
+DCL testClock        LIT '0';      /* test the real time clock  */
+DCL tenthsOfSeconds  LIT '1';      /* return tenths of seconds  */
+DCL unitsOfSeconds   LIT '2';
+DCL tensOfSeconds    LIT '3';
+DCL unitsOfMinutes   LIT '4';
+DCL tensOfMinutes    LIT '5';
+DCL unitsOfHours     LIT '6';
+DCL tensOfHours      LIT '7';
+DCL unitsOfDays      LIT '8';
+DCL tensOfDays       LIT '9';
+DCL dayOfTheWeek     LIT '10';
+DCL unitsOfMonths    LIT '11';
+DCL tensOfMonths     LIT '12';
+DCL unitsOfYears     LIT '13';
+DCL startStop        LIT '14';
+DCL interruptStatus  LIT '15';
+
+
+/* Compass Prom Calls      */
+
+/*
+  BubbleDriver: PROCEDURE (req, pPl, pError) EXTERNAL;
+  DCL req          WORD;
+  DCL pPl          PTR;
+  DCL pError       PTR;
+  END;
+*/
+
+GpibDriver: PROCEDURE (req, pPl, pError) EXTERNAL;
+  DCL req          WORD;
+  DCL pPl          PTR;
+  DCL pError       PTR;
+  END;
+
+OsDskDriver: PROCEDURE (req, pPl, pError) EXTERNAL;
+  DCL req          WORD;
+  DCL pPl          PTR;
+  DCL pError       PTR;
+  END;
+
+
+CpSetKeyHandler: PROCEDURE (pRoutine) PTR EXTERNAL;
+  DCL pRoutine     PTR;
+  END;
+
+CpSetWatchdogHandler: PROCEDURE (pRoutine) PTR EXTERNAL;
+  DCL pRoutine     PTR;
+  END;
+
+CpSetMessageHandler: PROCEDURE (pRoutine) PTR EXTERNAL;
+  DCL pRoutine     PTR;
+  END;
+
+CpCatchAll: PROCEDURE (command, inData) WORD EXTERNAL;
+  DCL command      WORD;
+  DCL inData       WORD;
+  END;
+
+CpEnableInterrupt: PROCEDURE (interruptID, mode) EXTERNAL;
+  DCL interruptID  BYTE;
+  DCL mode         BYTE;
+  END;
+
+CpDisableInterrupt: PROCEDURE (interruptID) EXTERNAL;
+  DCL interruptID  BYTE;
+  END;
+
+CpSetInterrupt: PROCEDURE (interruptID, pRoutine) PTR EXTERNAL;
+  DCL interruptID  BYTE;
+  DCL pRoutine     PTR;
+  END;
+
+CpEndOfInterrupt: PROCEDURE (interruptID) EXTERNAL;
+  DCL interruptID  BYTE;
+  END;
+
+CpSystemTick: PROCEDURE (mode) WORD EXTERNAL;
+  DCL mode         BYTE;
+  END;
+
+CpRealTimeClock: PROCEDURE (mode) BYTE EXTERNAL;
+  DCL mode         BYTE;
+  END;
+
+CpMachineID: PROCEDURE (pMachineID) EXTERNAL;
+  DCL pMachineID   PTR;
+  END;
+
+CpAddressOf: PROCEDURE PTR EXTERNAL;
+  END;
+
+Upper: PROCEDURE (char) BYTE EXTERNAL;
+  DCL char         BYTE;
+  END;
+
+CompareChars: PROCEDURE (pA, pB, length) BOOLEAN EXTERNAL;
+  DCL length       WORD;
+  DCL pA           PTR;
+  DCL pB           PTR;
+  END;
+
+MakeCheckSum: PROCEDURE (pBuf, length) WORD EXTERNAL;
+  DCL length       WORD;
+  DCL pBuf         PTR;
+  END;
+
+TellMessageWaiters: PROCEDURE (pid, err) EXTERNAL;
+  DCL err          WORD;
+  DCL pid          WORD;
+  END;
+
+CpLogError: PROCEDURE (mode, pMessage) EXTERNAL;
+  DCL mode         BYTE;
+  DCL pMessage     PTR;
+  END;

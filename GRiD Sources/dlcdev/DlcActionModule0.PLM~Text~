@@ -1,0 +1,822 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Dlc Action Module 0')
+
+$SET (xidTest)
+$SET (supportSimpleXid)
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*               COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    DlcActionModule0.         1/29/83
+*
+*    contains:  PriAcCheckPoll, PriAcCheckRetries, PriAcCheckUserFlush,
+*               PriAcCheckXid, PriAcCheckXmitCmp, PriAcDeferEvent,
+*               PriAcEndPoll, PriAcEndExchange, PriAceEndTesting
+*
+*               SecAcCheckPoll, SecAcCheckUserFlush,
+*               SecAcCheckXid, SecAcCheckXidP, SecAcCheckXmitCmp, 
+*               SecAcDeferEvent, SecAcEndExchange, 
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcActionModule0: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`commondefines.inc~text~)
+$INCLUDE(``ccIncs`dlcmsgdefines.inc~text~)
+$INCLUDE(``ccIncs`machinedefines.inc~text~)
+$INCLUDE(``ccIncs`dlcframedefines.inc~text~)
+$INCLUDE(``ccIncs`MacModule.inc~text~)
+$INCLUDE(``ccIncs`DlcActionModule1.inc~text~)
+$INCLUDE(``ccIncs`DlcDataModule.inc~text~)
+$INCLUDE(``ccIncs`generalModule.inc~text~)
+$INCLUDE(``ccIncs`UtlModule.inc~text~)
+$INCLUDE(``ccIncs`TimerModule.inc~text~)
+$INCLUDE(``incs`OsPlmProcs.inc~text~)
+$INCLUDE(``incs`MovRtns.Plm.inc~text~)
+$IF primary
+$INCLUDE(``ccIncs`priStandEvdefines.inc~text~)
+$ENDIF
+$IF secondary
+$INCLUDE(``ccIncs`secStandEvdefines.inc~text~)
+$INCLUDE(``incs`CpPlmProcs.inc~text~)
+$ENDIF
+$RESTORE
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcCheckPoll
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This action will determine what the next step in
+*               normal information transfer is according to the 
+*               current status.
+*
+*    Inputs:    SELECTOR to state machine control block.
+*
+*    Outputs:   none.
+*
+*    SideEffects: Will cause event according to current conditions
+*               of the protocol machine. 
+*
+*    Algorithm:
+*     1) If receive and send windows equal 1 (simple compass) then
+*      1) If send window not full and remote not busy then
+*       1) Cause event of continue poll,
+*      2) Else cause event of end poll.
+*     2) Else 
+*      1) If idle poll so far or poll timer has expired then
+*       1) Cause event of end poll,
+*      2) Else if no more user data to send or window is full then
+*       1) Cause event of start poll,
+*      3) Else cause event of continue poll.
+*
+*------------------------------------------------------------------------*/
+
+PriAcCheckPoll: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL	machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBIoDataParams);
+
+$IF multiFrameIo
+	IF ((machine.receiveWindow = 1) AND (machine.sendWindow = 1)) THEN
+$ENDIF
+	DO;
+		/* special case for simple compass GRiDLink system */
+		IF (machine.sendCount < machine.sendWindow) AND
+											(NOT machine.remoteBusy) THEN
+			CALL GenCauseEvent(pMachine, PriExContinuePoll, 0);
+		ELSE
+			CALL GenCauseEvent(pMachine, PriExEndPoll, 0);
+	END;
+$IF multiFrameIo
+	ELSE
+		DO;
+			IF (machine.idlePoll OR machine.pollTimedOut) THEN
+				CALL GenCauseEvent(pMachine, PriExEndPoll, 0);
+			ELSE
+				IF ((machine.sendQhead(0) = null) OR
+							(machine.sendCount >= machine.sendWindow)) THEN
+					CALL GenCauseEvent(pMachine, PriExStartPoll, 0);
+			ELSE
+				CALL GenCauseEvent(pMachine, PriExContinuePoll, 0);
+		END;
+$ENDIF
+END PriAcCheckPoll;
+$ENDIF
+
+$IF secondary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   SecAcCheckPoll
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This procedure will determine the next step to
+*               take in the polling operation.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*
+*    Algorithm:
+*     1) If send window is full then cause event of end poll.
+*     2) else if send queue is empty then cause event of end poll.
+*     3) else cause event of continue poll.
+*
+*------------------------------------------------------------------------*/
+
+SecAcCheckPoll: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcSecondaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor),
+	dataDlCB	BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBIoDataParams);
+
+	IF machine.sendCount = machine.sendWindow THEN
+		CALL GenCauseEvent(pMachine, secExEndPoll, 0);
+	ELSE
+		IF (machine.sendQhead(0) = null) THEN
+			CALL GenCauseEvent(pMachine, secExEndPoll, 0);
+	ELSE
+		CALL GenCauseEvent(pMachine, secExContinuePoll, 0);
+
+END SecAcCheckPoll;
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcCheckRetries
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Check The retry counter.
+*
+*    Inputs:    SELECTOR to current state machine control block
+*         and selector to dlc message control block.
+*
+*    outputs:   none.
+*
+*    sideEffects: Cause event of retries ok if retry counter
+*         less than or equal to maximum retries, else
+*         cause event of max retries.
+*
+*    Algorithm:
+*     1) deccrement machine retry counter
+*     2) if retries equal zero then
+*      1) cause event of retries exhausted.
+*      2) reset retry counter.
+*     3) else
+*      1) cause event of retries ok.
+*
+*------------------------------------------------------------------------*/
+
+PriAcCheckRetries: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL error		WORD;
+DCL event		BYTE;
+
+	/*	used to determine which machine error counter to increment,
+		limit of six counters) */
+DCL errorArray	(*) WORD DATA (
+					eDlcResponseTimeOut,
+					eDlcInvalidRecvdNs,
+					eDlcInvalidRecvdNr,
+					eDlcUnproductiveRecv,
+					eDlcUnproductiveSend,
+					eDlcBadLength);
+DCL index		WORD;
+
+	error = machine.param;
+	index = FindW(@errorArray, error, 6);
+	IF index < maxDlcErrorCounters THEN
+		machine.errorCounters(index) = machine.errorCounters(index) + 1;
+	IF machine.currentRetries = 0 THEN
+	DO;
+		event = priExRetriesExhausted;
+		machine.currentRetries = machine.maxRetries;
+	END;
+	ELSE 
+		DO;
+			/* max value means retry forever */
+			IF machine.currentRetries < 0FFh THEN
+				machine.currentRetries = machine.currentRetries - 1;
+			event = priExRetriesOk;
+		END;
+	machine.idlePoll = TRUE; /* force idle condition */
+	CALL GenCauseEvent(pMachine, event, error);
+
+END PriAcCheckRetries;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAcCheckUserFlush, SecAcCheckUserFlush.
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*
+*    purpose:   Determine whether user needs to be reported about
+*               flushing condition.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) If user I/O flush has been completed then
+*         Cause event of flush done.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+PriAcCheckUserFlush: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	IF GenIsFlushDone(pMachine) THEN
+		CALL GenCauseEvent(pMachine, priExFlushDone, 0);
+
+END PriAcCheckUserFlush;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$IF secondary
+SecAcCheckUserFlush: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	IF GenIsFlushDone(pMachine) THEN
+		CALL GenCauseEvent(pMachine, secExFlushDone, 0);
+
+END SecAcCheckUserFlush;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcCheckXid
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Processes Xid frames that are received from 
+*               secondary stations.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    outputs:   none.
+*
+*    SideEffects: If valid new station xid message is recvd, 
+*                 then return xid message with station address
+*                 is sent and event of new station found is caused.
+*
+*    Algorithm:
+*     1) Save xid image in machine control block.
+*     2) If xid format id is 1 or 2 and size is right then
+*      1) Abort response timer.
+*      2) If machine execution parameter is none zero, then
+*       1) Set error in xid response to machine param.
+*       2) Cause Event of response time out (to cause next defer T.O.)
+*      3) Else
+*       1) Set error in xid response to zero (ok).
+*       2) Set new link address in xid response and machine control block.
+*       3) Enable dynamic defer timeout.
+*       4) Cause event of found new station.
+*     3) Else if xid format is test format id
+*      1) Abort response timer.
+*      2) set new link address in xid response and machine control block.
+*      3) Enable dynamic defer timeout.
+*      4) Cause event of found test station.
+*     4) If xid format is short format then
+*      1) Log error noting loop back test (This is the case when
+*         loop back connector has caused receipt of Server Xid request).
+*      2) Delay for 1 second (leaves green test light on).
+*     5) Else
+*      1) Build xid response.
+*      2) Give to MAC.
+*      3) Log error if xid response error not ok.
+*     6) free the received frame control block.
+*
+*------------------------------------------------------------------------*/
+
+PriAcCheckXid: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL pXidDlCB	SELECTOR,
+	xidDlCB		BASED pXidDlCB STRUCTURE (DlCBgenDescriptor, DlCBIoDataParams);
+DCL pXidBuffer	POINTER,
+	xidBuffer	BASED pXidBuffer STRUCTURE (xidBufferDesc);
+
+DCL pRecvBuffer	POINTER,
+	recvBuffer	BASED pRecvBuffer STRUCTURE (xidBufferDesc);
+
+DCL error		WORD;
+
+	IF ((dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr) THEN
+    	pRecvBuffer = dlCB.pBuffer;
+	ELSE
+		pRecvBuffer = @dlCB.pBuffer;
+
+	/* save XID information */
+	pXidBuffer = @machine.xidImage;
+	CALL MOVB(@recvBuffer.xidMachineId, @xidBuffer.xidMachineId, machineIdSize);
+	xidBuffer.xidAddress = machine.newAddress;
+	xidBuffer.xidType = recvBuffer.xidType;
+
+	xidBuffer.xidError = eBadVersion;  /* assume error */
+
+	IF (((dlCB.dataLength AND lengthMask) = (sizeXid1Format + dlcHeaderSize))
+								AND (recvBuffer.lengthField = sizeXid1Format))
+$IF supportSimpleXid
+			OR (((dlCB.dataLength AND lengthMask) = 
+					(sizeXid1Format + dlcHeaderSize - 2)) AND
+							(recvBuffer.lengthField = (sizeXid1Format - 2)))
+$ENDIF
+																		THEN 
+	DO;
+		IF (recvBuffer.xidType = xidformatNumber1) OR
+								(recvBuffer.xidType = xidformatNumber2) THEN
+		DO;
+			CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+			IF machine.param = 0 THEN
+			DO;
+				machine.linkAddress = machine.newAddress;
+				xidBuffer.xidAddress = machine.newAddress;
+				xidBuffer.xidError = 0;
+				machine.deferTime = 100;/* start dynamic defer */
+				CALL GenCauseEvent(pMachine, priExFoundNewStation, 0);
+			END;
+			ELSE
+				DO;
+					/* Too many stations on link */
+					xidBuffer.xidAddress = newStationAddress;
+					xidBuffer.xidError = machine.param;
+					/* restart defer time out */
+					CALL GenCauseEvent(pMachine, priExResponseTimeOut, 0);
+				END;
+		END;
+		ELSE
+			IF (recvBuffer.xidType = xidTestFormat) THEN
+			DO;
+				CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+				IF machine.param = 0 THEN
+				DO;
+					machine.linkAddress = machine.newAddress;
+					xidBuffer.xidAddress = machine.newAddress;
+					xidBuffer.xidError = 0;
+					machine.deferTime = 100;  /* enable dynamic defer */
+					CALL GenCauseEvent(pMachine, priExFoundTestStation,0);
+					IF machine.userRequestCB <> null THEN
+					DO;
+						CALL GenReturnUserRequest(pMachine,
+										machine.userRequestCB, eDlcTesting);
+						machine.userRequestCB = null;
+					END;
+				END;
+				ELSE
+					DO;
+						/* Too many stations on link */
+						xidBuffer.xidAddress = newStationAddress;
+						xidBuffer.xidError = machine.param;
+						/* restart defer time out */
+						CALL GenCauseEvent(pMachine, priExResponseTimeOut, 0);
+					END;
+			END;
+	END;
+$IF XidTest
+	IF (dlCB.dataLength AND lengthMask) = dlcShortHeaderSize THEN
+	DO;
+		/* this is for loop back test */
+		CALL OsLogError(1, recXidLoopBackTest,
+					SHL(DOUBLE(machine.linkNumber), 8) + 0FFh, @(6,'XidTst'));
+		CALL OsDelay(1000);
+	END;
+	ELSE
+$ENDIF
+		DO;
+			/* send response */
+			pXidDlCB = GenBuildTransmitRequest(pMachine, newStationAddress,
+							cXid, msgWithBufferPtr, pXidBuffer, sizeXid1Format);
+			CALL MacTransmitFrame(pXidDlCB);
+			IF xidBuffer.xidError <> 0 THEN
+			CALL OsLogError(2, xidBuffer.xidError,
+					SHL(DOUBLE(machine.linkNumber), 8) + 0FFh, @(6,'XidErr'));
+		END;
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END PriAcCheckXid;
+$ENDIF
+
+$IF secondary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   SecAcCheckXid
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Processes Xid Response Frame received from 
+*               Primary station from new station poll.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Get this stations machine id.
+*     2) Compare with machine id in xid response buffer.
+*     3) If xid buffer length, xid format type, and machine id matches then
+*      1) Save new station address
+*      2) Cause event of got address.
+*     4) Free message control block.
+*
+*------------------------------------------------------------------------*/
+
+SecAcCheckXid: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcSecondaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL pRecvBuffer	POINTER,
+	recvBuffer	BASED pRecvBuffer STRUCTURE (xidBufferDesc);
+DCL machineId	(8) BYTE;
+
+	CALL CpMachineID(@machineId);
+
+	IF ((dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr) THEN
+		pRecvBuffer = dlCB.pBuffer;
+	ELSE
+		pRecvBuffer = @dlCB.pBuffer;
+
+	IF (((dlCB.dataLength AND lengthMask) = (sizeXid1Format + dlcHeaderSize))
+							AND (recvBuffer.lengthField = sizeXid1Format)) THEN
+	DO;
+		IF (recvBuffer.xidType = xidformatNumber1) THEN
+		DO;
+			IF (CMPB (@machineId, @recvBuffer.xidMachineId,
+												SIZE(machineId)) = null) THEN
+			DO;
+				machine.linkAddress = recvBuffer.xidAddress;
+				CALL GenCauseEvent(pMachine, secExGotAddress, 0);
+			END;
+		END;
+	END;
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END SecAcCheckXid;
+$ENDIF
+
+$IF secondary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   SecAcCheckXidP
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Send new station xid request buffer to primary 
+*               station in response to xid poll.
+*
+*    Inputs:    Selector to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Free received message control block.
+*     2) Get this stations machine id.
+*     3) Build xid frame using machine id and xid format 1,
+*        (use new station address since dont care which address
+*         is allocated).
+*     4)
+*
+*------------------------------------------------------------------------*/
+
+SecAcCheckXidP: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcSecondaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBIoDataParams);
+DCL pXidBuffer	POINTER,
+	xidBuffer	BASED pXidBuffer STRUCTURE (xidBufferDesc);
+
+	CALL AcFreeCB(pMachine, pDlCB);
+	pXidBuffer = @machine.xidImage;
+	CALL CpMachineID(@xidBuffer.xidMachineId); 
+	xidBuffer.xidType = xidFormatNumber1;
+	xidBuffer.xidAddress = noStationAddress;
+	xidBuffer.xidError = 0;
+
+	pDlCB = GenBuildTransmitRequest(pMachine, newStationAddress,
+						cXidF, msgWithBufferPtr, pXidBuffer, sizeXid1Format);
+
+	CALL MacTransmitFrame(pDlCB);
+
+END SecAcCheckXidP;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAcCheckXmitCmp, SecAcCheckXmitCmp.
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Process frame out completion message.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Get selector to user transmit request message block.
+*     2) If transmit status is send in progress then
+*         set transmit status to send complete.
+*     3) Else call machine failure with bad internal status reason.
+*     4) Try to complete and acked and send complete i/o requests:
+*      1) Get head of machine acked queue
+*      2) If status of message is send complete then return user I/O.
+*     5) cause event of check poll.
+*     6) If secondary station, then disable transmitter (go tri-state).
+*
+*------------------------------------------------------------------------*/
+
+$IF primary
+PriAcCheckXmitCmp: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcCheckXmitCmp(pMachine, PDlCB);
+	CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+
+END PriAcCheckXmitCmp;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$IF secondary
+SecAcCheckXmitCmp: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL pBuffer		POINTER;
+DCL buffer		BASED pBuffer STRUCTURE (dlcHeaderFormat);
+
+	IF (dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr THEN
+		pBuffer = dlCB.pBuffer;
+	ELSE
+		pBuffer = @dlCB.pBuffer;
+	IF (buffer.ctlField AND fBitMask) <> 0 THEN
+		CALL MacDisableTransmitter(dlCB.linkNumber);
+	CALL AcCheckXmitCmp(pMachine, PDlCB);
+	CALL GenCauseEvent(pMachine, secExCheckPoll, 0);
+
+END SecAcCheckXmitCmp;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+AcCheckXmitCmp: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL pUserDlCB	SELECTOR,
+	userDlCB	BASED pUserDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+
+	IF ((dlCB.msgFormat AND msgDlcFormatMask) = macFrameOutInfo) THEN
+	DO;
+		pUserDlCB = dlCB.pUserCB;
+		IF userDlCB.reqError = intCmpStatusSending THEN
+			userDlCB.reqError = intCmpStatusSent;
+		ELSE
+			CALL GenMachineFailure(pMachine, pDlCB, invalidInternalStatus);
+		DO WHILE (((pUserDlCB := machine.ackedQhead(0)) <> null) AND 
+									(userDlCB.reqError = intCmpStatusSent));
+			pUserDlCB = UtlPopQ(@machine.ackedQhead(0));
+			CALL GenReturnUserRequest(pMachine, pUserDlCB, ok);
+		END;
+	END;
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END AcCheckXmitCmp;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAcDeferEvent, SecAcDeferEvent
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Defer the current event for later processing.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Call GenDeferEvent with message control block to be deferred.
+*
+*------------------------------------------------------------------------*/
+
+$IF primary
+PriAcDeferEvent: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL GenDeferEvent(pMachine, pDlCB);
+
+END PriAcDeferEvent;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcDeferEvent: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+	CALL GenDeferEvent(pMachine, pDlCB);
+
+END SecAcDeferEvent;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcEndPoll
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Poll timer has expired.
+*               Set the condition so that the machine can clean 
+*               up current operation and end polling.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) set the poll timed out flag to true.
+*
+*------------------------------------------------------------------------*/
+
+PriAcEndPoll: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL error		WORD;
+
+	machine.pollTimedOut = TRUE;
+
+END PriAcEndPoll;
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcEndExchange
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   End the polling sequence of the current machine.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*
+*    Algorithm:
+*     1) Abort the response timer (if running).
+*     2) disable poll signal to notify remote of end of poll.
+*     3) start the machine defer timer.
+*     4) reset the outstanding send count to zero.
+*     5) Set dlc priority to low dlc priority.
+*        (This is here is ensure fairness of round robin with
+*         other dlc processes).
+*
+*------------------------------------------------------------------------*/
+
+PriAcEndExchange: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+DCL error		WORD;
+
+	IF machine.pollOn THEN
+		CALL MacDisablePoll(machine.linkNumber);
+	CALL TmrStartDeferTimeout(pMachine);
+	CALL OsSetPriority(OsWhoAmI, dlcPriority, @error);
+
+END PriAcEndExchange;
+$ENDIF
+
+$IF secondary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   SecAcEndExchange
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This procedure will determine which frame to
+*               send to end the current polling sequence.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*
+*    Algorithm:
+*     1) If data frame is ready and primary not busy then 
+*         build I-f Frame response,
+*     2) Else if this station is busy then 
+*         send Rnr-f response,
+*     3) else send Rr-f response.
+*     4) reset the outstanding send count to zero.
+*     5) Set dlc priority to low dlc priority.
+*
+*------------------------------------------------------------------------*/
+
+SecAcEndExchange: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcSecondaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor),
+	dataDlCB	BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBIoDataParams);
+DCL ctlField	BYTE;
+
+	IF ((NOT machine.remoteBusy) AND (machine.sendQhead(0) <> null)) THEN
+		pDlCB = GenBuildUserTransmitRequest(pMachine, fBitOn);
+	ELSE
+		DO;
+			IF MacBusyCondition(machine.linkNumber) THEN
+			DO;
+				ctlField = cRnrF;
+				machine.rnrSendCounter = machine.rnrSendCounter + 1;
+			END;
+			ELSE
+				ctlField = cRrF;
+			pDlCB = GenBuildTransmitRequest(pMachine, machine.linkAddress,
+											ctlField, msgNoBufferPtr, NIL, 0);
+		END;
+	CALL MacTransmitFrame(pDlCB);
+
+END SecAcEndExchange;
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcEndTesting
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   End workstation testing of data link.
+*
+*------------------------------------------------------------------------*/
+
+PriAcEndTesting: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+DCL error		WORD;
+
+	machine.operating = FALSE;
+
+END PriAcEndTesting;
+$ENDIF
+
+END DlcActionModule0;

@@ -1,0 +1,39 @@
+/* This Console.ext.inc */
+
+ConLineOut : PROCEDURE (pBuf, length) EXTERNAL;
+    DCL pBuf PTR;
+    DCL length WORD;
+    END;
+
+ConHexOut : PROCEDURE (num) EXTERNAL;
+    DCL num WORD;
+    END;
+
+ConCharOut : PROCEDURE (char) EXTERNAL;
+    DCL char BYTE;
+    END;
+
+ConCharIn : PROCEDURE CharType EXTERNAL;
+    END;
+
+ConKeyPressed : PROCEDURE BOOLEAN EXTERNAL;
+    END;
+
+ConDefCsr : PROCEDURE (mode) EXTERNAL;
+    DCL mode BYTE;
+    END;
+
+ConMoveCsr : PROCEDURE (x, y) EXTERNAL;
+    DCL (x, y) BYTE;
+    END;
+
+ConResetDisplay : PROCEDURE EXTERNAL;
+    END;
+
+ConPeekChar : PROCEDURE CharType EXTERNAL;
+    END;
+
+ConLineIn: PROCEDURE (pInputArea, maxChars) WORD EXTERNAL;
+  DCL maxChars    WORD;
+  DCL pInputArea  PTR;
+  END;

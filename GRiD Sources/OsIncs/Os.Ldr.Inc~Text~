@@ -1,0 +1,47 @@
+
+/*               This is Os.Ldr.Inc               */
+
+DCL systemSize      LIT '24';   /* loadTbl system info size */
+DCL extraSystemSize LIT '1';    /* space at end of table    */
+DCL segTblEntrySize LIT '4';    /* base and offset          */
+DCL grpTblEntrySize LIT '2';    /* base                     */
+DCL maxSymLen       LIT '40';   /* maximum length of symbol */
+DCL bufferSize      LIT '2016'; /* speed same as 1008       */
+
+DCL found           LIT '0ffffh';
+DCL notFound        LIT '0';
+DCL machineID       LIT '31h';
+
+/*            OMF Record Format Codes             */
+
+DCL rHeadr LIT '6EH';
+DCL regInt LIT '70H';
+DCL reData LIT '72H';
+DCL riData LIT '74H';
+DCL ovlDef LIT '76H';
+DCL endRec LIT '78H';
+DCL tHeadr LIT '80H';
+DCL lHeadr LIT '82H';
+DCL peData LIT '84H';
+DCL piData LIT '86H';
+DCL modEnd LIT '8AH';
+DCL fixUpp LIT '9CH';
+
+DCL AddressType LIT 'STRUCTURE
+ (offset WORD,
+  base   WORD)';
+
+DCL WordType LIT 'STRUCTURE
+ (low  BYTE,
+  high BYTE)';
+
+DCL SymNameType LIT 'STRUCTURE
+ (length            BYTE,
+  chars (maxSymLen) BYTE)';
+
+DCL DescTypeForMachineID LIT 'STRUCTURE
+ (dummy (120) BYTE,
+  lowBytes    DWORD,
+  dummy1 (24) BYTE,
+  highBytes   DWORD,
+  dummy2 (48) BYTE)';

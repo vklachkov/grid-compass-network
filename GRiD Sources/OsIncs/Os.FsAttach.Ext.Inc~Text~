@@ -1,0 +1,45 @@
+
+/* this is os.fsattach.ext.inc */
+
+FlushAll: PROCEDURE WORD EXTERNAL;
+  END;
+
+FsAttach: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsOpen: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsClose: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsDetach: PROCEDURE (pPL) WORD EXTERNAL;
+  DCL pPL PTR;
+  END;
+
+FsReadDescriptor: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsWriteDescriptor: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsFlush: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsDelete: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsRename: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FileAttached: PROCEDURE (conn) BOOLEAN EXTERNAL;
+  DCL conn       ConnectionType;
+  END;

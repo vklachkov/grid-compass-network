@@ -1,0 +1,64 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	This must be parse.PlmProcs.Inc
+&
+&	Routines for parsing configuration files.
+&
+&	Created 2/5/85	Rajendra Shah
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+ReadNextToken: PROCEDURE (fileConn, pToken, pSubToken) WORD EXTERNAL;
+	DCL fileConn	WORD;
+	DCL pToken		POINTER,
+		token		BASED pToken 		StringType;
+	DCL pSubToken	POINTER,
+		subToken	BASED pSubToken 	StringType;
+	END;
+
+ReadFormValues: PROCEDURE (fileConn, pForm) WORD EXTERNAL;
+	DCL fileConn		WORD;
+	DCL pForm			PTR,
+		form			BASED pForm		DataFormType;
+	END;
+
+ReadMenuItem: PROCEDURE (fileConn, pMenuStr, pRecord, pItemNumber) WORD EXTERNAL;
+	DCL fileConn	WORD;
+	DCL pMenuStr	PTR,
+		menustr		BASED	pMenuStr	(1) BYTE;
+	DCL pRecord		PTR,
+		record		BASED pRecord		StringType;
+	DCL pItemNumber	PTR,
+		itemNumber	BASED pItemNumber 	WORD;
+	END;
+
+ReadRecord: PROCEDURE (fileConn, pRecord) WORD EXTERNAL;
+	DCL fileConn	WORD;
+	DCL pRecord		PTR,
+		record		BASED pRecord		StringType;
+	END;
+
+WriteFormValues: PROCEDURE (fileConn, pForm) WORD EXTERNAL;
+	DCL fileConn			WORD;
+	DCL pForm				PTR,
+		form				BASED pForm		DataFormType;
+	END;
+
+WriteMenuItem: PROCEDURE (fileConn, pMenuStr, itemNumber) WORD EXTERNAL;
+	DCL fileConn	WORD;
+	DCL pMenuStr	PTR,
+		menustr		BASED	pMenuStr	(1) BYTE;
+	DCL itemNumber	WORD;
+	END;
+
+WriteRecord: PROCEDURE (fileConn, pRecord) WORD EXTERNAL;
+	DCL fileConn	WORD;
+	DCL pRecord		PTR,
+		record		BASED pRecord		StringType;
+	END;
+
+WriteToken: PROCEDURE (fileConn, pToken, pSubToken) WORD EXTERNAL;
+	DCL fileConn		WORD;
+	DCL pToken			PTR,
+		Token			BASED pToken		StringType;
+	DCL pSubToken		PTR,
+		SubToken		BASED pSubToken		StringType;
+	END;

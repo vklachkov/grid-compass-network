@@ -1,0 +1,38 @@
+
+/* This is PLMLits.Inc~text~ */
+/* Updated for 3.0 release 6/28/83 */
+/* 4/16/85  removed NIL & NULL
+            added   BEGIN
+            added   CHARSTR */
+/* 12/12/86 corrected typos in comments below */
+
+DECLARE DCL   LITERALLY 'DECLARE';
+DCL LIT       LITERALLY 'LITERALLY';
+DCL PROC      LIT 'PROCEDURE';
+DCL PTR       LIT 'POINTER';
+DCL REENT     LIT 'REENTRANT';
+DCL STRUC     LIT 'STRUCTURE';
+DCL PUB       LIT 'PUBLIC';
+DCL CLEAN     LIT 'PUB REENT';
+DCL BOOL      LIT 'BYTE';
+DCL BOOLEAN   LIT 'BOOL';
+DCL TRUE      LIT '1';
+DCL FALSE     LIT '0';
+DCL EXT       LIT 'EXTERNAL';
+DCL NULLBYTE  LIT '0FFH';
+DCL NULLWORD  LIT '0FFFFH';
+DCL NULLPTR   LIT '0FFFFFH';
+DCL NULLDWORD LIT '0FFFFFFFFH';
+DCL BEGIN     LIT ' ';
+DCL CHARSTR   LIT '(*) BYTE DATA';
+
+/* NIL as used in Pascal has a value of 0ffffh:0ffffh.   To assign NIL to
+a pointer in PLM, please define a procedure called NIL which returns
+0fffffh:0ffffh
+
+NULL is too ambiguous.  Use of NULLBYTE, NULLWORD, NULLPTR & NULLDWORD
+is recommended  
+
+CHARSTR can be used to define plm strings conveniently as follows:
+
+        DCL Msg CharStr ('This is a test Message');  */

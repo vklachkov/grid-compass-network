@@ -1,0 +1,234 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Dlc Support Module')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*				COMPASS CENTRAL DATA LINK CONTROL
+* 
+* 				Dlc Machine Support Routines:
+*
+*				IsAnyMachineActive, IsAnyMachineOperating,
+*				IsAnyMachineDeferring, FindUnusedMachine,
+*				FindUnusedLinkAddress, FindMachine,
+*				FreeUsedMachine.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcSupportModule: DO;
+$SAVE NOLIST
+$INCLUDE (``ccIncs`CommonDefines.inc~Text~)
+$INCLUDE (``ccIncs`MachineDefines.inc~Text~)
+$INCLUDE (``ccIncs`MacDefines.inc~Text~)
+$INCLUDE (``ccIncs`MemoryDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcFrameDefines.inc~Text~)
+$INCLUDE (``ccIncs`GlobalDataModule.inc~Text~)
+$INCLUDE (``ccIncs`GeneralModule.inc~Text~)
+$INCLUDE (``ccIncs`MacModule.inc~Text~)
+$INCLUDE (``ccIncs`UtlModule.inc~Text~)
+$INCLUDE (``Incs`OsPlmProcs.inc~Text~)
+$INCLUDE (``Incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+FreeUsedMachine: PROCEDURE(pMachineArray, pMachine, numberOfStations) CLEAN;
+DCL pMachineArray		PTR;
+DCL pMachine			SELECTOR;
+DCL numberOfStations	BYTE;
+DCL machineArray		BASED pMachineArray	(1) SELECTOR;
+DCL machine				BASED pMachine dlcPrimaryMachineType;
+DCL (x, error)			WORD;
+
+	/* Free state machine control block and reset entry in state machine array
+	*/
+
+	DO x = 0 TO (numberOfStations - 1);
+		IF (machineArray(x) = pMachine) THEN
+		DO;
+			CALL OsFree(BUILD$PTR(pMachine, 0), @error);
+			machineArray(x) = nullWord;
+		END;
+	END;
+
+END FreeUsedMachine;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+IsAnyMachineActive: PROCEDURE (pMachineArray, numberOfStations) BYTE CLEAN;
+DCL pMachineArray		PTR;
+DCL numberOfStations	BYTE;
+DCL machineArray 		BASED pMachineArray	(1) SELECTOR;
+DCL pMachine 			SELECTOR;
+DCL machine 			BASED pMachine dlcPrimaryMachineType;
+DCL x					WORD;
+
+	/*	check to see if a state machine is currently using the wire.
+ 		Also, fatal error if more than one machine is active */
+
+	DO x = 0 TO (numberOfStations - 1);
+		pMachine = machineArray(x);
+		IF (pMachine <> nullWord) AND (machine.active) THEN
+			RETURN TRUE;
+	END;
+ 
+	RETURN FALSE;
+
+END IsAnyMachineActive;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+IsAnyMachineDeferring: PROCEDURE (pMachineArray, numberOfStations) BYTE CLEAN;
+DCL pMachineArray		PTR;
+DCL numberOfStations	BYTE;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL pMachine			SELECTOR;
+DCL machine				BASED pMachine dlcPrimaryMachineType;
+DCL x					WORD;
+
+	/*	check to see if ant state machine is operating, regardless of
+		any current activity */
+
+	DO x = 0 TO (numberOfStations - 1);
+		pMachine = machineArray(x);
+		IF (pMachine <> nullWord) AND (machine.deferring) THEN
+			RETURN TRUE;
+	END;
+	RETURN FALSE;
+
+END IsAnyMachineDeferring;
+ 
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+IsAnyMachineOperating: PROCEDURE(pMachineArray, numberOfStations) BYTE CLEAN;
+DCL pMachineArray		PTR;
+DCL numberOfStations	BYTE;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL x					WORD;
+
+	/*	check to see if ant state machine is operating, regardless of
+		any current activity */
+
+	DO x = 0 TO (numberOfStations - 1);
+		IF (machineArray(x) <> nullWord) THEN
+			RETURN TRUE;
+	END;
+	RETURN FALSE;
+
+END IsAnyMachineOperating;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+FindMachine: PROCEDURE(pMachineArray, numberOfStations, addr) SELECTOR CLEAN;
+DCL pMachineArray		PTR;
+DCL numberOfStations	BYTE;
+DCL addr				BYTE;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL pMachine			SELECTOR;
+DCL machine				BASED pMachine dlcPrimaryMachineType;
+DCL x					WORD;
+
+	/* Find state machine control block based on link address */
+
+	DO x = 0 TO (numberOfStations - 1);
+		pMachine = machineArray(x);
+		IF (pMachine <> nullWord) AND (machine.linkAddress = addr) THEN
+			RETURN pMachine;
+	END;
+ 	RETURN nullWord;
+
+END FindMachine;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+FindUnusedLinkAddress: PROCEDURE (pMachineArray, numberOfstations, lastAddress)
+																	BYTE CLEAN;
+DCL pMachineArray		PTR;
+DCL (numberOfStations,
+	lastAddress) 		BYTE;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL pMachine			SELECTOR;
+DCL machine				BASED pMachine dlcPrimaryMachineType;
+
+DCL (addr, unique)		BYTE;
+DCL numberOfIterations	WORD;
+DCL x 					WORD;
+
+	/*	create new link address and search address array
+		for uniqueness. Continue creating until unique address is found. */
+
+	addr = lastAddress + 1;
+	DO numberOfIterations = 0 TO (linkAddressRange - 1);
+		/* form address value to be in link address range */
+		addr = (addr MOD linkAddressRange) + baseLinkAddress;
+
+		/* search all operating machine control blocks for uniqueness */
+		unique = TRUE;
+		DO x = 0 TO (numberOfStations - 1);
+			pMachine = machineArray(x);
+			IF (pMachine <> nullWord) AND (machine.linkAddress = addr) THEN
+				unique = FALSE;
+		END;
+ 
+		/* if unique address found, then return value */
+		IF unique THEN RETURN addr;
+
+		/* else continue search with next sequential address */
+		addr = addr + 1;
+	END;
+
+	/* no unique address found (should not occur) */
+	RETURN noStationAddress;
+
+END FindUnusedLinkAddress;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+FindUnusedMachine: PROCEDURE (pMachineArray, numberOfStations) BYTE CLEAN;
+	DCL pMachineArray		PTR;
+	DCL numberOfStations	BYTE;
+	DCL machineArray		BASED pMachineArray (1) SELECTOR;
+
+	DCL pMachine			SELECTOR;
+	DCL machine				BASED pMachine dlcPrimaryMachineType;
+	DCL (x, error)			WORD;
+	DCL found				BYTE;
+
+	/*	Find first unused entry in state machine array and 
+		try to create new state machine control block.
+		(machine control block parameters initialized by caller).
+		Return value equal to numberOfStations means no unused
+		machine control block was found else return value specifies
+		index into machineArray where selector to allocated control
+		block is stored.
+	*/
+
+	x = 0;
+	found = FALSE;
+	DO WHILE (NOT found) AND (x < numberOfStations);
+		IF machineArray(x) = nullWord THEN
+			found = TRUE;
+		ELSE
+			x = x + 1;
+	END;
+
+	IF x < numberOfStations THEN
+	DO;
+		machineArray(x) = SELECTOR$OF(OsAllocate(SIZE(machine), @error));
+		IF error <> 0 THEN
+		DO;
+			machineArray(x) = nullWord;
+			x = numberOfStations;
+		END;
+	END;
+
+	RETURN x;
+
+END FindUnusedMachine;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END DlcSupportModule;

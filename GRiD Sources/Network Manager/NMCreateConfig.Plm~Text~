@@ -1,0 +1,543 @@
+$COMPACT
+$SET(dialout)
+$TITLE('Network Manager Create Config')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Create Config	-	1/3/86					*/
+/*																			*/
+/****************************************************************************/
+
+NMCreateConfig: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``ccIncs`DataCommDefines.Inc~Text~)
+$INCLUDE(``ccIncs`DlcMsgDefines.Inc~Text~)
+$INCLUDE(``ccIncs`MacDefines.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`ConPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(``osIncs`Os.Error.Inc~Text~)
+
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigForms.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$RESTORE
+
+/* Comm configurator errors. */
+
+DCL	eCommCfgLineTooLong				LIT	'1601',
+	eCommCfgInvalidConfiguration	LIT	'1602',
+	eCommCfgIllegalCardNumber		LIT	'1603',
+	eCommCfgDuplicateCardNumber		LIT	'1604',
+	eCommCfgNotACommCard			LIT	'1605',
+	eCommCfgIllegalBaudRate			LIT	'1606',
+	eCommCfgSyntaxError				LIT	'1607';
+
+$EJ
+/* GetConfigCB */
+
+GetConfigCB: PROCEDURE (card, port, pError) POINTER CLEAN;
+
+DCL	card		BYTE,
+	port		BYTE,
+	portIndex	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	speed		DWORD,
+	pDlCB		POINTER,
+	dlCB		BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBConfigureParams),
+	pdlDlCB		BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBPdlConfParams);
+
+	error = eOk;
+	portIndex = 4*card + port;
+	IF portInfo(portIndex).protocol = emptyLink THEN
+		RETURN nullPtr;
+
+	pDlCB = AllocateMemory(SIZE(dlCB), @error);
+	IF error <> eOk THEN
+		RETURN nullPtr;
+
+	dlCB.ipcCode = msgNetworkIo;
+	dlCB.stationNumber = anyStationNumber;
+	dlCB.linkNumber = port;
+	dlCB.freeDisp = TRUE;
+
+	IF (portInfo(portIndex).protocol = gridlinkPrimary) OR
+					(portInfo(portIndex).protocol = fiberlinkPrimary) THEN
+	DO;
+		dlCB.bufferLength = SIZE(dlCB) - msgHeaderSize;
+		dlCB.protocolType = dlcPrimaryProtocol;
+		IF portInfo(portIndex).protocol = gridLinkPrimary THEN
+		DO;
+			IF port = 0 THEN
+				dlCB.linkSpeed = gridlink0Divisor;
+			ELSE
+				dlCB.linkSpeed = gridlinkDivisor;
+		END;
+		ELSE
+			dlCB.linkSpeed = nullWord;
+		dlCB.bufferSize = 540;
+		dlCB.duplexType = halfDuplexIo;
+		dlCB.ioType = halfDmaIo;
+		dlCB.numberOfBuffers = 6;
+		dlCB.stationCount = 8;
+		dlCB.retryCount = 25;
+		dlCB.minDeferTO = 20;
+		dlCB.maxDeferTO = 500;
+		dlCB.responseTO = 50;
+		dlCB.pollTO = 0;
+	END;
+	ELSE
+		DO;
+			pdlDlCB.bufferLength = SIZE(pdlDlCB) - msgHeaderSize;
+			IF portInfo(portIndex).baudChoice <> baudExternal THEN
+			DO;
+				IF port = 0 THEN
+					speed = 781250/portInfo(portIndex).baudRate;
+				ELSE
+					speed = 3125000/portInfo(portIndex).baudRate;
+				speed = (speed + 5)/10;
+			END;
+			ELSE
+				speed = nullWord;
+			IF portInfo(portIndex).phonelinkType = originateAndAnswerPdl THEN
+				pdlDlCB.protocolType = dlcOrigAndAnsProtocol;
+			ELSE
+				IF portInfo(portIndex).phonelinkType = originateOnlyPdl THEN
+					pdlDlCB.protocolType = dlcOriginateProtocol;
+			ELSE
+				pdlDlCB.protocolType = dlcAnswerProtocol;
+			pdlDlCB.linkSpeed = LOW(speed);
+			pdlDlCB.bufferSize = 540;
+			pdlDlCB.duplexType = duplexIo;
+			pdlDlCB.ioType = asyncInterruptIo;
+			pdlDlCB.numberOfBuffers = 6;
+			pdlDlCB.stationCount = 1;
+			pdlDlCB.retryCount = 10;
+			IF (pdlDlCB.lineType := portInfo(portIndex).lineType) = leased THEN
+				pdlDlCB.modemType = noModem;
+			ELSE
+				IF	(portInfo(portIndex).modemType = hayesSmartmodem1200) OR
+						(portInfo(portIndex).modemType = usRobotics2400) THEN
+					pdlDlCB.modemType = smartModem1200;
+			ELSE
+				IF  (portInfo(portIndex).modemType = hayesSmartmodem2400) OR
+					/*- next line added 11/4/88 for FBI/Hughes by Will Strang */
+				      (portInfo(portIndex).modemType = hayesSmartmodem9600) THEN
+					pdlDlCB.modemType = smartModem2400;
+			ELSE
+				pdlDlCB.modemType = noModem;
+			IF portInfo(portIndex).dialingMode = touchtone THEN
+				pdlDlCB.dialingMode = touchtoneType;
+			ELSE
+				pdlDlCB.dialingMode = pulseDialType;
+			IF portInfo(portIndex).dialType = manual THEN
+				pdlDlCB.dialType = manual;
+			ELSE
+				pdlDlCB.dialType = automatic;
+		END;
+
+	RETURN pDlCB;
+
+END GetConfigCB;
+
+$EJ
+/* SendConfigCB */
+
+SendConfigCB: PROCEDURE (pid, pDlCB, pError) CLEAN;
+
+DCL	pid		WORD,
+	pDlCB	POINTER,
+	dlCB	BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBConfigureParams),
+	pError	POINTER,
+	error	BASED pError WORD,
+	dummy	WORD;
+
+	CALL OsSend(pid, (msgNmConfig OR msgRequest), 0, pDlCB, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL OsFree(pDlCB, @dummy);
+		RETURN;
+	END;
+
+	pDlCB = OsReceive(pid, (msgNmConfig OR msgResponse), 60000, @dummy, @error);
+	IF error = eOk THEN
+	DO;
+		error = dlCB.reqError;
+		IF dlCB.freeDisp THEN
+			CALL OsFree(pDlCB, @dummy);
+	END;
+
+END SendConfigCB;
+
+$EJ
+/* Create the configuration. */
+
+CreateConfig: PROCEDURE(pError) CLEAN;
+
+DCL pError		POINTER,
+	error		BASED pError WORD,
+	pDlCB		POINTER,
+	pid			WORD,
+	i			BYTE,
+	cardNum		BYTE;
+
+$IF compassMode
+	error = eOk;
+	RETURN;
+$ENDIF
+
+	DO cardNum = 0 TO 7;
+		IF NOT (cardInfo(cardNum).configured AND
+							(cardInfo(cardNum).fileType <> emptyFile)) THEN
+			GOTO loopEnd;
+		IF NOT StartIpc(cardNum, cardInfo(cardNum).memSize) THEN
+		DO;
+			CALL OsLogError(11, eNMIpcFailure, cardNum,
+							@(34, 'NetworkMgr: Suberror = card (1660)'));
+			GOTO loopEnd;
+		END;
+		error = eOutOfMem;
+		i = 5;
+		DO WHILE (error = eOutOfMem) AND (i > 0);
+			DO CASE (cardInfo(cardNum).fileType - 1);
+
+				/* Empty */
+				error = eOk;	/* Not possible. */
+
+				/* PhoneLink */
+				pid = OsCreateRemoteProcess(cardNum, @PhonelinkProc, 80,
+																FALSE, @error);
+
+				/* GRiDLink */
+				pid = OsCreateRemoteProcess(cardNum, @GRiDlinkProc, 80,
+																FALSE, @error);
+
+				/* GRiDLink and PhoneLink */
+				pid = OsCreateRemoteProcess(cardNum, @GRiDAndPhonelinkProc,
+															80, FALSE, @error);
+
+				error = eOk;	/* Not supported. */
+			END;
+
+			IF error = eOutOfMem THEN
+				CALL OsDelay(20000);
+			i = i - 1;
+		END;
+		IF error <> eOk THEN
+		DO;
+			CALL OsLogError(11, error, cardNum,
+								@(34, 'NetworkMgr: Suberror = card (1661)'));
+			GOTO loopEnd;
+		END;
+
+		dlcMgrName(dlcMgrName(0)) = '0' + cardNum;
+		error = eFileNotFound;
+		i = 0;
+		DO WHILE (error <> eOk) AND (i < 50);
+			pid = OsLookupName(@dlcMgrName, @error);
+			IF error <> eOk THEN
+				CALL OsDelay(100);
+			i = i + 1;
+		END;
+		IF error = eFileNotFound THEN error = eProcNotExist;
+		IF error <> eOk THEN
+		DO;
+			CALL OsLogError(11, error, cardNum,
+								@(34, 'NetworkMgr: Suberror = card (1662)'));
+			GOTO loopEnd;
+		END;
+
+		DO i = 0 TO 3;
+			pDlCB = GetConfigCB(cardNum, i, @error);
+			IF error <> eOk THEN
+			DO;
+				CALL OsLogError(11, error, cardNum,
+								@(34, 'NetworkMgr: Suberror = card (1663)'));
+				GOTO loopEnd;
+			END;
+
+			IF pDlCB <> nullPtr THEN
+			DO;
+				CALL SendConfigCB(pid, pDlCB, @error);
+				IF error <> eOk THEN
+				DO;
+					CALL OsLogError(11, error, cardNum,
+								@(34, 'NetworkMgr: Suberror = card (1664)'));
+					GOTO loopEnd;
+				END;
+			END;
+		END;
+loopEnd:
+	END;
+
+END CreateConfig;
+
+$EJ
+/* Procedures to read CommConfig file. */
+
+
+ReadNextLine: PROCEDURE(conn, pBuf, bufLen, pError) BOOLEAN CLEAN;
+
+DCL	conn	WORD,
+	pBuf	POINTER,
+	buf		BASED pBuf (1) BYTE,
+	bufLen	WORD,
+	pError	POINTER,
+	error	BASED pError WORD,
+	len		WORD,
+	i		WORD;
+
+	len = OsRead(conn, @buf, bufLen, @error);
+	IF error = eOk THEN
+	DO;
+		IF len = 0 THEN
+			RETURN FALSE;
+		ELSE
+			DO;
+				DO i = 0 TO (len - 1);
+					IF buf(i) = cr THEN
+					DO;
+						IF i < (len - 1) THEN
+							CALL OsSeek(conn, backwardSeek, (len-i-2), @error);
+						ELSE
+							CALL OsSeek(conn, forwardSeek, 1, @error);
+
+						RETURN TRUE;
+					END;
+				END;
+				error = eCommCfgLineTooLong;
+			END;
+	END;
+
+	RETURN TRUE;
+
+END ReadNextLine;
+
+
+GetBaudRate: PROCEDURE(pArg, len) WORD CLEAN;
+
+DCL	pArg	POINTER,
+	arg		BASED pArg (1) BYTE,
+	len		BYTE,
+	i		BYTE,
+	baud	DWORD;
+
+	baud = 0;
+	IF len = 0 THEN
+		RETURN 1200;
+	ELSE
+		IF (len >= 3) AND ((arg(0) = 'e') OR (arg(0) = 'E'))
+					  AND ((arg(1) = 'x') OR (arg(1) = 'X'))
+					  AND ((arg(2) = 't') OR (arg(2) = 'T')) THEN
+			RETURN 0;
+	ELSE
+		DO i = 0 to (len - 1);
+			IF (arg(i) < '0') OR ('9' < arg(i)) THEN
+				RETURN nullWord;
+			baud = (10*baud) + (arg(i) - '0');
+			IF baud >= nullWord THEN
+				RETURN nullWord;
+		END;
+
+	IF (baud < 100) OR (baud > 19200) THEN
+		RETURN nullWord;
+	ELSE
+		RETURN (LOW(baud));
+
+END GetBaudRate;
+
+
+GoodCombination: PROCEDURE(cardNumber) BOOLEAN CLEAN;
+
+DCL	cardNumber		BYTE,
+	pType			(4) BYTE,
+	fileType		BYTE,
+	i				BYTE;
+
+	DO i = 0 TO 3;
+		pType(i) = portInfo(4*cardNumber + i).protocol;
+		IF pType(i) = fiberlinkPrimary THEN pType(i) = gridlinkPrimary;
+	END;
+
+	IF (pType(0) <> pType(1)) AND (pType(0) <> emptyLink) AND
+										(pType(1) <> emptyLink) THEN
+		GOTO errExit;
+	ELSE
+		IF (pType(2) <> pType(3)) AND (pType(2) <> emptyLink) AND
+										(pType(3) <> emptyLink) THEN
+			GOTO errExit;
+	ELSE
+		IF ((pType(0) = gridlinkPrimary) OR (pType(1) = gridlinkPrimary)) AND
+						((pType(2) = phonelink) OR (pType(3) = phonelink)) THEN
+			GOTO errExit;
+
+	fileType = emptyFile;
+	DO i = 0 TO 3;
+		IF pType(i) <> emptyLink THEN
+		DO;
+			IF fileType = emptyFile THEN
+			DO;
+				IF pType(i) = gridlinkPrimary THEN
+					fileType = gridlinkPrimaryFile;
+				ELSE
+					fileType = phonelinkFile;
+			END;
+			ELSE
+				IF (fileType = phonelinkFile) AND
+										(pType(i) = gridlinkPrimary) THEN
+					fileType = gridAndPhonelinkFile;
+		END;
+	END;
+	cardInfo(cardNumber).fileType = fileType;
+	RETURN TRUE;
+
+errExit:
+	RETURN FALSE;
+
+END GoodCombination;
+
+
+ReadOldConfigFile: PROCEDURE(pError) BOOLEAN CLEAN;
+
+DCL	pError		POINTER,
+	error		BASED pError WORD,
+	conn		WORD,
+	dummy		WORD,
+	argBuf		(128) BYTE,
+	arg			(128) BYTE,
+	numBuf		(6)	BYTE,
+	cardNum		BYTE,
+	delim		BYTE,
+	i			BYTE,
+	j			BYTE,
+	fileIsEmpty	BOOLEAN;
+
+	CALL ConLineOut(@('Parsing CommConfig~Text~', cr, lf), 26);
+
+	conn = AttachAndOpen(@oldConfigFile, oldFile, updateAccess, @error);
+	IF error <> eOk THEN GOTO errExit;
+
+	fileIsEmpty = TRUE;
+	DO WHILE ReadNextLine(conn, @argBuf, SIZE(argBuf), @error);
+		fileIsEmpty = FALSE;
+		IF error <> eOk THEN
+			GOTO procExit;
+		dummy = OsSwitchBuffer(@argBuf);
+
+		/* get card number and check that it's all right */
+		delim = OsGetArgument(TRUE, @arg);
+		IF delim = cr THEN
+			GOTO loopEnd;
+		IF (arg(0) <> 1) OR (arg(1) > '7') THEN
+		DO;
+			error = eCommCfgIllegalCardNumber;
+			GOTO procExit;
+		END;
+		cardNum = arg(1) - '0';
+		IF cardInfo(cardNum).configured THEN
+		DO;
+			error = eCommCfgDuplicateCardNumber;
+			GOTO procExit;
+		END;
+		IF cardInfo(cardNum).cardType <> csCard THEN
+		DO;
+			error = eCommCfgNotACommCard;
+			GOTO procExit;
+		END;
+
+		i = 0;
+		j = 4*cardNum;
+		DO WHILE (i <= 3) AND (delim <> cr);
+			delim = OsGetArgument(TRUE, @arg);
+			IF Identical(@('Phonelink'), @arg(1), 9) AND (arg(0) >= 9) THEN
+			DO;
+				portInfo(j + i).protocol = phonelink;
+				portInfo(j + i).phonelinkType = answerOnlyPdl;
+				portInfo(j + i).lineType = switched;
+				portInfo(j + i).modemType = otherModem;
+				portInfo(j + i).dialingMode = touchtone;
+				portInfo(j + i).dialType = automatic;
+				portInfo(j + i).lineKind = externalLine;
+				portInfo(j + i).prefix(0) = 0;
+				portInfo(j + i).baudRate =
+					GetBaudRate(@arg(9 + 1), (arg(0) - 9));
+				IF portInfo(j + i).baudRate = nullWord THEN
+				DO;
+					error = eCommCfgIllegalBaudRate;
+					GOTO procExit;
+				END;
+				ELSE
+					IF portInfo(j + i).baudRate = 0 THEN
+					DO;
+						portInfo(j + i).lineType = leased;
+						portInfo(j + i).baudChoice = baudExternal;
+						portInfo(j + i).dialType = manual;
+					END;
+				ELSE
+					portInfo(j + i).baudChoice = baudEdit;
+			END;
+			ELSE
+				IF Identical(@('GRiDlink'), @arg(1), 8) AND (arg(0) = 8) THEN
+					portInfo(j + i).protocol = gridlinkPrimary;
+			ELSE
+				IF Identical(@('OpticGRiDlink'), @arg(1), 13) AND
+														(arg(0) = 13) THEN
+					portInfo(j + i).protocol = fiberlinkPrimary;
+			ELSE
+				IF Identical(@('Empty'), @arg(1), 5) AND (arg(0) = 5) THEN
+					portInfo(j + i).protocol = emptyLink;
+			ELSE
+				DO;
+					error = eCommCfgSyntaxError;
+					GOTO procExit;
+				END;
+			i = i + 1;
+		END;
+		IF NOT GoodCombination(cardNum) THEN
+		DO;
+			error = eCommCfgInvalidConfiguration;
+			GOTO procExit;
+		END;
+		IF cardInfo(cardNum).fileType <> emptyFile THEN
+			cardInfo(cardNum).configured = TRUE;
+
+loopEnd:
+
+	END;
+	IF fileIsEmpty THEN error = eCommCfgSyntaxError;
+
+procExit:
+	IF error = eOk THEN
+	DO;
+		CALL OsDelete(conn, @dummy);
+		conn = AttachAndOpen(@oldRealFile, oldFile, updateAccess, @dummy);
+		IF dummy = eOk THEN
+			CALL OsDelete(conn, @dummy);
+	END;
+	ELSE
+		CALL OsDetach(conn, @dummy);
+
+errExit:
+	IF error <> eOk THEN
+	DO;
+		CALL ConLineOut(@('Parse failed', cr, lf), 14);
+$IF NOT compassMode
+		IF error = eFileNotFound THEN error = eNMConfigFileNotFound;
+		CALL OsLogError(11, error, 1665,
+							@(33, 'NetworkMgr: Config file not found'));
+$ENDIF
+	END;
+	ELSE
+		CALL ConLineOut(@('Parse successful', cr, lf), 18);
+	RETURN (error = eOk);
+
+END ReadOldConfigFile;
+
+
+END NMCreateConfig;

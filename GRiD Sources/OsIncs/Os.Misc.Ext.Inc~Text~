@@ -1,0 +1,66 @@
+
+/*     This is Os.Misc.Ext.Inc      */
+
+OsGetSystemID : PROCEDURE (pID) EXTERNAL;
+    DCL pID PTR;
+    END;
+
+OsGetTime : PROCEDURE (mode, pTime) EXTERNAL;
+    DCL mode        BYTE;
+    DCL pTime       PTR;
+    END;
+
+OsChangeExtension : PROCEDURE (pPath, extNum, pExt, pError) EXTERNAL;
+    DCL (pPath, pExt, pError) PTR;
+    DCL extNum BYTE;
+    END;
+
+OsDecodeException : PROCEDURE (code, pErrorName) EXTERNAL;
+    DCL code WORD;
+    DCL pErrorName PTR;
+    END;
+
+OsGetArgument : PROCEDURE (short, pArgument) BYTE EXTERNAL;
+    DCL pArgument PTR;
+    DCL short BOOLEAN;
+    END;
+
+IntGetArgument : PROCEDURE (pid, short, pArgument) BYTE EXTERNAL;
+    DCL pid       PidType;
+    DCL pArgument PTR;
+    DCL short BOOLEAN;
+    END;
+
+OsSwitchBuffer : PROCEDURE (pBuffer) WORD EXTERNAL;
+    DCL pBuffer PTR;
+    END;    
+
+OsHandleCancel : PROCEDURE (mode) EXTERNAL;
+    DCL mode BOOLEAN;
+    END;
+
+OsVersionNumber: PROCEDURE (pid, pVersion, pError) EXTERNAL;
+  DCL pid       PidType;
+  DCL pVersion  PTR;
+  DCL pError    PTR;
+  END;
+
+/*
+ExceptionHandler: PROCEDURE (code, param, unused, word8087) EXTERNAL;
+  DCL code      WORD;
+  DCL param     WORD;
+  DCL unused    WORD;
+  DCL word8087  WORD;
+  END;
+*/
+
+AddVersionNumber: PROCEDURE (pID) EXTERNAL;
+  DCL pID       PTR;
+  END;
+
+OsGetPrefix: PROCEDURE PTR EXTERNAL;
+  END;
+
+OsGetWork: PROCEDURE PTR EXTERNAL;
+  END;
+

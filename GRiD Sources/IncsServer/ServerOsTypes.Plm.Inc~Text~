@@ -1,0 +1,29 @@
+/* This is ServerOsTypes.Plm.inc.
+   It contains external declaration for Os calls that 
+   exist on server but not on workstation Os's.  
+   
+Created:	Feb 6th 1986.   */
+
+DCL	logToDP				LIT '1';
+DCL	logToFile			LIT '2';
+DCL	logToBoth			LIT '3';
+DCL	logToDpWithAttn		LIT '9';
+DCL logToBothWithAttn	LIT '11';
+
+DCL CardStatusType 	LIT	'STRUCTURE (
+		cardNumber		WORD,
+		cardType		BYTE,
+		myPid			SELECTOR,
+		parentPid		SELECTOR,
+		parentProcID	WORD,
+		num128Kblocks	BYTE,
+		spare (10) 		WORD,
+		memStatusInfo)';
+
+DCL memStatusInfo LIT 
+	  	'freeBytes		DWORD,
+		freeBlocks		WORD,
+		largestFree		WORD,
+		allocBytes		DWORD,
+		allocBlocks		WORD,
+		largestAlloc	WORD';

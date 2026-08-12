@@ -1,0 +1,435 @@
+$COMPACT
+$TITLE('Network Manager Transfer Procedures')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Transfer Procedures	-	1/3/86				*/
+/*																			*/
+/****************************************************************************/
+
+NMTransfer: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Keys.Plm.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`Dataforms.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`RemoteFormsProcs.Plm.Inc~Text~)
+$INCLUDE(``Incs`Parse.PlmProcs.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigData.Plm.Inc~Text~)
+$INCLUDE(NMConfigMain.Plm.Inc~Text~)
+$INCLUDE(NMConfigForms.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$INCLUDE(NMMisc.Plm.Inc~Text~)
+$RESTORE
+
+$EJ
+ReadInFile: PROCEDURE(conn, pError) CLEAN;
+
+DCL	conn			WORD,
+	pError			POINTER,
+	error			BASED pError WORD,
+	dummy			WORD,
+	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	serverFound		BOOLEAN,
+	networkType		BYTE,
+	done			BOOLEAN;
+
+	error = ReadNextToken(conn, @token, @subToken);
+	IF error <> eOk THEN GOTO procExit;
+	token.dummy = token.len;
+	subToken.dummy = subToken.len;
+	IF NOT SameStrings(@networkToken, @token.dummy) THEN
+	DO;
+		error = eNMIllegalDirectory;
+		GOTO procExit;
+	END;
+	IF SameStrings(@publicToken, @subToken.dummy) THEN
+		networkType = publicNetwork;
+	ELSE
+		IF SameStrings(@privateToken, @subToken.dummy) THEN
+			networkType = privateNetwork;
+	ELSE
+		DO;
+			error = eNMIllegalDirectory;
+			GOTO procExit;
+		END;
+
+	done = FALSE;
+	DO WHILE NOT done;
+		error = ReadNextToken(conn, @token, @subToken);
+		IF error <> eOk THEN GOTO procExit;
+
+		IF (done := (token.len = 0)) THEN
+			GOTO procExit;
+
+		token.dummy = token.len;
+		subToken.dummy = subToken.len;
+
+		DO CASE GetTokenType(@token);
+
+			DO;								/* password token */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+			DO;								/* options token */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+			DO;								/* card token */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+			DO;								/* server token */
+				serverFound = FALSE;
+				IF (subToken.dummy = 0) OR
+									(subToken.dummy >= serverNameLength) THEN
+				DO;
+					error = eNMIllegalServerName;
+					GOTO procExit;
+				END;
+
+				IF NOT (serverFound := FindServer(subToken.len,
+												@subToken.chars, @pServer)) THEN
+					pServer = FindFreeServer;
+
+				comment.len = 0;
+				error = ReadFormValues(conn, @commentForm);
+				IF error <> eOk THEN
+					GOTO procExit;
+
+				IF serverInfo.pName <> nullPtr THEN
+					CALL FreeString(@serverInfo.pName);
+				serverInfo.pName = CopyOfString(@subToken);
+				IF serverInfo.pComment <> nullPtr THEN
+					CALL FreeString(@serverInfo.pComment);
+				IF comment.len <> 0 THEN
+					serverInfo.pComment = CopyOfString(@comment);
+				ELSE
+					serverInfo.pComment = nullPtr;
+				IF NOT serverFound THEN
+					CALL InsertServer(pServer);
+				serverInfo.isPublic = (networkType = publicNetwork);
+				serverInfo.isPrivate = (networkType = privateNetwork);
+
+				CALL InitDefaultNetForm;
+				error = ReadFormValues(conn, @netForm);
+				IF error <> eOk THEN
+					GOTO procExit;
+				dummy = MarkCustomConnections(pServer, networkType);
+				CALL CopyNetForm(pServer, networkType);
+
+				IF NOT EqualStrings(@myServerName, serverInfo.pName) THEN
+					CALL AddDefaultConnections(pServer, networkType);
+			END;
+
+			DO;								/* network token */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+			DO;								/* connection token */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+			DO;								/* Unknown token - report error. */
+				error = eNMIllegalDirectory;
+				GOTO procExit;
+			END;
+
+		END;
+	END;
+
+procExit:
+
+END ReadInFile;
+
+$EJ
+ReadDir: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh			POINTER,
+	ch			BASED pCh BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	confirmed	BOOLEAN,
+	selection	WORD,
+	conn		WORD,
+	dummy		WORD,
+	pDirFile	POINTER,
+	pMsgStr1	POINTER,
+	msgStr1		BASED pMsgStr1 stringType,
+	pMsgStr2	POINTER,
+	msgStr2		BASED pMsgStr2 stringType;
+
+	pMsgStr1, pMsgStr2 = nullPtr;
+	confirmed = RemoteDataMenuConfirmed(remConn, @dirMenu,
+		@('Read Directory: Select item and confirm'), @selection, @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+	DO;
+		IF error <> eOk THEN
+			CALL LogError(error, 1670, attentionOff);
+		GOTO procExit;
+	END;
+
+	DO CASE selection - 1;
+
+		DO;
+			pDirFile = @publicDirFile;
+			pMsgStr1 = NewStringLit(
+				@('Reading public directory from Server Subjects '));
+			pMsgStr2 = NewStringLit(@('Read completed '));
+		END;
+
+		DO;
+			pDirFile = @privateDirFile;
+			pMsgStr1 = NewStringLit(
+				@('Reading private directory from Server Subjects '));
+			pMsgStr2 = NewStringLit(@('Read completed '));
+		END;
+	END;
+	msgStr1.chars(msgStr1.len - 1) = '';
+	msgStr2.chars(msgStr2.len - 1) = '';
+
+	CALL RemoteMsgShowLitMessage(remConn, @msgStr1.chars);
+	conn = AttachAndOpen(pDirFile, oldFile, updateAccess, @error);
+	IF error = eOk THEN
+	DO;
+		CALL ReadInFile(conn, @error);
+		CALL OsDetach(conn, @dummy);
+		IF error = eOk THEN error = dummy;
+		changed = TRUE;
+	END;
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1671, attentionOff);
+		CALL RemoteMsgShowDecoded(remConn, error);
+		error = eOk;
+	END;
+	ELSE
+		CALL RemoteMsgShowLitMessage(remConn, @msgStr2.chars);
+
+procExit:
+	IF pMsgStr1 <> nullPtr THEN
+		CALL FreeString(@pMsgStr1);
+	IF pMsgStr2 <> nullPtr THEN
+		CALL FreeString(@pMsgStr2);
+
+END ReadDir;
+
+$EJ
+WriteOutFile: PROCEDURE(conn, networkType, pError) CLEAN;
+
+DCL	conn		WORD,
+	networkType	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	dummy		WORD,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType;
+
+	CALL MOVB(@networkToken(1), @token.chars, networkToken(0));
+	token.len = networkToken(0);
+	IF networkType = publicNetwork THEN
+	DO;
+		CALL MOVB(@publicToken(1), @subToken.chars, publicToken(0));
+		subToken.len = publicToken(0);
+	END;
+	ELSE
+		IF networkType = privateNetwork THEN
+		DO;
+			CALL MOVB(@privateToken(1), @subToken.chars, privateToken(0));
+			subToken.len = privateToken(0);
+		END;
+	ELSE
+		subToken.len = 0;
+	error = WriteToken(conn, @token, @subToken);
+	IF error <> eOk THEN RETURN;
+
+	pServer = pServerInfo;
+	DO WHILE (pServer <> nullPtr) AND (error = eOk);
+		IF ((networkType = publicNetwork) AND serverInfo.isPublic) OR
+				((networkType = privateNetwork) AND serverInfo.isPrivate) THEN
+		DO;
+			CALL InitServerToken(pServer);
+			error = WriteToken(conn, @token, @subToken);
+			IF error = eOk THEN
+			DO;
+				IF serverInfo.pComment = nullPtr THEN comment.len = 0;
+				ELSE
+					CALL CopyString(serverInfo.pComment, @comment);
+				commentRow.currentChoice = 1;
+				error = WriteFormValues(conn, @commentForm);
+				IF error = eOk THEN
+				DO;
+					CALL InitNetForm(pServer, networkType);
+					error = WriteFormValues(conn, @netForm);
+				END;
+			END;
+		END;
+		pServer = serverInfo.pNext;
+	END;
+
+END WriteOutFile;
+
+$EJ
+WriteDir: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh			POINTER,
+	ch			BASED pCh BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	networkType	BYTE,
+	confirmed	BOOLEAN,
+	selection	WORD,
+	conn		WORD,
+	dummy		WORD,
+	pDirFile	POINTER,
+	pMsgStr1	POINTER,
+	msgStr1		BASED pMsgStr1 stringType,
+	pMsgStr2	POINTER,
+	msgStr2		BASED pMsgStr2 stringType,
+	pMsgStr3	POINTER,
+	msgStr3		BASED pMsgStr3 stringType;
+
+	pMsgStr1, pMsgStr2, pMsgStr3 = nullPtr;
+	confirmed = RemoteDataMenuConfirmed(remConn, @dirMenu,
+	   @('Write Directory: Select item and confirm'), @selection, @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+	DO;
+		IF error <> eOk THEN
+			CALL LogError(error, 1672, attentionOff);
+		GOTO procExit;
+	END;
+
+	DO CASE selection - 1;
+
+		DO;
+			pDirFile = @publicDirFile;
+			networkType = publicNetwork;
+			pMsgStr1 = NewStringLit(
+							@('Confirm to write public directory '));
+			pMsgStr2 = NewStringLit(
+						@('Writing public directory to Server Subjects '));
+			pMsgStr3 = NewStringLit(@('Write completed '));
+		END;
+
+		DO;
+			pDirFile = @privateDirFile;
+			networkType = privateNetwork;
+			pMsgStr1 = NewStringLit(
+							@('Confirm to write private directory '));
+			pMsgStr2 = NewStringLit(
+						@('Writing private directory to Server Subjects '));
+			pMsgStr3 = NewStringLit(@('Write completed '));
+		END;
+	END;
+	msgStr1.chars(msgStr1.len - 1) = '';
+	msgStr2.chars(msgStr2.len - 1) = '';
+	msgStr3.chars(msgStr3.len - 1) = '';
+
+	confirmed = ConfirmMsg(@msgStr1.chars, @ch, @error);
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+	DO;
+		IF error <> eOk THEN
+			CALL LogError(error, 1673, attentionOff);
+		GOTO procExit;
+	END;
+	CALL RemoteMsgShowLitMessage(remConn, @msgStr2.chars);
+
+	conn = AttachAndOpen(pDirFile, updateFile, updateAccess, @error);
+	IF error = eOk THEN
+	DO;
+		CALL WriteOutFile(conn, networkType, @error);
+		IF error = eOk THEN
+			CALL OsTruncate(conn, @error);
+		CALL OsDetach(conn, @dummy);
+		IF error = eOk THEN error = dummy;
+	END;
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1674, attentionOff);
+		CALL RemoteMsgShowDecoded(remConn, error);
+		error = eOk;
+	END;
+	ELSE
+		CALL RemoteMsgShowLitMessage(remConn, @msgStr3.chars);
+
+procExit:
+	IF pMsgStr1 <> nullPtr THEN CALL FreeString(@pMsgStr1);
+	IF pMsgStr2 <> nullPtr THEN CALL FreeString(@pMsgStr2);
+	IF pMsgStr3 <> nullPtr THEN CALL FreeString(@pMsgStr3);
+
+END WriteDir;
+
+$EJ
+DoTransfer: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh			POINTER,
+	ch			BASED pCh BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	confirmed	BOOLEAN,
+	selection	WORD,
+	dummy		WORD;
+
+	confirmed = RemoteDataMenuConfirmed(remConn, @transferMenu,
+			@('Transfer: Select item and confirm'), @selection, @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+	DO;
+		IF error <> eOk THEN
+			CALL LogError(error, 1675, attentionOff);
+		GOTO procExit;
+	END;
+
+	DO CASE (selection - 1);
+
+		DO;									/* Save changes */
+			IF changed THEN
+			DO;
+				CALL RemoteMsgShowLitMessage(remConn,
+										@('Saving configuration changes'));
+				CALL GetAccess(@dummy);
+				CALL CreateConfigFile(@error);
+				CALL LogString(NewStringLit(@('Saved configuration changes')));
+				CALL FreeAccess(@dummy);
+			END;
+			IF error <> eOk THEN
+			DO;
+				CALL LogError(error, 1676, attentionOff);
+				CALL RemoteMsgShowDecoded(remConn, error);
+				error = eOk;
+				GOTO procExit;
+			END;
+			ELSE
+				DO;
+					CALL RemoteMsgShowLitMessage(remConn, @('Save completed'));
+					changed = FALSE;
+				END;
+		END;
+
+		CALL ReadDir(@ch, @error);			/* Read directory */
+
+		CALL WriteDir(@ch, @error);			/* Write directory */
+	END;
+
+procExit:
+
+END DoTransfer;
+
+END NMTransfer;

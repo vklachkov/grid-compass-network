@@ -1,0 +1,8 @@
+{ Math.Inc  Updated 10/23/84 }
+
+PUBLIC Common;
+  FUNCTION Min(a,b: Integer): Integer;
+  FUNCTION Max(a,b: Integer): Integer;
+
+  FUNCTION WMin(a,b: Word): Word;
+  FUNCTION WMax(a,b: Word): Word;

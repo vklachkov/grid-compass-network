@@ -1,0 +1,366 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Dlc Action Module 1')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*               COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    DlcActionModule1.         1/29/83
+*
+*    contains:  PriAcFreeCB, PriAcFioFlushed, 
+*               PriAcIgnoreEvent, PriAcIgnoreRecv, 
+*               PriAcIgnoreTimeout, PriAcInvalidAction.
+*
+*               SecAcFreeCB, SecAcFioFlushed, 
+*               SecAcIgnoreEvent, SecAcIgnoreRecv, 
+*               SecAcIgnoreTimeout, SecAcInvalidAction.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcActionModule1: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`commondefines.inc~text~)
+$INCLUDE(``ccIncs`dlcmsgdefines.inc~text~)
+$INCLUDE(``ccIncs`dlcframedefines.inc~text~)
+$INCLUDE(``ccIncs`MacDefines.inc~text~)
+$IF commonActionsOnly
+$INCLUDE(``ccIncs`generalModule3.inc~text~)
+$ELSE
+$INCLUDE(``ccIncs`generalModule.inc~text~)
+$ENDIF
+$INCLUDE(``ccIncs`MacModule.inc~text~)
+$INCLUDE(``ccIncs`UtlModule.inc~text~)
+$INCLUDE(``ccIncs`TimerModule.inc~text~)
+$INCLUDE(``incs`OsPlmProcs.inc~text~)
+$INCLUDE(``incs`MovRtns.Plm.inc~text~)
+$INCLUDE(``ccIncs`machinedefines.inc~text~)
+$IF primary
+$INCLUDE(``ccIncs`priStandEvdefines.inc~text~)
+$ENDIF
+$IF secondary
+$INCLUDE(``ccIncs`secStandEvdefines.inc~text~)
+$ENDIF
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAcFreeCB, SecAcFreeCB
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Free the dlc message control block.
+*
+*    Inputs:    SELECTOR to current state machine control block,
+*               (may be null).
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) If selector to message control block is null, then return.
+*     2) If message is Dlc type then
+*      1) If message is Dlc receive then
+*       1) Set up for MAC receive, set msg format to Mac Receive,
+*           set source and dest Pid to current process id, and
+*           set length to maximum buffer length.
+*       2) Queue at MAC.
+*      2) Else if message is any other valid dlc message type then
+*       1) return to user with error ok.
+*      3) Else return to user with error of invalid request type.
+*     3) Else if message is Mac type then
+*      1) If message is Mac receive then
+*       1) Set up for MAC receive, set msg format to Mac Receive,
+*           set source and dest Pid to current process id, and
+*           set length to maximum buffer length.
+*       2) Queue at MAC.
+*      2) Else if message is mac frame out then
+*       1) Free buffer if any is associated with control block.
+*       2) Free message control block.
+*     4) Else if message is timer type then
+*      1) free message control block.
+*     5) Else return user request with error of invalid request type.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcFreeCB: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END PriAcFreeCB;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcFreeCB: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END SecAcFreeCB;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$IF Primary OR Secondary OR commonActionsOnly
+/* moved here to allow simple compilation */
+
+AcFreeCB: PROCEDURE(pMachine, pDlCB) CLEAN;
+
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL reQueueRecv	BYTE;
+DCL msgFormat	WORD;
+DCL	error		WORD;
+
+	IF pDlCB = null THEN RETURN; /* do nothing */
+
+	reQueueRecv = FALSE;
+	msgFormat = dlCB.msgFormat;
+	IF (msgFormat AND msgClassMask) = classDlc THEN
+	DO;
+		IF (msgFormat AND msgDlcFormatMask) = dlcReceive THEN
+		DO;
+			reQueueRecv = TRUE;
+		END;
+		ELSE
+			IF ((msgFormat AND msgDlcCaseMask) < maximumUserMessageFormat) THEN
+			DO;
+				CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+			END;
+		ELSE
+			CALL GenReturnUserRequest(pMachine, pDlCB, eDlcInvalidRequest);
+			/* should anything else be done ??? */
+	END;
+	ELSE
+		IF (msgFormat AND msgClassMask) = classMac THEN
+		DO;
+			IF (msgFormat AND msgMacFormatMask) = macFrameReceive THEN
+			DO;
+				reQueueRecv = TRUE;
+			END;
+			ELSE
+				IF (msgFormat AND msgMacFormatMask) = macFrameOut THEN
+				DO;
+					IF (dlCB.dataLength AND bufferTypeMask) =
+													msgWithBufferPtr THEN
+						CALL OsFree(dlCB.pBuffer, @error);
+					pDlCB = UtlFreeCB(pDlCB);
+				END;
+			ELSE
+				pDlCB = UtlFreeCB(pDlCB);
+		END;
+	ELSE
+		IF (msgFormat AND msgClassMask) = classTimer THEN
+		DO;
+			pDlCB = UtlFreeCB(pDlCB);
+		END;
+	ELSE
+		CALL GenReturnUserRequest(pMachine, pDlCB, eDlcInvalidRequest);
+
+	IF reQueueRecv THEN
+	DO;
+		/* remember where it came from */
+		dlCB.sourcePID = OsWhoAmI;
+		dlCB.destPID = OsWhoAmI;
+		/* set mac type */
+		dlCB.msgFormat = macFrameReceive OR msgRequest;
+		dlCB.dataLength = (dlCB.dataLength AND bufferTypeMask) OR 0;
+		CALL MacReceiveFrame(pDlCB);
+	END;
+
+END AcFreeCB;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAcFioFlushed, SecAcFioFlushed.
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   The frame io, if any, has been aborted.
+*               Now start the user io flushing process.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*
+*    Algorithm:
+*     1) Set Mac io flag aborted to true.
+*     2) If all flush conditions have been satisfied then
+*         Cause event of flush done.
+*
+*------------------------------------------------------------------------*/
+
+$IF primary
+PriAcFioFlushed: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+
+	machine.fioAborted = TRUE;
+	IF GenIsFlushDone(pMachine) THEN
+		CALL GenCauseEvent(pMachine, priExFlushDone, 0);
+
+END PriAcFioFlushed;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF secondary
+
+SecAcFioFlushed: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+
+	machine.fioAborted = TRUE;
+	IF GenIsFlushDone(pMachine) THEN
+		CALL GenCauseEvent(pMachine, secExFlushDone, 0);
+
+END SecAcFioFlushed;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedures:  PriAxIgnoreEvent, PriAxIgnoreRecv, PriAxIgnoreTimeOut.
+*                 SecAxIgnoreEvent, SecAxIgnoreRecv, SecAxIgnoreTimeOut.
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   These actions are used whenever the associated
+*               event needs to be ignored.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:   
+*     Ignore Event:
+*      1) do nothing.
+*     Ignore Receive:
+*      1) free the receive message control block
+*     Ignore time out:
+*      1) do nothing.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcIgnoreEvent: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	RETURN;
+
+END PriAcIgnoreEvent;
+
+/*-----------------------------------------------------------------------*/
+
+PriAcIgnoreRecv: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END PriAcIgnoreRecv;
+
+/*-----------------------------------------------------------------------*/
+
+PriAcIgnoreTimeout: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB SELECTOR;
+
+	RETURN;
+
+END PriAcIgnoreTimeout;
+
+$ENDIF
+$IF secondary
+/*-----------------------------------------------------------------------*/
+
+SecAcIgnoreEvent: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	RETURN;
+
+END SecAcIgnoreEvent;
+
+/*-----------------------------------------------------------------------*/
+
+SecAcIgnoreRecv: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+CALL AcFreeCB(pMachine, pDlCB);
+
+END SecAcIgnoreRecv;
+
+/*-----------------------------------------------------------------------*/
+
+SecAcIgnoreTimeout: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	RETURN;
+
+END SecAcIgnoreTimeout;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcInvalidAction, SecAcInvalidAction
+*
+*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*
+*    purpose:   Called when state machine executioner can't find
+*               a valid action entry point.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) log the machine failure condition.
+*     2) free msg control block.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+PriAcInvalidAction: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL GenMachineFailure(pMachine, pDlCB, invalidAction);
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END PriAcInvalidAction;
+$ENDIF
+
+$IF secondary
+/*-----------------------------------------------------------------------*/
+
+SecAcInvalidAction: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL GenMachineFailure(pMachine, pDlCB, invalidAction);
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END SecAcInvalidAction;
+$ENDIF
+
+END DlcActionModule1;

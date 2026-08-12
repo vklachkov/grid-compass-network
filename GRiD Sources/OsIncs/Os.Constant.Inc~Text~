@@ -1,0 +1,294 @@
+/* this is os.constant.inc */
+
+/* characters */
+
+DCL tab LIT '9';
+DCL quote LIT '27h';
+DCL cr LIT '0dh';
+DCL space LIT '20h';
+DCL del LIT '7fh';
+DCL bs LIT '8';
+DCL lf LIT '0ah';
+DCL confirm LIT '8dh';
+DCL codeBs LIT '88h';
+DCL tilde LIT '7eh';
+DCL backQuote LIT '60h';
+DCL verticalBar LIT '''|''';
+DCL wildCardChar LIT '0F7h';
+DCL codeEscape LIT '9bh';
+DCL escape LIT '1bh';
+DCL volumeChar LIT '20h';
+
+/*   Keys     */
+
+DCL codeVKey       LIT '246';    /* Views key    */
+DCL codeAKey       LIT '0E1H';   /* Phone access */
+DCL windowUpKey    LIT '8FH';   
+DCL windowDownKey  LIT '8EH';    
+DCL windowRtKey    LIT '91H';    
+DCL windowLeftKey  LIT '90H';    
+DCL windowEnterKey LIT '0C1H';
+DCL windowLeaveKey LIT '0C2H';
+DCL windowUpdateKey LIT '0C3H';
+DCL windowRefreshKey LIT '0CAh';
+
+/* overall system constants */
+
+DCL largestSystemPriority LIT '9';
+DCL packagePriority LIT '9';
+DCL systemPID LIT '0';
+DCL lowestPriority LIT '255';
+
+DCL minusOne LIT '0ffffh';
+DCL nullFID LIT '0ffffh';
+DCL ascii LIT '0';
+DCL binary LIT '1';
+DCL ldrException LIT '0';
+DCL fsException LIT '1';
+DCL memException LIT '2';
+DCL lockedMask LIT '01b';
+DCL connIDCode LIT '6996h';
+DCL RomIndicator LIT '86h';
+
+/* sizes */
+
+DCL maxFileNameLen LIT '80';
+DCL maxPathNameLen LIT '255';
+DCL maxErrorNameLen LIT '80';
+DCL maxArgLen LIT '255';
+DCL maxPasswordLen LIT '16';
+DCL maxSystemIDLen LIT '20';
+DCL maxExceptionLen LIT '80';
+DCL maxDevNameLen LIT '40';
+DCL maxDepthTask LIT '8';
+DCL maxNumPartitions LIT '4';
+
+DCL sizeOf8087Regs LIT '94';
+DCL sizeOfGBuffer LIT '512';
+
+DCL osPrefixSize LIT '112';
+DCL osWorkFileNameSize LIT '41';
+
+/* seek modes */
+
+DCL seekRelBackwards LIT '1';
+DCL seekToHere LIT '2';
+DCL seekRelForwards LIT '3';
+DCL seekFromEnd LIT '4';
+
+/* attach modes */
+
+DCL oldFileMode LIT '1';
+DCL updateFileMode LIT '2';
+DCL newFileMode LIT '3';
+
+/* access modes */
+
+DCL readAccess LIT '1';
+DCL writeAccess LIT '2';
+DCL updateAccess LIT '3';
+DCL updateDescriptorAccess LIT '4';
+DCL shortDirAccess LIT '5';
+DCL longDirAccess LIT '6';
+
+/* pathname constants */
+
+DCL nextLevel LIT 'backQuote';
+DCL anExtension LIT 'tilde';
+DCL passwordDelim LIT 'verticalBar';
+
+DCL searchForName LIT '0';
+DCL addNewName LIT '1';
+DCL deleteName LIT '2';
+
+DCL shortMask LIT '80h';
+
+/* time modes */
+
+DCL GMTMode LIT '1';
+DCL WRTMode LIT '2';
+
+/* register modes */
+
+DCL enterName LIT '1';
+DCL removeName LIT '2';
+
+/* Console modes */
+
+DCL transparent LIT '1';
+DCL lineEdited  LIT '2';
+DCL noWait      LIT '3';
+
+/* device types */
+
+DCL highLevelDevice LIT '0';
+DCL lowLevelDevice LIT '1';
+
+/* signal modes */
+
+DCL signalNormal LIT '1';
+DCL signalEvent LIT '2';
+DCL signalAllWaiters LIT '3';
+
+/* user profile system tags */
+
+DCL timeOffsetTag LIT '1';
+DCL frameTag      LIT '2';
+DCL systemFont    LIT '5';
+DCL serverName    LIT '6';
+DCL serverpswd    LIT '7';
+DCL printerDev    LIT '9';
+DCL plotterDev    LIT '10';
+DCL bootFile      LIT '11';
+DCL signonForm    LIT '12';
+DCL codeAInfo     LIT '13';
+DCL cliPassword   LIT '15';
+DCL formWidth     LIT '16';
+DCL aspectRatioTag LIT '17';
+DCL listTag       LIT '18';
+DCL listTag1      LIT '19';
+DCL saveTheBitsTag LIT '20';
+DCL eraseRomSizeTag LIT '21';
+DCL eraseRomListTag LIT '22';
+DCL modemTag      LIT '23';
+DCL serialTag     LIT '24';
+DCL parallelTag   LIT '25';
+DCL errorsInRamTag LIT '26';
+
+DCL accessOn      LIT '201';
+DCL alarmOn       LIT '202';
+DCL areaCode      LIT '203';
+DCL escapePrefix  LIT '204';
+DCL desktopLength LIT '205';
+DCL desktop       LIT '206';
+
+DCL codeCtrlTags LIT '512';  /* 512 - 1023 code ctrl tags */
+DCL msgClassTags LIT '1024';  /* 1024 - 1535 msg class tags */
+
+/*  misc constants  */
+
+DCL frameOn       LIT '1';
+DCL frameOff      LIT '2';
+
+/* Screen Sizes */
+/*
+DCL screenWidth   LIT '320';
+DCL screenHeight  LIT '240';
+*/
+
+/* Read directions  */
+
+DCL readForward LIT '0';
+DCL readBackward LIT '1';
+
+/* directory modes */
+
+DCL byteMode  LIT '0';
+DCL directoryMode LIT '1';
+DCL completeDirectoryMode LIT '2';
+
+/* SetStatus entryID's  */
+
+DCL setDirection      LIT '255';
+DCL setWildCard       LIT '254';
+DCL setObjectMode     LIT '253';
+DCL setGPIBAddress    LIT '252';
+DCL setDeviceMask     LIT '251';
+DCL setNoteValue      LIT '250';
+DCL setNumBuffers     LIT '249';
+DCL setNameAttributes LIT '248';
+DCL setConsoleMode    LIT '247';
+DCL setAccessRights   LIT '246';
+DCL setSecureMode     LIT '245';
+DCL setIPCActivityTimeOut LIT '244';
+DCL getGenericDeviceName  LIT '243';
+DCL getDeviceName     LIT '242';
+
+/*  Types to load  */
+
+DCL loadAProgram    LIT '0';
+DCL loadADevice     LIT '1';
+DCL loadAPackage    LIT '2';
+
+/* Handle Cancel constants */
+
+DCL letUserHaveIt   LIT '0';
+DCL letOsHaveIt     LIT '1';
+
+/* Handle Phone constants */
+
+DCL SystemHandlesCodeA      LIT '0';
+DCL applicationHandlesVoice LIT '1';
+DCL applicationHandlesData  LIT '2';
+
+/* Device mode bits */
+
+DCL massBit      LIT '1';
+
+DCL visibleBit   LIT '2';
+DCL visible      LIT '0';
+DCL invisible    LIT '2';
+
+DCL localBit     LIT '4';
+DCL localDevice  LIT '0';
+DCL remoteDevice LIT '4';
+
+DCL perBusBit    LIT '8';
+DCL serverBit    LIT '16';
+
+
+DCL aliasBit     LIT '32';
+DCL noAlias      LIT '0';
+DCL aliasMode    LIT '32';
+
+DCL reprogramBit LIT '64';
+DCL reprogramIt  LIT '64';
+
+DCL searchBit    LIT '128';
+DCL searchMe     LIT '0';
+DCL dontSearchMe LIT '128';
+
+DCL spoolBit     LIT '256';
+DCL spoolDevice  LIT '256';
+
+DCL adminBit     LIT '512';
+DCL adminDevice  LIT '512';
+
+DCL removableBit LIT '1024';
+DCL removableDevice LIT '1024';
+
+DCL volumeNameBit LIT '2048';
+DCL volumeName    LIT '2048';
+
+/* Partition canstants */
+
+DCL partitionDevice LIT '055AAh';
+DCL CCOSPartition   LIT '47h';
+DCL unusedPartition LIT '0';
+DCL repgmSize       LIT '8000';
+DCL validPageInfo   LIT '07285h';
+
+/* Window format constants */
+
+DCL screenFmt       LIT '0';
+DCL GRiDFmt         LIT '1';
+
+/* Interrupts and Routine numbers */
+
+DCL osInterrupt     LIT '112';
+DCL cpInterrupt     LIT '113';
+
+/* Constants for OsChangeExtension call */
+
+DCL exceptionHandlerRtn LIT '80';
+DCL unresolvedMsgRtn    LIT '81';
+DCL changeType         LIT '1';
+DCL changeSubtype      LIT '2';
+DCL changePassword     LIT '3';
+DCL returnType         LIT '41h';
+DCL returnSubType      LIT '42h';
+DCL returnPassword     LIT '43h';
+DCL changeIfNoType     LIT '81h';
+DCL changeIfNoSubtype  LIT '82h';
+DCL changeIfNoPassword LIT '83h';
+

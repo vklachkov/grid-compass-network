@@ -1,0 +1,96 @@
+
+/*        This is Os.Tasks.Ext.Inc.       */
+
+OsSetPriority: PROCEDURE (procID, priority, pError) EXTERNAL;
+    DCL procID WORD;
+    DCL priority BYTE;
+    DCL pError PTR;
+    END;
+
+OsCreateProcess: PROCEDURE (pBuffer, priority, uses8087, pError) WORD EXTERNAL;
+    DCL priority BYTE;
+    DCL uses8087 BOOLEAN;
+    DCL (pBuffer, pError) PTR;
+    END;
+
+OsCreateSemaphore: PROCEDURE (pError) SidType EXTERNAL;
+    DCL pError PTR;
+    END;
+
+OsForkProcess: PROCEDURE (entryPoint, priority, uses8087, stackSize, pError) WORD EXTERNAL;
+    DCL priority BYTE;
+    DCL stackSize WORD;
+    DCL uses8087 BOOLEAN;
+    DCL (entryPoint, pError) PTR;
+    END;
+
+DeleteMySemaphores: PROCEDURE (pid) EXTERNAL;
+    DCL pid PidType;
+    END;
+
+FindMyProcess: PROCEDURE (myPid) PidType EXTERNAL;
+    DCL myPid PidType;
+    END;
+
+DeleteMyProcesses: PROCEDURE (myPid, exitCode) EXTERNAL;
+    DCL myPid PidType;
+    DCL exitCode WORD;
+    END;
+
+OsDeleteProcess: PROCEDURE (procID, pError) EXTERNAL;
+    DCL procID WORD;
+    DCL pError PTR;
+    END;
+
+IntDeleteProcess: PROCEDURE (pid, exitCode, pError) EXTERNAL;
+    DCL pid PidType;
+    DCL exitCode WORD;
+    DCL pError PTR;
+    END;
+
+OsExit: PROCEDURE (code) EXTERNAL;
+    DCL code WORD;
+    END;
+
+OsSignal: PROCEDURE (sid, mode, note, pError) EXTERNAL;
+    DCL mode     BYTE;
+    DCL note     WORD;
+    DCL sid      SidType;
+    DCL pError   PTR;
+    END;
+
+OsWait: PROCEDURE (sid, time, pError) WORD EXTERNAL;
+    DCL time     WORD;
+    DCL sid      SidType;
+    DCL pError   PTR;
+    END;
+
+OsWhoAmI: PROCEDURE WORD EXTERNAL;
+    END;
+
+OsWhereAmI: PROCEDURE SELECTOR EXTERNAL;
+    END;
+
+OsDelay: PROCEDURE (time) EXTERNAL;
+    DCL time    WORD;
+    END;
+
+OsDeleteSemaphore: PROCEDURE (sid, pError) EXTERNAL;
+    DCL sid    SidType;
+    DCL pError PTR;
+    END;
+
+SetVersionNumber: PROCEDURE (conn, pid, pError) EXTERNAL;
+  DCL conn          ConnectionType;
+  DCL pid           PidType;
+  DCL pError        PTR;
+  END;
+
+IntWait: PROCEDURE (sid) EXTERNAL;
+  DCL sid      SidType;
+  END;
+
+IntSignal: PROCEDURE (sid) EXTERNAL;
+  DCL sid      SidType;
+  END;
+

@@ -1,0 +1,245 @@
+/*	Constants for Network Manager	-	Jan 2, 1986	*/
+
+/* General */
+
+DCL	systemAdministratorClass	LIT	'40',
+	companyProp					LIT	'7',
+	groupProp					LIT	'8',
+	userProp					LIT	'9',
+	nmMainPriority				LIT	'97',
+	nmIfPriority				LIT	'98',
+	nmIfStackSize				LIT	'2000',
+	oneMinute					LIT	'60000',
+	cr							LIT	'0Dh',
+	lf							LIT	'0Ah';
+
+DCL	partialDirEntryType		LIT 'STRUCTURE(
+		dummy				(8) BYTE,
+		len					BYTE,
+		name				(80) BYTE)';
+
+/*	Error logging values. */
+
+DCL	attentionOn				LIT	'8',
+	attentionOff			LIT	'0';
+
+/* Lengths of various strings. */
+
+DCL	passwordLength			LIT	'33',		/* Short string length. */
+	passwordStrLength		LIT	'37',		/* String type length. */
+	serverNameLength		LIT	'33',		/* Short string length. */
+	serverNameStrLength		LIT	'37',		/* String type length. */
+	connectionNameLength	LIT	'33',		/* String type length. */
+	connectionNameStrLength	LIT	'37',		/* Short string length. */
+	phoneNumberLength		LIT	'41',		/* Short string length. */
+	phoneNumberStrLength	LIT	'45',		/* String type length. */
+	prefixLength			LIT	'11',		/* Short string length. */
+	prefixStrLength			LIT	'15',		/* String type length. */
+	commentLength			LIT	'41',		/* Short string length. */
+	commentStrLength		LIT	'45';		/* String type length. */
+
+/* Network types. */
+
+DCL	publicNetwork		LIT	'1',
+	privateNetwork		LIT	'2',
+	leasedNetwork		LIT	'3';
+
+/* Protocol types. */
+
+DCL	emptyLink			LIT	'1',
+	phonelink			LIT	'2',
+	gridlinkPrimary		LIT	'3',
+	fiberlinkPrimary	LIT	'4',
+	maxSystemProtocol	LIT	'19';
+
+/* Phonelink subtypes. */
+
+DCL	originateAndAnswerPdl	LIT	'1',
+	originateOnlyPdl		LIT	'2',
+	answerOnlyPdl			LIT	'3';
+
+/* Line types. */
+
+DCL	switched			LIT	'1',
+	leased				LIT	'2';
+
+/* Line kind. */
+
+DCL	internalLine		LIT	'1',
+	externalLine		LIT	'2';
+
+/* Line speeds. */
+
+DCL	lowSpeed			LIT	'1',
+	mediumSpeed			LIT	'2',
+	highSpeed			LIT	'3';
+
+/* Line costs. */
+
+DCL	lowCost				LIT	'1',
+	mediumCost			LIT	'2',
+	highCost			LIT	'3';
+
+/* Modem types. */
+
+DCL	hayesSmartmodem1200	LIT	'1',
+	hayesSmartmodem2400	LIT	'2',
+	usRobotics2400		LIT	'3',
+	otherModem			LIT	'4',
+	/*- next line added on 11/4/88 for FBI/Hughes by Will Strang */
+	hayesSmartmodem9600	LIT	'5',
+	/*- next line changed on 11/4/88 for FBI/Hughes by Will Strang */
+	maxModem			LIT	'5';
+
+/* Dialing modes. */
+
+DCL	pulse				LIT	'1',
+	touchtone			LIT	'2';
+
+/* Dial types. */
+
+DCL	automatic			LIT	'1',
+	manual				LIT	'2';
+
+/* Card types. */
+
+DCL	emptyCard			LIT	'1',
+	diagCard			LIT	'2',
+	fsCard				LIT	'3',
+	csCard				LIT	'4',
+	asCard				LIT	'5';
+
+/* Comm file types. */
+
+DCL	emptyFile				LIT	'1',
+	phonelinkFile			LIT	'2',
+	gridlinkPrimaryFile		LIT	'3',
+	gridAndPhonelinkFile	LIT	'4',
+	gridlinkSecondaryFile	LIT	'5';
+
+/* Baud rate selections. */
+
+DCL	baudEdit			LIT	'1',		/* baud rate specified as edit. field */
+	baud300				LIT	'2',
+	baud1200			LIT	'3',
+	baud1200and2400		LIT	'4',
+	baud2400			LIT	'5',
+	baud4800			LIT	'6',
+	baud7200			LIT	'7',
+	baud9600			LIT	'8',
+	baud14400			LIT	'9',
+	baud16800			LIT	'10',
+	baud19200			LIT	'11',
+	baudExternal		LIT	'12',
+	baudUndef			LIT	'13';
+
+/* Default values. */
+
+DCL	maxBaudRate			LIT	'19200',
+	defaultLogFileSize	LIT	'20',
+	defaultBaudChoice	LIT	'baud1200',
+	gridlink0Divisor	LIT	'5',		/* Divisor for port 0 is different */
+	gridlinkDivisor		LIT	'20',		/*		from that for ports 1 - 3. */
+	defaultHighSpeed	LIT	'9600',		/* high speed threshold */
+	defaultMediumSpeed	LIT	'4800',		/* medium speed threshold */
+	defaultDiscTime		LIT	'10',		/* default disc. timeout - minutes */
+	defaultWaitTime		LIT	'30';		/* default wait for answer - seconds */
+
+/* Data structure types. */
+
+/* Card information. */
+
+DCL	cardInfoType		LIT	'STRUCTURE(
+		cardType		BYTE,
+		memSize			BYTE,
+		fileType		BYTE,
+		changed			BOOLEAN,
+		configured		BOOLEAN)';
+
+/* Port information. */
+
+DCL	portInfoType		LIT	'STRUCTURE(portInfo1, portInfo2)';
+
+DCL portInfo1			LIT	'
+		protocol		BYTE,
+		phonelinkType	BYTE,
+		lineType		BYTE,
+		baudChoice		BYTE,
+		baudRate		WORD,
+		modemType		BYTE,
+		dialingMode		BYTE,
+		dialType		BYTE';
+
+DCL	portInfo2			LIT	'
+		allocated		BYTE,
+		pConnInfo		POINTER,
+		choice			BYTE,
+		activateWait	BOOLEAN,
+		doSearch		BOOLEAN,
+		portNum			BYTE,
+		userPid			WORD,
+		lineKind		BYTE,
+		prefix 			(prefixLength) BYTE';
+
+/* Server information. */
+
+DCL	serverInfoType		LIT	'STRUCTURE(serverInfo1, serverInfo2)';
+
+DCL	serverInfo1			LIT	'
+		pNext			POINTER,
+		pLast			POINTER,
+		nConnections	WORD,
+		pConnInfo		POINTER,
+		pLastConn		POINTER,
+		isPublic		BOOLEAN';
+
+DCL	serverInfo2			LIT	'
+		pPubNumber		(4) POINTER,
+		pubBaudChoice	(4) BYTE,
+		isPrivate		BOOLEAN,
+		pPvtNumber		(4) POINTER,
+		pvtBaudChoice	(4) BYTE,
+		pName			POINTER,
+		pComment		POINTER';
+
+/* Connection information. */
+
+DCL	connInfoType		LIT 'STRUCTURE(
+		connInfo1,
+		connInfo2,
+		connInfo3)';
+
+DCL	connInfo1			LIT	'
+		pNext			POINTER,
+		pLast			POINTER,
+		pName			POINTER,
+		allocated		BOOLEAN,
+		consistent		BOOLEAN';
+
+DCL	connInfo2			LIT	'
+		protocol		BYTE,
+		networkType		BYTE,
+		dedicated		BOOLEAN,
+		useAnyPort		BOOLEAN,
+		port			(4) WORD,
+		pServerInfo		POINTER';
+
+DCL	connInfo3			LIT	'
+		waitForAnswer	WORD,
+		baudChoice		BYTE,
+		baudRate		WORD,
+		cost			BYTE,
+		custom			BOOLEAN,
+		pPhoneNumber	POINTER';
+
+/* Standard property structure. */
+
+DCL	stdPropType			LIT	'STRUCTURE(
+		fdByte			BYTE,
+		length			WORD,
+		propType		BYTE,
+		prop			(1) BYTE)';
+
+/* Message formats and error codes */
+
+$INCLUDE(NMUserMsg.Plm.Inc~Text~)

@@ -1,0 +1,415 @@
+$COMPACT
+$TITLE('Logging Utilities')
+/****************************************************************************/
+/*																			*/
+/*					General logging utilities for applications				*/
+/*																			*/
+/****************************************************************************/
+
+LogUtils: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`ConPlmProcs.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$RESTORE
+
+DCL	userCBType		LIT	'STRUCTURE(
+		check			WORD,
+		conn			WORD,
+		length			DWORD,
+		zeroPos			DWORD,
+		filePosition	DWORD,
+		doTimestamp		BOOLEAN,
+		doLineOut		BOOLEAN,
+		doCrLf			BOOLEAN)';
+
+DCL	checkVal		LIT	'5251H';
+DCL	minFileLength	LIT	'1';
+DCL	maxFileLength	LIT	'64';
+DCL	cr				LIT	'0Dh';
+DCL	lf				LIT	'0Ah';
+DCL	timestampSize	LIT	'18';
+
+DCL	timeInit		(*) BYTE INITIAL('  /  /     :  :   ');
+DCL	endPattern		(*) BYTE INITIAL('..... The End !!!!');
+
+
+SkipProperties: PROCEDURE(conn, pError) EXT;
+DCL	conn	WORD,
+	pError	POINTER;
+END SkipProperties;
+
+NewString: PROCEDURE(length) POINTER EXT;
+DCL	length	WORD;
+END NewString;
+
+FreeString: PROCEDURE(ppStr) EXT;
+DCL	ppStr	POINTER;
+END FreeString;
+
+
+ReportError: PROCEDURE(error, errType) REENTRANT;
+
+DCL	error	WORD,
+	errType	WORD;
+
+	CALL ConLineOut(@('Log error encountered: error = '), 31);
+	CALL ConHexOut(error);
+	CALL ConLineOut(@(' type = '), 8);
+	CALL ConHexOut(errType);
+	CALL ConLineOut(@(0dh, 0ah), 2);
+$IF NOT compassMode
+	CALL OsLogError(11, error, errType + 1685,
+							@(31, 'NetworkMgr: Suberror = location'));
+$ENDIF
+
+END ReportError;
+
+
+IntToStr: PROCEDURE(pStr, n, blankZero) REENTRANT;
+
+DCL	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	n			BYTE,
+	blankZero	BOOLEAN;
+
+	IF n > 99 THEN n = 99;
+	str(1) = (n MOD 10) + '0';
+	str(0) = n/10 + '0';
+	IF blankZero AND (str(0) = '0') THEN str(0) = ' ';
+
+END IntToStr;
+
+
+GetTimestamp: PROCEDURE(pStr) REENTRANT;
+
+DCL	pStr	POINTER,
+	str		BASED pStr (1) BYTE,
+	time	timeType;
+
+	CALL OsGetTime(compassRelativeTime, @time);
+	CALL MOVB(@timeInit, pStr, SIZE(timeInit));
+	CALL IntToStr(@str(0), time.month, TRUE);
+	CALL IntToStr(@str(3), time.day, FALSE);
+	CALL IntToStr(@str(6), (time.year - 1900), FALSE);
+	CALL IntToStr(@str(9), time.hour, TRUE);
+	CALL IntToStr(@str(12), time.minute, FALSE);
+	CALL IntToStr(@str(15), time.second, FALSE);
+
+END GetTimestamp;
+
+
+OpenLog: PROCEDURE(pName, fileMode, accessType, pError) WORD REENTRANT;
+
+DCL	pName		POINTER,
+	fileMode	BYTE,
+	accessType	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	error2		WORD,
+	conn		WORD;
+
+	conn = OsAttach(pName, fileMode, @(0), accessType, @error);
+	IF error = eOk THEN
+	DO;
+		CALL SkipProperties(conn, @error);
+		IF error <> eOk THEN
+		DO;
+			CALL ReportError(error, 1);
+			CALL OsDetach(conn, @error2);
+		END;
+	END;
+	ELSE
+		CALL ReportError(error, 2);
+	RETURN conn;
+
+END OpenLog;
+
+
+BlankOut: PROCEDURE(conn, blankToEndOfFile, pError);
+
+DCL	conn				WORD,
+	blankToEndOfFile	BOOLEAN,
+	pError				POINTER,
+	error				BASED pError WORD,
+	buf					(80) BYTE,
+	len					WORD,
+	index				WORD;
+
+	error = eOk;
+	index = SIZE(buf);
+	DO WHILE (index = SIZE(buf)) AND (error = eOk);
+		len = OsRead(conn, @buf, SIZE(buf), @error);
+		IF error = eOk THEN
+		DO;
+			IF (NOT blankToEndOfFile) AND (len > 0) THEN
+			DO;
+				index = FINDB(@buf, cr, len);
+				IF index = nullWord THEN index = len;
+			END;
+			ELSE
+				index = len;
+			CALL SETB(' ', @buf, index);
+			CALL OsSeek(conn, backwardSeek, len, @error);
+			IF error = eOk THEN
+				CALL OsWrite(conn, @buf, index, @error);
+			ELSE
+				CALL ReportError(error, 3);
+		END;
+		ELSE
+			CALL ReportError(error, 4);
+	END;
+
+END BlankOut;
+
+
+LogInitLog: PROCEDURE(pName, fileSize, doTimestamp, doLineOut, doCrLf, pError)
+																WORD CLEAN;
+
+DCL	pName		POINTER,
+	fileSize	WORD,
+	doTimestamp	BOOLEAN,
+	doLineOut	BOOLEAN,
+	doCrLf		BOOLEAN,
+	pError		POINTER,
+	error		BASED pError WORD;
+
+DCL	conn		WORD,
+	fileLength	DWORD,
+	filePos		DWORD,
+	pUserCB		SELECTOR,
+	userCB		BASED pUserCB userCBType,
+	retWord		WORD AT (@pUserCB),
+	status		statusType,
+	endFound	BOOLEAN,
+	endOfFile	BOOLEAN,
+	buf			(256) BYTE,
+	bytesToMove	WORD,
+	bytesToRead	WORD,
+	index		WORD,
+	bufSize		WORD,
+	dummy		WORD,
+	len			WORD;
+
+	IF fileSize < minFileLength THEN fileSize = minFileLength;
+	ELSE
+		IF fileSize > maxFileLength THEN fileSize = maxFileLength;
+	fileSize = 1000*fileSize;
+	fileLength = DOUBLE(fileSize);
+	conn = OpenLog(pName, updateFile, updateAccess, @error);
+	IF error = eOk THEN
+	DO;
+		CALL OsGetStatus(conn, @status, SIZE(status), @error);
+		IF (error = eOk) AND
+				(status.fileLength > (status.filePosition + fileLength)) THEN
+		DO;
+			CALL OsSeek(conn, absoluteSeek, (status.filePosition + fileLength),
+																		@error);
+			IF error = eOk THEN
+				CALL OsTruncate(conn, @error);
+			ELSE
+				CALL ReportError(error, 5);
+			IF error = eOk THEN
+				CALL OsSeek(conn, absoluteSeek, status.filePosition, @error);
+			ELSE
+				CALL ReportError(error, 6);
+		END;
+		ELSE
+			IF error <> eOk THEN
+				CALL ReportError(error, 7);
+	END;
+
+	filePos = 0;
+	endFound, endOfFile = FALSE;
+	index = SIZE(buf);
+
+	DO WHILE (error = eOk) AND NOT (endFound OR endOfFile);
+
+		bytesToMove = SIZE(buf) - index;
+		CALL MOVB(@buf(index), @buf(0), bytesToMove);
+		index = bytesToMove;
+
+		bytesToRead = SIZE(buf) - index;
+		len = OsRead(conn, @buf(index), bytesToRead, @error);
+
+		IF error = eOk THEN
+		DO;
+			bufSize = index + len;
+			index = 0;
+			endOfFile = (bufSize < SIZE(buf));
+			IF NOT (bufSize < SIZE(endPattern)) THEN
+			DO WHILE (index <= (bufSize - SIZE(endPattern))) AND NOT endFound;
+				IF CMPB(@endPattern, @buf(index), SIZE(endPattern)) =
+																nullWord THEN
+					endFound = TRUE;
+				ELSE
+					index = index + 1;
+			END;
+			filePos = filePos + index;
+			IF filePos >= fileLength THEN
+				endOfFile = TRUE;
+		END;
+		ELSE
+			DO;
+				CALL ReportError(error, 8);
+				CALL OsDetach(conn, @dummy);
+			END;
+	END;
+
+	IF error = eOk THEN
+	DO;
+		IF (NOT endFound) OR (filePos >= fileLength) THEN
+		DO;
+			filePos = 0;
+			CALL OsSeek(conn, absoluteSeek, status.filePosition, @error);
+			IF error = eOk THEN
+			DO;
+				CALL OsWrite(conn, @endPattern, SIZE(endPattern), @error);
+				IF error = eOk THEN
+					CALL BlankOut(conn, FALSE, @error);
+				ELSE
+					CALL ReportError(error, 9);
+			END;
+			ELSE
+				CALL ReportError(error, 10);
+		END;
+		IF error = eOk THEN
+			CALL OsClose(conn, @error);
+		IF error = eOk THEN
+		DO;
+			pUserCB = SELECTOROF(OsAllocate(SIZE(userCB), @error));
+			IF error = eOk THEN
+			DO;
+				userCB.check = checkVal;
+				userCB.conn = conn;
+				userCB.length = fileLength;
+				userCB.zeroPos = status.filePosition;
+				userCB.filePosition = filePos + status.filePosition;
+				userCB.doTimestamp = doTimestamp;
+				userCB.doLineout = doLineout;
+				userCB.doCrLf = doCrLf;
+			END;
+		END;
+		ELSE
+			CALL ReportError(error, 11);
+	END;
+	RETURN retWord;
+
+END LogInitLog;
+
+
+LogWriteLog: PROCEDURE(userConn, pStr, pError) CLEAN;
+
+DCL	userConn	WORD,
+	pUserConn	SELECTOR AT (@userConn),
+	userCB		BASED pUserConn userCBType,
+	pStr		POINTER,
+	str			BASED pStr stringType,
+	pTempStr	POINTER,
+	tempStr		BASED pTempStr stringType,
+	pError		POINTER,
+	error		BASED pError WORD,
+	status		statusType,
+	writeLength	WORD,
+	i			WORD,
+	dummy		WORD;
+
+	IF userCB.check <> checkVal THEN
+	DO;
+		error = eBadConn;
+		RETURN;
+	END;
+
+	error = eShare;
+	i = 0;
+	DO WHILE (i < 10) AND (error = eShare);
+		CALL OsOpen(userCB.conn, 1, @error);
+		IF error = eShare THEN CALL OsDelay(2000);
+		i = i + 1;
+	END;
+	IF error = eOk THEN
+		CALL OsSeek(userCB.conn, absoluteSeek, userCB.filePosition, @error);
+	ELSE
+		CALL ReportError(error, 12);
+	IF error = eOk THEN
+	DO;
+		writeLength = str.len + SIZE(endPattern);
+		IF userCB.doTimestamp THEN
+			writeLength = writeLength + timestampSize;
+		IF userCB.doCrLf THEN
+			writeLength = writeLength + 2;
+		IF ((userCB.filePosition - userCB.zeroPos) + writeLength)
+														> userCB.length THEN
+		DO;
+			CALL BlankOut(userCB.conn, TRUE/* to end of file */, @error);
+			IF error = eOk THEN
+				CALL OsSeek(userCB.conn, absoluteSeek, 0, @error);
+			IF error = eOk THEN
+				CALL OsClose(userCB.conn, @error);
+			IF error = eOk THEN
+				CALL SkipProperties(userCB.conn, @error);
+			IF error = eOk THEN
+				CALL OsGetStatus(userCB.conn, @status, SIZE(status), @error);
+			userCB.filePosition, userCB.zeroPos = status.filePosition;
+		END;
+		pTempStr = NewString(writeLength);
+		i = 0;
+		IF userCB.doTimestamp THEN
+		DO;
+			CALL GetTimestamp(@tempStr.chars);
+			i = timestampSize;
+		END;
+		CALL MOVB(@str.chars, @tempStr.chars(i), str.len);
+		i = i + str.len;
+		IF userCB.doCrLf THEN
+		DO;
+			CALL MOVB(@(cr, lf), @tempStr.chars(i), 2);
+			i = i + 2;
+		END;
+		CALL MOVB(@endPattern, @tempStr.chars(i), SIZE(endPattern));
+		CALL OsWrite(userCB.conn, @tempStr.chars, writeLength, @error);
+		IF userCB.doLineout THEN
+			CALL ConLineOut(@tempStr.chars, i);
+		CALL FreeString(@pTempStr);
+		userCB.filePosition = userCB.filePosition + i;
+		CALL BlankOut(userCB.conn, FALSE/* to end of record */, @error);
+	END;
+	ELSE
+		CALL ReportError(error, 13);
+	CALL OsClose(userCB.conn, @dummy);
+	IF error = eOk THEN error = dummy;
+	ELSE
+		CALL ReportError(error, 14);
+
+END LogWriteLog;
+
+
+LogEndLog: PROCEDURE(userConn, pError) CLEAN;
+
+DCL	userConn	WORD,
+	pUserConn	SELECTOR AT (@userConn),
+	userCB		BASED pUserConn userCBType,
+	pError		POINTER,
+	error		BASED pError WORD,
+	dummy		WORD;
+
+	IF userCB.check = checkVal THEN
+	DO;
+		userCB.check = 0;
+		CALL OsDetach(userCB.conn, @error);
+		CALL OsFree(BUILDPTR(pUserConn, 0), @dummy);
+		IF error = eOk THEN
+			error = dummy;
+	END;
+	ELSE
+		error = eBadConn;
+
+END LogEndLog;
+
+END LogUtils;

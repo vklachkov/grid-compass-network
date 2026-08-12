@@ -1,0 +1,64 @@
+
+/* This is cp.tasks.ext.inc */
+
+CpCreateProcess: PROCEDURE (pid) EXTERNAL;
+  DCL pid PidType;
+  END;
+
+CpDeleteProcess: PROCEDURE (pid, exitCode, pError) EXTERNAL;
+  DCL exitCode WORD;
+  DCL pid      PidType;
+  DCL pError   PTR;
+  END;
+
+CpSend: PROCEDURE (srcPid, destPid, messageType, note, pMsg, pError) EXTERNAL;
+  DCL messageType WORD;
+  DCL note        WORD;
+  DCL srcPid      PidType;
+  DCL destPid     PidType;
+  DCL pMsg        PTR;
+  DCL pError      PTR;
+  END;
+
+CpReceive: PROCEDURE (pid, messageType, time, pNote, pError) PTR EXTERNAL;
+  DCL messageType WORD;
+  DCL time        WORD;
+  DCL pid         PidType;
+  DCL pNote       PTR;
+  DCL pError      PTR;
+  END;
+
+CpCreateSemaphore: PROCEDURE (sid) EXTERNAL;
+  DCL Sid         SidType;
+  END;
+
+CpDeleteSemaphore: PROCEDURE (sid, pError) EXTERNAL;
+  DCL sid    SidType;
+  DCL pError PTR;
+  END;
+
+CpWait: PROCEDURE (SID, time, pError) WORD EXTERNAL;
+  DCL sid    SidType;
+  DCL time   WORD;
+  DCL pError PTR;
+  END;
+
+CpSignal: PROCEDURE (SID, mode, note, pError) EXTERNAL;
+  DCL sid    SidType;
+  DCL mode   BYTE;
+  DCL note   WORD;
+  DCL pError PTR;
+  END;
+
+CpWhoAmI: PROCEDURE PidType EXTERNAL;
+  END;
+    
+CpDelay: PROCEDURE (time) EXTERNAL;
+  DCL time WORD;
+  END;
+
+CpSetPriority: PROCEDURE (pid, priority, pError) EXTERNAL;
+  DCL priority BYTE;
+  DCL pid      PidType;
+  DCL pError   PTR;
+  END;

@@ -1,0 +1,237 @@
+/* this is os.frontend.ext.inc */
+
+
+xOsDecodeException : PROCEDURE (code, pName) EXTERNAL;
+    DCL code WORD;
+    DCL pName PTR;
+    END;
+
+xOsGetSystemID : PROCEDURE (pID) EXTERNAL;
+    DCL pID PTR;
+    END;
+
+xOsDelete : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pExcep PTR;
+    END;
+
+xOsRename : PROCEDURE (conn, pNew, pExcep) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL (pNew, pExcep) PTR;
+    END;
+
+xOsAttach : PROCEDURE (pPath, mode, pPass, access, pExcep) ConnectionType EXTERNAL;
+    DCL (pPath, pPass, pExcep) PTR;
+    DCL (mode, access) BYTE;
+    END;
+
+xOsOpen : PROCEDURE (conn, numbuf, pExcep) EXTERNAL;
+    DCL conn   ConnectionType;
+    DCL numbuf BYTE;
+    DCL pExcep PTR;
+    END;
+
+xOsClose : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pExcep PTR;
+    END;
+
+xOsDetach : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pExcep PTR;
+    END;
+
+xOsTruncate : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pExcep PTR;
+    END;
+
+xOsOverlay : PROCEDURE (pName, pid, pExcep) EXTERNAL;
+    DCL (pName, pExcep) PTR;
+    DCL pid PidType;
+    END;
+
+xOsGetArgument : PROCEDURE (short, pArg) BYTE EXTERNAL;
+    DCL short BOOLEAN;
+    DCL pArg PTR;
+    END;
+
+xOsSwitchBuffer : PROCEDURE (pBuffer) WORD EXTERNAL;
+    DCL pBuffer PTR;
+    END;
+
+xOsReadDescriptor: PROCEDURE (conn, pBuf, pError) EXTERNAL;
+  DCL conn    ConnectionType;
+  DCL pBuf    PTR;
+  DCL pError  PTR;
+  END;
+
+xOsFlushAllBuffers : PROCEDURE EXTERNAL;
+    END;
+
+xGetEntryPoint : PROCEDURE EXTERNAL;
+    END;
+
+xOsCreateProcess: PROCEDURE (pBuffer, priority, uses8087, pError) WORD EXTERNAL;
+  DCL priority BYTE;
+  DCL uses8087 BOOLEAN;
+  DCL (pBuffer, pError) PTR;
+  END;
+
+xOsWriteDescriptor : PROCEDURE EXTERNAL;
+    END;
+
+xOsAddDevice : PROCEDURE EXTERNAL;
+    END;
+
+xOsForkProcess : PROCEDURE EXTERNAL;
+    END;
+
+xOsGetProperty : PROCEDURE EXTERNAL;
+    END;
+
+xOsPutProperty : PROCEDURE EXTERNAL;
+    END;
+
+xOsAddAlias: PROCEDURE EXTERNAL;
+  END;
+  
+xOsDeleteAlias: PROCEDURE EXTERNAL;
+  END;
+
+xWinClipLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+xWinClipRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+xWinSetWindow : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect PTR;
+  END;
+
+xWinInitDefaultWindow : PROCEDURE EXTERNAL;
+  END;
+
+xxWinFrameWindow : PROCEDURE EXTERNAL;
+  END;
+
+xWinEraseWindow : PROCEDURE EXTERNAL;
+  END;
+
+xWinScrollWindow : PROCEDURE (pRect, direction, distance) EXTERNAL;
+  DCL direction BYTE;
+  DCL distance  WORD;
+  DCL pRect     PTR;
+  END;
+
+xWinSetClip : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect   PTR;
+  END;
+
+xWinResetClip : PROCEDURE EXTERNAL;
+  END;
+
+xWinDrawPixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+xWinErasePixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+xWinInvertPixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+xWinTestPixel: PROCEDURE (x, y) BOOLEAN EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+xWinDrawLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+xWinEraseLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+xWinInvertLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+xWinEraseRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+xWinInvertRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+xWinCopyRectangle : PROCEDURE (pRect, y, x) EXTERNAL;
+  DCL pRect       PTR;
+  DCL y           WORD;
+  DCL x           WORD;
+  END;
+
+xWinScrollRectangle : PROCEDURE (pRect, direction, distance) EXTERNAL;
+  DCL pRect       PTR;
+  DCL direction   BYTE;
+  DCL distance    WORD;
+  END;
+
+xWinDrawChar : PROCEDURE (ch, x, y) EXTERNAL;
+  DCL ch          BYTE;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+xWinEraseChar : PROCEDURE (x, y) EXTERNAL;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+xWinInvertChar : PROCEDURE (x, y) EXTERNAL;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+xWinDrawChars : PROCEDURE (pChar, count, x, y) EXTERNAL;
+  DCL count       WORD;
+  DCL x           WORD;
+  DCL y           WORD;
+  DCL pChar       PTR;
+  END;
+
+xWinGetWindowExtent : PROCEDURE (pExtent) EXTERNAL;
+  DCL pExtent PTR;
+  END;
+
+EnterSystem: PROCEDURE EXTERNAL;
+  END;
+
+ExitSystem: PROCEDURE EXTERNAL;
+  END;
+
+xOsSearchForTitle: PROCEDURE (pTitle, addQuotes, lookAtAllDevs) PTR EXTERNAL;
+  DCL lookAtAllDevs  BOOLEAN;
+  DCL addQuotes      BOOLEAN;
+  DCL pTitle         PTR;
+  END;

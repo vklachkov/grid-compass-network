@@ -1,0 +1,1326 @@
+$COMPACT
+$TITLE('Network Manager Utilities')
+/****************************************************************************/
+/*																			*/
+/*					Network Manager Utilities	-	1/3/86					*/
+/*																			*/
+/****************************************************************************/
+
+NMUtils: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`ConPlmProcs.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`DataForms.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigData.Plm.Inc~Text~)
+$INCLUDE(NMConfigMain.Plm.Inc~Text~)
+$INCLUDE(NMConfigForms.Plm.Inc~Text~)
+$INCLUDE(NMMisc.Plm.Inc~Text~)
+$RESTORE
+
+
+AllocateMemory: PROCEDURE(memSize, pError) POINTER CLEAN;
+
+DCL	memSize		WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	pMemBlock	POINTER,
+	i			BYTE;
+
+	error = eOutOfMem;
+	i = 0;
+	DO WHILE (error = eOutOfMem) AND (i < 5);
+		pMemBlock = OsAllocate(memSize, @error);
+		i = i + 1;
+	END;
+	RETURN pMemBlock;
+
+END AllocateMemory;
+
+
+SameStrings: PROCEDURE(pS1, pS2) BOOLEAN CLEAN;
+
+DCL	pS1		POINTER,
+	s1		BASED pS1 (1) BYTE,
+	pS2		POINTER,
+	s2		BASED pS2 (1) BYTE,
+	i		BYTE,
+	ch1		BYTE,
+	ch2		BYTE;
+
+	i = s1(0);
+	IF i <> s2(0) THEN RETURN FALSE;
+
+	DO WHILE i > 0;
+		ch1 = s1(i);
+		IF ('A' <= ch1) AND (ch1 <= 'Z') THEN
+			ch1 = (ch1 - 'A') + 'a';
+		ch2 = s2(i);
+		IF ('A' <= ch2) AND (ch2 <= 'Z') THEN
+			ch2 = (ch2 - 'A') + 'a';
+		IF ch1 <> ch2 THEN RETURN FALSE;
+		i = i - 1;
+	END;
+	RETURN TRUE;
+
+END SameStrings;
+
+
+Identical: PROCEDURE(pS1, pS2, len) BOOLEAN CLEAN;
+
+DCL	pS1		POINTER,
+	s1		BASED pS1 (1) BYTE,
+	pS2		POINTER,
+	s2		BASED pS2 (1) BYTE,
+	len		BYTE,
+	i		BYTE,
+	ch1		BYTE,
+	ch2		BYTE;
+
+	DO i = 0 TO (len - 1);
+		ch1 = s1(i);
+		IF ('A' <= ch1) AND (ch1 <= 'Z') THEN
+			ch1 = (ch1 - 'A') + 'a';
+		ch2 = s2(i);
+		IF ('A' <= ch2) AND (ch2 <= 'Z') THEN
+			ch2 = (ch2 - 'A') + 'a';
+		IF ch1 <> ch2 THEN RETURN FALSE;
+	END;
+	RETURN TRUE;
+
+END Identical;
+
+
+FindProperty: PROCEDURE(propType, pStr, length, pIndex, pError) BOOLEAN CLEAN;
+
+DCL	propType	BYTE,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	length		WORD,
+	pIndex		POINTER,
+	index		BASED pIndex WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	pProp		POINTER,
+	property	BASED pProp stdPropType;
+
+	error = eOk;
+	pProp = @str(index);
+	DO WHILE (index < length) AND (error = eOk);
+		IF (property.fdByte <> 0FDh) OR (property.length > 0FFF0h) OR
+								((property.length + 3) > (length - index)) THEN
+		DO;
+			error = eNMBadProperty;
+			RETURN FALSE;
+		END;
+		ELSE
+			IF property.propType = propType THEN
+				RETURN TRUE;
+		ELSE
+			DO;
+				index = index + property.length + 3;
+				pProp = @str(index);
+			END;
+	END;
+	IF index <> length THEN error = eNMBadProperty;
+	RETURN FALSE;
+
+END FindProperty;
+
+
+GetNextProperty: PROCEDURE(propType, pStr, length, pIndex, pError)
+																BOOLEAN CLEAN;
+
+DCL	propType	BYTE,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	length		WORD,
+	pIndex		POINTER,
+	index		BASED pIndex WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	pProp		POINTER,
+	property	BASED pProp stdPropType;
+
+	error = eOk;
+	pProp = @str(index);
+	IF index = length THEN
+		RETURN FALSE;
+	IF (index > length) OR (property.fdByte <> 0FDh) THEN
+	DO;
+		error = eNMBadProperty;
+		RETURN FALSE;
+	END;
+	ELSE
+		DO;
+			index = index + property.length + 3;
+			IF index = length THEN
+				RETURN FALSE;
+			IF (index > length) OR (property.fdByte <> 0FDh) THEN
+			DO;
+				error = eNMBadProperty;
+				RETURN FALSE;
+			END;
+			RETURN TRUE;
+		END;
+
+END GetNextProperty;
+
+
+PutProperty: PROCEDURE(propType, pProp, propLen, pStr, pIndex) CLEAN;
+
+DCL	propType	BYTE,
+	pProp		POINTER,
+	prop		BASED pProp (1) BYTE,
+	propLen		WORD,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	pPropStr	POINTER,
+	property	BASED pPropStr stdPropType,
+	pIndex		POINTER,
+	index		BASED pIndex WORD;
+
+	pPropStr = @str(index);
+	property.fdByte = 0FDh;
+	property.length = propLen + 1;
+	property.propType = propType;
+	CALL MOVB(pProp, @property.prop, propLen);
+	index = index + property.length + 3;
+
+END PutProperty;
+
+
+LogError: PROCEDURE(error, eType, attention) CLEAN;
+
+DCL	error		WORD,
+	eType		WORD,
+	attention	BYTE;
+
+$IF NOT compassMode
+	CALL OsLogError(attention + 3, error, eType,
+		@(31, 'NetworkMgr: Suberror = location'));
+$ELSE
+	CALL ConLineOut(@('***Error*** '), 12);
+	CALL ConHexOut(error);
+	CALL ConLineOut(@(' Type = '), 8);
+	CALL ConHexOut(eType);
+	CALL ConLineOut(@(cr, lf), 2);
+$ENDIF
+
+END LogError;
+
+
+DoSkipProperties: PROCEDURE(conn, pError) CLEAN;
+
+DCL	conn		WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	descriptor	STRUCTURE
+	(
+	 unused1	(164) BYTE,
+	 propLen	DWORD,
+	 unused2	(52) BYTE
+	);
+
+	CALL OsReadDescriptor(conn, @descriptor, @error);
+	IF error = eOk THEN
+		CALL OsSeek(conn, absoluteSeek, descriptor.propLen, @error);
+
+END DoSkipProperties;
+
+
+AttachAndOpen: PROCEDURE(pName, fileMode, accessType, pError) WORD CLEAN;
+
+DCL	pName		POINTER,
+	fileMode	BYTE,
+	accessType	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	error2		WORD,
+	conn		WORD;
+
+	conn = OsAttach(pName, fileMode, @(0), accessType, @error);
+	IF error = eOk THEN
+	DO;
+		CALL OsOpen(conn, 1, @error);
+		IF error <> eOk THEN
+			CALL OsDetach(conn, @error2);
+	END;
+	IF error = eOk THEN
+	DO;
+		CALL DoSkipProperties(conn, @error);
+		IF error <> eOk THEN
+			CALL OsDetach(conn, @error2);
+	END;
+	RETURN conn;
+
+END AttachAndOpen;
+
+
+StartIpc: PROCEDURE(card, memSize) BOOLEAN CLEAN;
+
+DCL	card		BYTE,
+	memSize		BYTE,
+	error		WORD,
+	pid			WORD,
+	pVipcProc	POINTER,
+	i			BYTE;
+
+	ipcName(ipcName(0)) = '0' + card;
+	pid = OsLookupName(@ipcName, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL ConLineOut(@('Starting Vipc on card '), 22);
+		CALL ConCharOut('0' + card);
+		CALL ConLineOut(@(0dh, 0ah), 2);
+
+		IF memSize = 1 THEN
+			pVipcProc = @Vipc128kProc;
+		ELSE
+			pVipcProc = @VipcProc;
+
+		pid = OsCreateRemoteProcess(card, pVipcProc, 100, FALSE, @error);
+
+		IF error = eOk THEN
+		DO;
+			i = 0;
+			error = NOT eOk;
+			DO WHILE (i < 10) AND (error <> eOk);
+				pid = OsLookupName(@ipcName, @error);
+				i = i + 1;
+				IF error <> eOk THEN
+					CALL OsDelay(500);
+			END;
+		END;
+
+		IF error <> eOk THEN
+		DO;
+			CALL LogError(error, 1680, attentionOn);
+			CALL ConLineOut(@('Vipc failed on card '), 20);
+			CALL ConCharOut('0' + card);
+			CALL ConLineOut(@(0dh, 0ah), 2);
+		END;
+	END;
+	ELSE
+		DO;
+			CALL ConLineOut(@('Vipc found on card '), 19);
+			CALL ConCharOut('0' + card);
+			CALL ConLineOut(@(0dh, 0ah), 2);
+		END;
+
+	RETURN (error = eOk);
+
+END StartIpc;
+
+
+GetAccess: PROCEDURE(pError) CLEAN;
+
+DCL	pError	POINTER,
+	error	BASED pError WORD,
+	note	WORD;
+
+	note = OsWait(accessSema, oneMinute, @error);
+	IF (error <> eOk) AND (error <> eTimeout) THEN
+		CALL LogError(error, 1681, attentionOn);
+
+END GetAccess;
+
+
+FreeAccess: PROCEDURE(pError) CLEAN;
+
+DCL	pError	POINTER,
+	error	BASED pError WORD;
+
+	CALL OsSignal(accessSema, signalNormal, 0, @error);
+	IF error <> eOk THEN
+		CALL LogError(error, 1682, attentionOn);
+
+END FreeAccess;
+
+
+SavePortInfo: PROCEDURE(portIndex) CLEAN;
+
+DCL	portIndex	BYTE;
+
+	CALL MOVB(@portInfo(portIndex), @portInfoSave, SIZE(portInfoSave));
+
+END SavePortInfo;
+
+
+RestorePortInfo: PROCEDURE(portIndex) CLEAN;
+
+DCL	portIndex	BYTE;
+
+	CALL MOVB(@portInfoSave, @portInfo(portIndex), SIZE(portInfoSave));
+
+END RestorePortInfo;
+
+
+FindChoice:	PROCEDURE(pStr, pLabels, isForm, pCurChoice) BOOLEAN CLEAN;
+
+DCL	pStr		POINTER,
+	s			BASED pStr (1) BYTE,
+	pLabels		POINTER,
+	l			BASED pLabels (1) BYTE,
+	isForm		BOOLEAN,
+	pCurChoice	POINTER,
+	curChoice	BASED pCurChoice WORD,
+	i	    	WORD,
+	j			WORD,
+	k			WORD;
+
+	i = 0;
+	IF isForm THEN
+	DO WHILE l(i) <> '~';
+		i = i + 1;
+	END;
+	i = i + 1;
+
+	k = 1;
+	DO WHILE l(i) <> '|';
+		j = 0;
+		DO WHILE l(i + j) <> '~';
+			j = j + 1;
+		END;
+		IF s(0) <> 0 THEN
+		DO;
+			IF (s(0) = j) AND Identical(@s(1), @l(i), j) THEN
+			DO;
+				curChoice = k;
+				RETURN TRUE;
+			END;
+		END;
+		ELSE
+			IF curChoice = k THEN
+			DO;
+				s(0) = j;
+				CALL MOVB(@l(i), @s(1), j);
+				RETURN TRUE;
+			END;
+		k = k + 1;
+		i = i + j + 1;
+	END;
+
+	RETURN FALSE;
+
+END FindChoice;
+
+
+InsertServer: PROCEDURE(pServer) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pLast		POINTER,
+	lastInfo	BASED pLast serverInfoType,
+	pNext		POINTER,
+	nextInfo	BASED pNext serverInfoType;
+
+	pLast = nullPtr;
+	pNext = pServerInfo;
+	DO WHILE (pNext <> nullPtr) AND Greater(serverInfo.pName, nextInfo.pName);
+		pLast = pNext;
+		pNext = nextInfo.pNext;
+	END;
+	serverInfo.pNext = pNext;
+	serverInfo.pLast = pLast;
+	IF pLast = nullPtr THEN pServerInfo = pServer;
+	ELSE
+		lastInfo.pNext = pServer;
+	IF pNext = nullPtr THEN pLastServer = pServer;
+	ELSE
+		nextInfo.pLast = pServer;
+	nServers = nServers + 1;
+
+END InsertServer;
+
+
+DeleteServer: PROCEDURE(pServer) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pNext		POINTER,
+	nextInfo	BASED pNext serverInfoType,
+	pLast		POINTER,
+	lastInfo	BASED pLast serverInfoType,
+	i			BYTE;
+
+	pConn = serverInfo.pConnInfo;
+	DO WHILE pConn <> nullPtr;
+		CALL DeleteConnection(pConn);
+		pConn = serverInfo.pConnInfo;
+	END;
+
+	pLast = serverInfo.pLast;
+	pNext = serverInfo.pNext;
+	IF pLast <> nullPtr THEN lastInfo.pNext = pNext;
+	ELSE
+		pServerInfo = pNext;
+	IF pNext <> nullPtr THEN nextInfo.pLast = pLast;
+	ELSE
+		pLastServer = pLast;
+	nServers = nServers - 1;
+
+	IF serverInfo.pName <> nullPtr THEN
+		CALL FreeString(@serverInfo.pName);
+	IF serverInfo.pComment <> nullPtr THEN
+		CALL FreeString(@serverInfo.pComment);
+	DO i = 0 TO 3;
+		IF serverInfo.pPubNumber(i) <> nullPtr THEN
+			CALL FreeString(@serverInfo.pPubNumber);
+		IF serverInfo.pPvtNumber(i) <> nullPtr THEN
+			CALL FreeString(@serverInfo.pPvtNumber);
+	END;
+	CALL FreeBytes(pServer, SIZE(serverInfo));
+
+END DeleteServer;
+
+
+InsertConnection: PROCEDURE(pServer, pConn) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pLast		POINTER,
+	lastInfo	BASED pLast connInfoType,
+	pNext		POINTER,
+	nextInfo	BASED pNext connInfoType;
+
+	pLast = nullPtr;
+	pNext = serverInfo.pConnInfo;
+	DO WHILE (pNext <> nullPtr) AND Greater(connInfo.pName, nextInfo.pName);
+		pLast = pNext;
+		pNext = nextInfo.pNext;
+	END;
+	connInfo.pLast = pLast;
+	connInfo.pNext = pNext;
+	IF pLast = nullPtr THEN serverInfo.pConnInfo = pConn;
+	ELSE
+		lastInfo.pNext = pConn;
+	IF pNext = nullPtr THEN serverInfo.pLastConn = pConn;
+	ELSE
+		nextInfo.pLast = pConn;
+
+	connInfo.pServerInfo = pServer;
+	serverInfo.nConnections = serverInfo.nConnections + 1;
+	nConnections = nConnections + 1;
+
+END InsertConnection;
+
+
+ReinsertConnection: PROCEDURE(pConn) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pLast		POINTER,
+	lastInfo	BASED pLast connInfoType,
+	pNext		POINTER,
+	nextInfo	BASED pNext connInfoType;
+
+	pServer = connInfo.pServerInfo;
+	pLast = connInfo.pLast;
+	pNext = connInfo.pNext;
+	IF pLast <> nullPtr THEN
+		lastInfo.pNext = pNext;
+	ELSE
+		serverInfo.pConnInfo = pNext;
+	IF pNext <> nullPtr THEN
+		nextInfo.pLast = pLast;
+	ELSE
+		serverInfo.pLastConn = pLast;
+	serverInfo.nConnections = serverInfo.nConnections - 1;
+	nConnections = nConnections - 1;
+
+	CALL InsertConnection(pServer, pConn);
+
+END ReinsertConnection;
+
+
+DeleteConnection: PROCEDURE(pConn) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pLast		POINTER,
+	lastInfo	BASED pLast connInfoType,
+	pNext		POINTER,
+	nextInfo	BASED pNext connInfoType,
+	i			BYTE,
+	portIndex	BYTE;
+
+	DO i = 0 TO 3;
+		IF (portIndex := connInfo.port(i)) <> nullWord THEN
+		DO;
+			IF portInfo(portIndex).pConnInfo = pConn THEN
+			DO;
+				portInfo(portIndex).doSearch = FALSE;
+				portInfo(portIndex).pConnInfo = nullPtr;
+			END;
+		END;
+	END;
+
+	pServer = connInfo.pServerInfo;
+	pLast = connInfo.pLast;
+	pNext = connInfo.pNext;
+	IF pLast <> nullPtr THEN
+		lastInfo.pNext = pNext;
+	ELSE
+		serverInfo.pConnInfo = pNext;
+
+	IF pNext <> nullPtr THEN
+		nextInfo.pLast = pLast;
+	ELSE
+		serverInfo.pLastConn = pLast;
+
+	IF connInfo.pName <> nullPtr THEN
+		CALL FreeString(@connInfo.pName);
+	IF connInfo.pPhoneNumber <> nullPtr THEN
+		CALL FreeString(@connInfo.pPhoneNumber);
+	CALL FreeBytes(pConn, SIZE(connInfo));
+
+	serverInfo.nConnections = serverInfo.nConnections - 1;
+	nConnections = nConnections - 1;
+
+END DeleteConnection;
+
+
+DeallocateData: PROCEDURE CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pNext		POINTER,
+	i			BYTE;
+
+	DO i = 0 TO 31;
+		portInfo(i).pConnInfo = nullPtr;
+	END;
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		pNext = serverInfo.pNext;
+		CALL DeleteServer(pServer);
+		pServer = pNext;
+	END;
+
+END DeallocateData;
+
+
+IntToStr2: PROCEDURE(n, pStr) CLEAN;
+
+DCL	n		WORD,
+	pStr	POINTER,
+	s		BASED pStr (1) BYTE;
+
+	IF n > 99 THEN n = 99;
+	s(0) = n/10 + '0';
+	s(1) = (n MOD 10) + '0';
+
+END IntToStr2;
+
+
+FindConnection: PROCEDURE(len, pName, ppConn) BOOLEAN CLEAN;
+
+DCL	len			BYTE,
+	pName		POINTER,
+	name		BASED pName (1) BYTE,
+	ppConn		POINTER,
+	pResult		BASED ppConn POINTER,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pStr		POINTER,
+	str			BASED pStr stringType;
+
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		pConn = serverInfo.pConnInfo;
+		DO WHILE pConn <> nullPtr;
+			pStr = connInfo.pName;
+			IF (len = str.len) AND Identical(@name, @str.chars, len) THEN
+			DO;
+				pResult = pConn;
+				RETURN TRUE;
+			END;
+			pConn = connInfo.pNext;
+		END;
+		pServer = serverInfo.pNext;
+	END;
+	RETURN FALSE;
+
+END FindConnection;
+
+
+FindServer: PROCEDURE(len, pName, ppServer) BOOLEAN CLEAN;
+
+DCL	len			BYTE,
+	pName		POINTER,
+	name		BASED pName (1) BYTE,
+	ppServer	POINTER,
+	pResult		BASED ppServer POINTER,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pStr		POINTER,
+	str			BASED pStr StringType;
+
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		pStr = serverInfo.pName;
+		IF (len = str.len) AND Identical(@name, @str.chars, len) THEN
+		DO;
+			pResult = pServer;
+			RETURN TRUE;
+		END;
+		pServer = serverInfo.pNext;
+	END;
+	RETURN FALSE;
+
+END FindServer;
+
+
+StringToInt: PROCEDURE(pStr) WORD CLEAN;
+
+DCL	pStr	POINTER,
+	s		BASED pStr (1) BYTE,
+	w		WORD,
+	i		BYTE;
+
+	w = 0;
+	DO i = 1 TO s(0);
+		w = 10*w + (s(i) - '0');
+	END;
+	RETURN w;
+
+END StringToInt;
+
+
+CheckConsistency: PROCEDURE(onlyThisServer) BOOLEAN CLEAN;
+
+DCL onlyThisServer	POINTER,
+	cardNum			BYTE,
+	portIndex		WORD,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	k				BYTE,
+	consistent		BOOLEAN;
+
+	consistent = TRUE;
+	IF onlyThisServer = nullPtr THEN
+		pServer = pServerInfo;
+	ELSE
+		pServer = onlyThisServer;
+	DO WHILE pServer <> nullPtr;
+		pConn = serverInfo.pConnInfo;
+		DO WHILE pConn <> nullPtr;
+			connInfo.consistent = TRUE;
+			k = 0;
+			IF NOT connInfo.useAnyPort THEN
+			DO WHILE (k <= 3) AND connInfo.consistent;
+				portIndex = connInfo.port(k);
+				IF portIndex <> nullWord THEN
+				DO;
+					cardNum = portIndex/4;
+					IF NOT (cardInfo(cardNum).configured AND
+								(connInfo.protocol =
+											portInfo(portIndex).protocol)) THEN
+						connInfo.consistent, consistent = FALSE;
+					ELSE
+						IF (portInfo(portIndex).protocol <> phonelink) OR
+						  (portInfo(portIndex).phonelinkType = answerOnlyPdl) OR
+						  ((connInfo.networkType = privateNetwork) AND
+						   (portInfo(portIndex).lineKind = externalLine)) OR
+						  NOT ((connInfo.baudRate = nullWord) OR
+							   ((portInfo(portIndex).lineType = leased) AND
+								(connInfo.baudRate = 0)) OR
+							   ((portInfo(portIndex).lineType <> leased) AND
+							    ((connInfo.baudRate =
+							   					portInfo(portIndex).baudrate) OR
+							     ((portInfo(portIndex).baudChoice =
+							   								baud1200and2400) AND
+								  ((connInfo.baudRate = 1200) OR
+								   (connInfo.baudRate = 2400))) OR
+							     ((connInfo.baudChoice = baud1200and2400) AND
+								  ((portInfo(portIndex).baudRate = 1200) OR
+								   (portInfo(portIndex).baudRate = 2400))))))
+								  											THEN
+							connInfo.consistent, consistent = FALSE;
+				END;
+				k = k + 1;
+			END;
+			pConn = connInfo.pNext;
+		END;
+		IF onlyThisServer = nullPtr THEN
+			pServer = serverInfo.pNext;
+		ELSE
+			RETURN consistent;
+	END;
+	RETURN consistent;
+
+END CheckConsistency;
+
+
+GetBaudChoice: PROCEDURE(pServer, networkType, pPhoneNumber) WORD CLEAN;
+
+DCL	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	networkType		BYTE,
+	pPhoneNumber	POINTER,
+	pStr			POINTER,
+	baudChoice		WORD,
+	i				BYTE;
+
+	DO i = 0 TO 3;
+		IF networkType = publicNetwork THEN
+		DO;
+			pStr = serverInfo.pPubNumber(i);
+			baudChoice = serverInfo.pubBaudChoice(i);
+		END;
+		ELSE
+			DO;
+				pStr = serverInfo.pPvtNumber(i);
+				baudChoice = serverInfo.pvtBaudChoice(i);
+			END;
+		IF pStr <> nullPtr THEN
+		DO;
+			IF EqualStrings(pStr, pPhoneNumber) THEN
+				RETURN baudChoice;
+		END;
+	END;
+	RETURN baudUndef;
+
+END GetBaudChoice;
+
+
+GetNumberChoice: PROCEDURE(pServer, networkType, pPhoneNumber) WORD CLEAN;
+
+DCL	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	networkType		BYTE,
+	pPhoneNumber	POINTER,
+	pStr			POINTER,
+	j				BYTE,
+	i				BYTE;
+
+	j = 1;
+	DO i = 0 TO 3;
+		IF networkType = publicNetwork THEN
+			pStr = serverInfo.pPubNumber(i);
+		ELSE
+			pStr = serverInfo.pPvtNumber(i);
+		IF pStr <> nullPtr THEN
+		DO;
+			j = j + 1;
+			IF EqualStrings(pStr, pPhoneNumber) THEN
+				RETURN j;
+		END;
+	END;
+	RETURN 1;
+
+END GetNumberChoice;
+
+
+FindPhoneNumber: PROCEDURE(pServer, networkType, choice) POINTER CLEAN;
+
+DCL	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	networkType		BYTE,
+	choice			WORD,
+	pStr			POINTER,
+	str				BASED pStr stringType,
+	j				BYTE,
+	i				BYTE;
+
+	IF choice = 1 THEN RETURN @phoneNumber;
+
+	j = 1;
+	DO i = 0 TO 3;
+		IF networkType = publicNetwork THEN
+			pStr = serverInfo.pPubNumber(i);
+		ELSE
+			pStr = serverInfo.pPvtNumber(i);
+		IF (pStr <> nullPtr) AND (str.len <> 0) THEN
+		DO;
+			j = j + 1;
+			IF j = choice THEN
+				RETURN pStr;
+		END;
+	END;
+	RETURN nullPtr;
+
+END FindPhoneNumber;
+
+
+ConnExists: PROCEDURE(isNewConn, pOldConn, pServer, pNumber) BOOLEAN CLEAN;
+
+DCL	isNewConn		BOOLEAN,
+	pOldConn		POINTER,
+	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	pNumber			POINTER,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType;
+
+	pConn = serverInfo.pConnInfo;
+	DO WHILE pConn <> nullPtr;
+		IF isNewConn OR (pOldConn <> pConn) THEN
+		DO;
+			IF (connInfo.pPhoneNumber <> nullPtr) THEN
+			DO;
+				IF EqualStrings(pNumber, connInfo.pPhoneNumber) THEN
+					RETURN TRUE;
+			END;
+		END;
+		pConn = connInfo.pNext;
+	END;
+	RETURN FALSE;
+
+END ConnExists;
+
+
+UpdateBaudRate: PROCEDURE(pServer, networkType) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pNumber		POINTER,
+	baudChoice	WORD,
+	i			BYTE;
+
+	pConn = serverInfo.pConnInfo;
+	DO WHILE pConn <> nullPtr;
+		IF connInfo.networkType = networkType THEN
+		DO i = 0 TO 3;
+			IF networkType = publicNetwork THEN
+			DO;
+				pNumber = serverInfo.pPubNumber(i);
+				baudChoice = serverInfo.pubBaudChoice(i);
+			END;
+			ELSE
+				DO;
+					pNumber = serverInfo.pPvtNumber(i);
+					baudChoice = serverInfo.pvtBaudChoice(i);
+				END;
+			IF (pNumber <> nullPtr) AND
+							EqualStrings(pNumber, connInfo.pPhoneNumber) THEN
+			DO;
+				connInfo.baudChoice = baudChoice;
+				connInfo.baudRate = baudTable(baudChoice);
+				GOTO getNextConn;
+			END;
+		END;
+getNextConn:
+		pConn = connInfo.pNext;
+	END;
+
+END UpdateBaudRate;
+
+
+IsDefaultConn: PROCEDURE(pConn) BOOLEAN CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType;
+
+	IF (connInfo.protocol = phonelink) AND (NOT connInfo.dedicated) AND
+		connInfo.useAnyPort AND (connInfo.waitForAnswer = defaultWaitTime) AND
+								(connInfo.baudChoice = defaultBaudChoice) AND
+											(connInfo.cost = mediumCost) THEN
+		RETURN TRUE;
+	ELSE
+		RETURN FALSE;
+
+END IsDefaultConn;
+
+
+AddDefaultConnections: PROCEDURE(pServer, networkType) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pNext		POINTER,
+	pNumber		POINTER,
+	pForm		POINTER,
+	i			BYTE,
+	temp		WORD;
+
+	pConn = serverInfo.pConnInfo;
+	DO WHILE pConn <> nullPtr;
+		pNext = connInfo.pNext;
+		IF connInfo.networkType = networkType THEN
+		DO;
+			IF NOT connInfo.custom THEN
+				CALL DeleteConnection(pConn);
+		END;
+		pConn = pNext;
+	END;
+
+	IF networkType <> leasedNetwork THEN
+	DO i = 0 TO 3;
+		IF networkType = publicNetwork THEN
+			pNumber = serverInfo.pPubNumber(i);
+		ELSE
+			pNumber = serverInfo.pPvtNumber(i);
+
+		IF (pNumber <> nullPtr) AND
+						NOT ConnExists(TRUE, nullPtr, pServer, pNumber) THEN
+		DO;
+			pConn = FindFreeConnection;
+			connInfo.protocol = phonelink;
+			pForm = InitDefaultConnForm(pServer, networkType);
+			CALL GetDefaultConnName(@connName, serverInfo.pName);
+			CALL CopyString(pNumber, @phoneNumber);
+			CALL CopyConnForm(pConn, pServer, networkType);
+			CALL InsertConnection(pServer, pConn);
+		END;
+	END;
+	ELSE
+		DO i = 0 TO 3;
+			IF systemPortRow(i).currentChoice <> noPort THEN
+			DO;
+				temp = plMap(systemPortRow(i).currentChoice - 2);
+				plMap(systemPortRow(i).currentChoice - 2) = nullWord;
+				IF temp <> nullWord THEN
+				DO;
+					pConn = FindFreeConnection;
+					connInfo.protocol = phonelink;
+					pForm = InitDefaultConnForm(pServer, networkType);
+					CALL GetDefaultConnName(@leasedConnName, serverInfo.pName);
+					CALL CopyConnForm(pConn, pServer, networkType);
+					CALL InsertConnection(pServer, pConn);
+					connInfo.port(0) = temp;
+				END;
+			END;
+		END;
+
+END AddDefaultConnections;
+
+
+LogString: PROCEDURE(pStr) CLEAN;
+
+DCL	pStr	POINTER,
+	error	WORD;
+
+	CALL LogWriteLog(logConn, pStr, @error);
+	CALL FreeString(@pStr);
+
+END LogString;
+
+
+AddLogStr: PROCEDURE(pStr) CLEAN;
+
+DCL	pStr	POINTER;
+
+	IF pLogStr = nullPtr THEN
+		pLogStr = pStr;
+	ELSE
+		pLogStr = ConcatStrings(pLogStr, pStr);
+
+END AddLogStr;
+
+
+AddLogInt: PROCEDURE(n) CLEAN;
+
+DCL	n	WORD;
+
+	IF pLogStr = nullPtr THEN
+		pLogStr = IntegerToString(n);
+	ELSE
+		pLogStr = ConcatStrings(pLogStr, IntegerToString(n));
+
+END AddLogInt;
+
+
+DoLog: PROCEDURE(pError) CLEAN;
+
+DCL	pError	POINTER,
+	error	BASED pError WORD;
+
+	CALL LogWriteLog(logConn, pLogStr, @error);
+	CALL FreeString(@pLogStr);
+	pLogStr = nullPtr;
+
+END DoLog;
+
+
+GetMyServerName: PROCEDURE(pError) CLEAN;
+
+DCL	pError	POINTER,
+	error	BASED pError WORD,
+	dummy	WORD,
+	conn	WORD,
+	name	partialDirEntryType,
+	len		BYTE;
+
+$IF NOT compassMode
+	conn = OsAttach(@(19, '`n`Servers~Subject~'), oldFile, @(7, 'GRiDiRG'),
+													partialDirAccess, @error);
+	IF error = eOk THEN
+	DO;
+		len = OsRead(conn, @name, 1, @error);
+		IF error = eOk THEN
+		DO;
+			myServerName.len, myServerName.max = name.len;
+			CALL MOVB(@name.len, @myServerName.dummy, name.len + 1);
+		END;
+		CALL OsDetach(conn, @dummy);
+		IF error = eOk THEN error = dummy;
+	END;
+$ELSE
+	error = eOk;
+	CALL MOVB(@('MyServer'), @myServerName.chars, 8);
+	myServerName.len, myServerName.max, myServerName.dummy = 8;
+$ENDIF
+
+END GetMyServerName;
+
+
+LocalNumber: PROCEDURE(pNumber, pStr) BOOLEAN CLEAN;
+
+DCL	pNumber		POINTER,
+	number		BASED pNumber (1) BYTE,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	i			WORD,
+	j			WORD;
+
+	i = FINDB(@number(1), '(', number(0));
+	IF i <> nullWord THEN
+	DO;
+		j = FINDB(@number(1), ')', number(0));
+		IF (j <> nullWord) AND (j > i) THEN
+		DO;
+			j = j - i - 1;
+			i = i + 2;
+			IF (j = myAreaCode(0)) AND
+								Identical(@number(i), @myAreaCode(1), j) THEN
+			DO;
+				/* It is the local area code. */
+				i = i + j + 1;
+				j = number(0) - i + 1;
+				CALL MOVB(@number(i), @str(1), j);
+				str(0) = j;
+				RETURN TRUE;
+			END;
+		END;
+	END;
+
+	CALL MOVB(@number(0), @str(0), number(0) + 1);
+	RETURN FALSE;
+
+END LocalNumber;
+
+
+MarkCustomConnections: PROCEDURE(pServer, networkType) BOOLEAN CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	found		BOOLEAN,
+	choice		WORD;
+
+	found = FALSE;
+	pConn = serverInfo.pConnInfo;
+	DO WHILE pConn <> nullPtr;
+		IF connInfo.networkType = networkType THEN
+		DO;
+			connInfo.custom = TRUE;
+			IF networkType = leasedNetwork THEN
+			DO;
+				connInfo.custom = FALSE;
+				found = TRUE;
+			END;
+			ELSE
+				IF connInfo.pPhoneNumber <> nullPtr THEN
+				DO;
+					choice = GetNumberChoice(pServer, networkType,
+														connInfo.pPhoneNumber);
+					IF choice > 1 THEN
+					DO;
+						IF NOT InNewDirectory(connInfo.pPhoneNumber) THEN
+						DO;
+							connInfo.custom = FALSE;
+							found = TRUE;
+						END;
+					END;
+				END;
+		END;
+		pConn = connInfo.pNext;
+	END;
+	RETURN found;
+
+END MarkCustomConnections;
+
+
+InNewDirectory: PROCEDURE(pNumber) BOOLEAN CLEAN;
+
+DCL	pNumber		POINTER;
+
+	RETURN (EqualStrings(pNumber, @phoneNumber1) OR
+			EqualStrings(pNumber, @phoneNumber2) OR
+			EqualStrings(pNumber, @phoneNumber3) OR
+			EqualStrings(pNumber, @phoneNumber4));
+
+END InNewDirectory;
+
+
+Greater: PROCEDURE(pStr1, pStr2) BOOLEAN CLEAN;
+
+DCL	pStr1	POINTER,
+	str1	BASED pStr1 stringType,
+	pStr2	POINTER,
+	str2	BASED pStr2 stringType,
+	i		WORD;
+
+	i = 0;
+	DO WHILE (i < str1.len) AND (i < str2.len) AND
+									(str1.chars(i) = str2.chars(i));
+		i = i + 1;
+	END;
+	IF (i >= str1.len) OR (i >= str2.len) THEN
+		RETURN (str1.len > str2.len);
+	ELSE
+		RETURN (str1.chars(i) > str2.chars(i));
+
+END Greater;
+
+
+GetPropString: PROCEDURE(propType, pProps, length) POINTER CLEAN;
+
+DCL	propType	BYTE,
+	pProps		POINTER,
+	props		BASED pProps (1) BYTE,
+	length		WORD,
+	pStr		POINTER,
+	str			BASED pStr stringType,
+	i			WORD;
+
+	i = 0;
+	DO WHILE (i < length) AND (props(i) <> propType);
+		i = i + props(i + 1) + 2;
+	END;
+	IF i >= length THEN RETURN NewString(10);
+
+	pStr = NewString(props(i + 1));
+	str.len = props(i + 1);
+	CALL MOVB(@props(i + 2), @str.chars, props(i + 1));
+	RETURN pStr;
+
+END GetPropString;
+
+
+RemoveParentheses: PROCEDURE(pBuffer) CLEAN;
+DCL	pBuffer	POINTER,
+	buf		BASED pBuffer (1) BYTE,
+	i		WORD,
+	j		WORD;
+
+	j = 0;
+	DO i = 1 TO buf(0);
+		IF (buf(i) <> '(') AND (buf(i) <> ')') THEN
+		DO;
+			j = j + 1;
+			buf(j) = buf(i);
+		END;
+	END;
+	buf(0) = j;
+
+END RemoveParentheses;
+
+
+FourOrMoreLeasedConns: PROCEDURE(pServer) BOOLEAN CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	conninfo	BASED pConn connInfoType,
+	i			BYTE;
+
+	pConn = serverInfo.pConnInfo;
+	i = 0;
+	DO WHILE (pConn <> nullPtr);
+		IF connInfo.networkType = leasedNetwork THEN
+			i = i + 1;
+		pConn = connInfo.pNext;
+	END;
+	RETURN (i >= 4);
+
+END FourOrMoreLeasedConns;
+
+
+SetPortSearchOrder: PROCEDURE CLEAN;
+
+DCL	i		WORD,
+	j		WORD,
+	k		WORD,
+	temp	WORD,
+	done	(32) BOOLEAN;
+
+	/* Note: preserve port order */
+
+	DO i = 0 TO 31;
+		done(i) = FALSE;
+	END;
+
+	DO i = 0 TO 31;
+		k = 0;
+		DO WHILE done(k);
+			k = k + 1;
+		END;
+		temp = k;
+		DO j = (k + 1) TO 31;
+			IF NOT done(j) THEN
+			DO;
+				IF portInfo(j).baudRate > portInfo(temp).baudRate THEN
+					temp = j;
+			END;
+		END;
+		done(temp) = TRUE;
+		searchOrder(i) = temp;
+	END;
+
+END SetPortSearchOrder;
+
+
+CardNotAvailable: PROCEDURE(n) BOOLEAN CLEAN;
+
+DCL	n		BYTE,
+	error	WORD,
+	i		BYTE,
+	pid		WORD;
+
+	IF n > 7 THEN RETURN TRUE;
+	DO i = 4*n TO 4*n + 3;
+		IF portUsed(i) THEN RETURN TRUE;
+	END;
+
+	pid = OsLookupName(@(27, '`n`Resources`GRiD3780~3780~'), @error);
+	IF (error = eOk) AND (n = (SHR(pid, 8) AND 0Fh)) THEN
+		RETURN TRUE;
+
+	RETURN FALSE;
+
+END CardNotAvailable;
+
+END NMUtils;

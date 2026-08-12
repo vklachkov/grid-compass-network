@@ -1,0 +1,95 @@
+$COMPACT DEBUG OPTIMIZE(3)
+
+NMAllocatePort: DO;
+
+$SAVE NOLIST
+$INCLUDE (``Incs`PlmLits.inc~Text~)
+$INCLUDE (``OsIncs`OsPlmProcs.inc~Text~)
+$INCLUDE (``'Network Manager'`NMUserMsg.Plm.Inc~Text~)
+$RESTORE
+
+DCL nmName	(*) BYTE INITIAL (24, '`n`System`NetworkManager');
+
+
+VipcAllocatePort: PROCEDURE (card, port, protocol, pError) CLEAN;
+DCL	card			BYTE,
+	port			BYTE,
+	protocol		BYTE,
+	pError			POINTER,
+	error			BASED pError WORD;
+
+DCL pMsg			POINTER,
+	reqMsg			BASED pMsg msgAllocatePortReq,
+	rspMsg			BASED pMsg msgAllocatePortRsp,
+	dummy			WORD,
+	nmPid			WORD;
+
+	nmPid = OsLookupName(@nmName, @error);
+	IF error <> 0 THEN RETURN;
+
+	pMsg = OsAllocate(SIZE(reqMsg), @error);
+	IF error = 0 THEN
+	DO;
+		reqMsg.functionCode = nmUserFunctionCode;
+		reqMsg.toBeFreed = TRUE;
+		reqMsg.length = SIZE(reqMsg) - msgHdrSize;
+		reqMsg.ctrl, reqMsg.newCredits, reqMsg.status = 0;
+		reqMsg.card = card;
+		reqMsg.port = port;
+		reqMsg.protocol = protocol;
+			
+		CALL OsSend(nmPid, nmUserClass, cmdAllocatePort, pMsg, @error);
+		IF error <> 0 THEN RETURN;
+
+		pMsg = OsReceive(nmPid, nmUserClass, 60000, @dummy, @error);
+		IF error = 0 THEN
+		DO;
+			error = rspMsg.error;
+			IF rspMsg.toBeFreed THEN
+				CALL OsFree(pMsg, @dummy);
+		END;
+	END;
+
+END VipcAllocatePort;
+
+
+VipcFreePort: PROCEDURE (card, port, pError) CLEAN;
+DCL	card			BYTE,
+	port			BYTE,
+	pError			POINTER,
+	error			BASED pError WORD;
+
+DCL pMsg			POINTER,
+	reqMsg			BASED pMsg msgFreePortReq,
+	rspMsg			BASED pMsg msgFreePortRsp,
+	dummy			WORD,
+	nmPid			WORD;
+
+	nmPid = OsLookupName(@nmName, @error);
+	IF error <> 0 THEN RETURN;
+
+	pMsg = OsAllocate(SIZE(reqMsg), @error);
+	IF error = 0 THEN
+	DO;
+		reqMsg.functionCode = nmUserFunctionCode;
+		reqMsg.toBeFreed = TRUE;
+		reqMsg.length = SIZE(reqMsg) - msgHdrSize;
+		reqMsg.ctrl, reqMsg.newCredits, reqMsg.status = 0;
+		reqMsg.card = card;
+		reqMsg.port = port;
+			
+		CALL OsSend(nmPid, nmUserClass, cmdFreePort, pMsg, @error);
+		IF error <> 0 THEN RETURN;
+
+		pMsg = OsReceive(nmPid, nmUserClass, 60000, @dummy, @error);
+		IF error = 0 THEN
+		DO;
+			error = rspMsg.error;
+			IF rspMsg.toBeFreed THEN
+				CALL OsFree(pMsg, @dummy);
+		END;
+	END;
+
+END VipcFreePort;
+
+END NMAllocatePort;

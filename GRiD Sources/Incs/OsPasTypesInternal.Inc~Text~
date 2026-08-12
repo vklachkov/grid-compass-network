@@ -1,0 +1,83 @@
+
+{ This is OsPasTypesInternal.Inc~Text~ }
+{ Updated for the 3.1.5 release 4/26/85 }
+{ This include file is NEVER to go outside of GRiD! }
+
+
+PUBLIC OSInternal;
+
+CONST
+  maxFileNameLen = 80;
+  dateLen = 11;
+  passwordLen = 5;
+  GRiDWrite1Len = 6;
+  GRiDWrite2Len = 11;
+  RDBSLen = 3;
+  UDBSLen = 20;
+
+  byteMode = 0;
+  shortDirectoryMode = 1;
+  longDirectoryMode = 2;
+
+  forwardDirection = 0;
+  backwardDirection = 1;
+
+
+TYPE
+
+    GetStatusType = 
+      RECORD
+        open : BOOLEAN;
+        access,
+        seek : BYTE;
+        filePosition,
+        fileLength : LONGINT;
+        numPages,
+        numAllocatedPages : WORD;
+        bytesPerPage: WORD;
+        GPIBAddr: BYTE;
+        objectmode: BYTE;
+        curEntry: WORD;
+        numEntries: WORD;
+        mode: WORD;
+        unused: BYTE;
+        direction: BYTE;
+        wildCard: ShortStringPtr;
+      END;
+
+    VersionType = 
+      ARRAY [1..3] OF BYTE;
+
+    FileDescriptor = RECORD
+      fileLength:       LONGINT;
+      fileNameLength:	  BYTE;
+      fName:	           ARRAY [1..maxFileNameLen] OF CHAR;
+      creationDate:	    ARRAY [1..dateLen] OF BYTE;
+      dirFileID:	       WORD;          
+      lastModifiedDate:	ARRAY [1..dateLen] OF BYTE;
+      expirationDate:	  ARRAY [1..dateLen] OF BYTE;
+      machineID:	       LONGINT;
+      compressed:	      BYTE;
+      encrypted:	       BOOLEAN;
+      protected:	       BOOLEAN;
+      passWord:	        ARRAY [1..passWordLen] OF CHAR;
+      dirLength:	       LONGINT;
+      dirCount:	        WORD;
+      GRiDWrite1:	      ARRAY [1..GRiDWrite1Len] OF BYTE;
+      machineID2:	      BOOLEAN;
+      uses8087:	        BOOLEAN;
+      version1:	        BYTE;
+      version2:	        BYTE;
+      machineID3:	      LONGINT;
+      GRiDWrite2:	      ARRAY [1..GRiDWrite2Len] OF BYTE;
+      version3:         BYTE;
+      propertyLength:   LONGINT;
+      rom:              BOOLEAN;
+      romId:            WORD;
+      mode:             WORD;
+      rainyDayBytes:	   ARRAY [1..RDBSLen] OF BYTE;
+      userDefinedBytes:	ARRAY [1..UDBSLen] OF BYTE;
+      GRiDCentralUse:   WORD;
+      END;
+
+        

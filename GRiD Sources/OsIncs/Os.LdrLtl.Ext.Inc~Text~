@@ -1,0 +1,30 @@
+
+/* this is os.ldrltl.ext.inc */
+
+ProcessLTLModule: PROCEDURE EXTERNAL;
+  END;
+
+ProcessMachineID: PROCEDURE EXTERNAL;
+  END;
+
+ProcessPUBDEF: PROCEDURE EXTERNAL;
+  END;
+
+ProcessEXTDEF: PROCEDURE EXTERNAL;
+  END;
+
+ProcessSEGDEF: PROCEDURE EXTERNAL;
+  END;
+
+ProcessGRPDEF: PROCEDURE EXTERNAL;
+  END;
+
+LTLGroup: PROCEDURE EXTERNAL;
+  END;
+
+MaxMinAlloc: PROC (allocMax, maxLength, allocMin, minLength) WORD EXTERNAL;
+  DCL allocMax  BYTE;
+  DCL allocMin  BYTE;
+  DCL maxLength WORD;
+  DCL minLength WORD;
+  END;

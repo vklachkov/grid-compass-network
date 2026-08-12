@@ -1,0 +1,205 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - GENERAL ROUTINES, Part 3')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*                 COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module: GeneralModule3    8/13/83
+*
+*    contains: GenGiveToDlc, GenMachineFailure, 
+*              GenReturnUserRequest, GenSystemFailure.
+*              (These routines are shared by Pdl and Gdl)
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GeneralModule3: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`commonDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcFrameDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`machineDefines.inc~Text~)
+$INCLUDE (``ccIncs`UtlModule.inc~Text~)
+$INCLUDE (``ccIncs`DlcDataModule.inc~Text~)
+$INCLUDE (``osIncs`os.error.inc~Text~)
+$INCLUDE (``Incs`osPlmProcs.inc~Text~)
+$INCLUDE (``Incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+DCL systemFailureReason WORD INITIAL (0);
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenGiveToDlc: PROCEDURE(linkNumber, msgType, pDlCB, pError) CLEAN;
+DCL linkNumber 			BYTE,
+	msgType				WORD,
+	pDlCB				SELECTOR,
+	pError				PTR;
+DCL error				BASED pError WORD;
+DCL dlCB				BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+  	IF DlcProcessId(linkNumber) <> null THEN
+		CALL OsSend(DlcProcessId(linkNumber), msgType, 0,
+											BUILD$PTR(pDlCB, 0), pError);
+	ELSE
+		error = eDlcNotInitialized;
+ 
+END GenGiveToDlc;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenReturnUserRequest: PROCEDURE(pMachine, pDlCB, returnError) CLEAN;
+DCL pMachine			SELECTOR;
+DCL pDlCB				SELECTOR;
+DCL returnError			WORD;
+
+/*-------------------------------------------------------------------------
+
+ purpose:   This procedure will complete a user request control
+      block.
+
+ Inputs:  pMachine - SELECTOR to state machine control block.
+      pDlCB - selector to the the user request control block.
+      returnError - the error code to be returned.
+
+ sideEffects: User request is returned.
+
+ Algorithm:
+  1) set message control block format to response.
+  2) store status and reason in message control block.
+  3) if message is of type user send or receive, then 
+   1) if machine PTR is null then free control block.
+   2) else OsSend to the user process Id associated with this 
+    link connection.
+  4) else if response process Id in control block is same as caller
+    then free control block. (this avoids possible endless loops).
+  5) else OsSend to the response Process Id stored in the message
+   control block.
+
+-------------------------------------------------------------------------*/
+
+DCL machine				BASED pMachine generalMachineType;
+DCL dlcb				BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+												DlCBioDataParams);
+	
+	/* used to define response Pid field, which is
+		the same for all none data carrying messages */
+     
+DCL (msgType, returnPid, note, error) WORD;
+
+	IF pDlCB = null THEN RETURN;
+
+	returnPid = null;
+
+	/* set up message type and response bit */
+	msgType = dlCB.msgFormat AND msgDlcFormatMask;
+	dlCB.msgFormat = msgType OR msgResponse;
+
+	/* if user data send/recv request the count it */
+	IF ((msgType = dlcSend) OR (msgType = dlcReceive)) THEN
+	DO;
+		IF msgType = dlcSend THEN
+			machine.sendCounter = machine.SendCounter + 1;
+		ELSE 
+			machine.recvCounter = machine.recvCounter + 1;
+		/* must return send and recv requests to the machine user pid */
+    	IF pMachine <> null THEN
+			returnPid = machine.UserPid;
+	END;
+	ELSE
+		IF dlCB.sourcePID = OsWhoAmI THEN 
+		DO;
+			/* prevent infinite loops, should they accur */
+			pDlCB = UtlFreeCB(pDlCB);
+			CALL OsLogError(2, eCcInternalError, eInvalidCB, @(6,'GenFre'));
+			RETURN;
+		END;
+	ELSE
+		returnPid = dlCB.sourcePid;
+
+	IF (((returnError = 0) AND (dlCB.freeDisp = freeMsgIfNoError)) OR 
+						(dlCB.freeDisp = freeMsg)) OR (returnPid = null) THEN
+	DO;
+		IF (dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr THEN
+			CALL OsFree(BUILD$PTR(SELECTOR$OF(dlCB.pBuffer), 0), @error);
+		pDlCB = UtlFreeCB(pDlCB);
+	END;
+	ELSE
+		DO;
+			dlCB.ipcCode = msgNetworkIo;
+			error = eOutOfMem;
+			DO WHILE error = eOutOfMem;
+				CALL OsSend(returnPid, dlCB.msgFormat, returnError,
+											BUILD$PTR(pDlCB, 0), @error);
+				IF error <> 0 THEN 
+				DO;
+					CALL OsLogError(2, error, (SHL(DOUBLE(dlCB.linkNumber), 8)
+										+ dlCB.stationNumber), @(6, 'dlcMem'));
+					CALL OsDelay(50);
+				END;
+			END;
+		END;
+
+END GenReturnUserRequest;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenMachineFailure: PROCEDURE (pMachine, pDlCB, failureNumber) CLEAN;
+DCL pMachine			SELECTOR,
+	pDlCB				SELECTOR,
+	failureNumber		BYTE;
+
+/*-------------------------------------------------------------------------
+
+ Purpose:   This procedure will log the failurenumber and determine
+      whether the machine should continue to operate.
+
+ Inputs:  pMachine - SELECTOR to the state machine control block,
+         may be null.
+      pDlCB - selector of the data link message control block,
+         may be null.
+      failurenumber - reason for the machine failure.
+
+ SideEffects: may cause the termination of the state machine operation.
+
+-------------------------------------------------------------------------*/
+
+DCL machine				BASED pMachine dlcPrimaryMachineType,
+	dlCB				BASED pDlCB STRUCTURE (DlCBgendescriptor),
+	dataDlCB			BASED pDlCB STRUCTURE (DlCBgendescriptor,
+														DlCBioDataParams);
+
+	CALL OsLogError(2, failureNumber, (DOUBLE(machine.stationNumber) OR
+						SHL(DOUBLE(machine.linkNumber), 8)), @(6,'DlcDie'));
+
+
+END GenMachineFailure;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenSystemFailure: PROCEDURE(failureNumber) CLEAN;
+DCL failureNumber			BYTE;
+
+/*-------------------------------------------------------------------------
+
+ purpose:   THis is a fatal error routine.
+
+ Inputs:  failureNumber - internal failure reason value.
+
+ Algorithm:
+   1) Set system failure reason to the failure number.
+   2) Log error.
+
+-------------------------------------------------------------------------*/
+
+	systemFailureReason = failureNumber;
+	CALL OsLogError(2, eCcInternalError, failureNumber, @(6, 'dlcErr'));
+
+END GenSystemFailure;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END GeneralModule3;

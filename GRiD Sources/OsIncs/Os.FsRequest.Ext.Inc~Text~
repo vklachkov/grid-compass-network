@@ -1,0 +1,88 @@
+/* this is os.fsrequest.ext.inc */
+
+ValidConnection: PROCEDURE (conn) BOOLEAN EXTERNAL;
+    DCL conn ConnectionType;
+    END;
+
+OsDelete : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pError PTR;
+    END;
+
+OsRename : PROCEDURE (conn, pNewName, pError) EXTERNAL;
+    DCL conn        ConnectionType;
+    DCL pNewName    PTR;
+    DCL pError      PTR;
+    END;
+
+OsGetStatus : PROCEDURE (conn, pInfo, count, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL count WORD;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsSetStatus : PROCEDURE (conn, pInfo, count, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL count WORD;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsOpen : PROCEDURE (conn, numbuf, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL numbuf BYTE;
+    DCL pError PTR;
+    END;
+
+OsClose : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pError PTR;
+    END;
+
+OsRead : PROCEDURE (conn, pBuffer, count, pError) WORD EXTERNAL;
+    DCL conn ConnectionType;
+    DCL count WORD;
+    DCL (pError, pBuffer) PTR;
+    END;
+
+OsWrite : PROCEDURE (conn, pBuffer, count, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL count WORD;
+    DCL (pError, pBuffer) PTR;
+    END;
+
+OsSeek : PROCEDURE (conn, mode, count, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL count DWORD;
+    DCL mode BYTE;
+    DCL pError PTR;
+    END;
+
+OsTruncate : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pError PTR;
+    END;
+
+OsDetach : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pError PTR;
+    END;
+
+OsReadDescriptor : PROCEDURE (conn, pInfo, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsWriteDescriptor : PROCEDURE (conn, pInfo, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsFlushAllBuffers : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn ConnectionType;
+    DCL pError PTR;
+    END;
+
+OsAttach : PROCEDURE (pPathName, mode, pPass, access, pError) ConnectionType EXTERNAL;
+    DCL (pPathName, pPass, pError)   PTR;
+    DCL (mode, access)               BYTE;
+    END;

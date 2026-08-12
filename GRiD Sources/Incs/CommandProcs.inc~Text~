@@ -1,0 +1,19 @@
+{ CommandProcs.Inc  Updated 10/23/84 }
+
+PUBLIC Common;
+  PROCEDURE CmdErase(conn : Word;
+                      msg : MessagePtr;  
+                VAR error : Word);
+
+  PROCEDURE CmdMediaUsage(pathName : StringPtr;
+                      initialUsage : LongInt;
+                               msg : messagePtr;
+                       VAR refresh : Rectangle;
+                         VAR error : Word);
+
+  PROCEDURE CmdProperties(pathName : StringPtr;
+                               msg : MessagePtr;
+                       VAR refresh : Rectangle;
+                         VAR error : Word);
+
+  FUNCTION GetVersionString(PID : WORD) : StringPtr;

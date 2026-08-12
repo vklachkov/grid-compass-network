@@ -1,0 +1,21 @@
+{ CommonPropsProcs.Inc  Updated 10/23/84 }
+
+PUBLIC Common;
+
+PROCEDURE FinalizePropertiesLength(conxn: Word; VAR error: WORD);
+
+PROCEDURE GetPropertiesConnection(path: StringPtr;
+		VAR fileConxn: Word;
+		VAR propertiesLength: Longint;
+		VAR error: word);
+
+FUNCTION AuthorOfThisFile(conxn: Word; VAR authorProductCode: Word;
+		VAR versionOfThisFile: Byte; VAR error: WORD): AuthorType;
+
+FUNCTION GetNextRecord(conxn: Word;
+			VAR gRecord: GeneralRecordPointer;
+			VAR gRecordLength: Word;
+			thisIsTheAuthorCalling: Boolean;
+			VAR error: WORD): Boolean;
+
+PROCEDURE SkipProperties(conxn: Word; VAR error: Word);

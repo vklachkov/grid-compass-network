@@ -1,0 +1,125 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Function Codes 
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL VIPC_Msg					LIT	'0',
+	VIPC_MsgArrived				LIT	'0',
+
+	VIPC_ConnectRequest			LIT	'1',	/* Client Layer to VIPC */
+	VIPC_ConnectConfirm			LIT	'2',	/* response from VIPC */
+
+	VIPC_ConnectArrived			LIT	'3',	/* VIPC to client layer */
+	VIPC_ConnectResponse		LIT	'4',	/* response from Client layer */
+
+	VIPC_DisconnectRequest		LIT	'5',	/* Client Layer to VIPC */
+	VIPC_DisConnectConfirm		LIT	'6',	/* response from VIPC */
+
+	VIPC_DisconnectArrived		LIT	'7',	/* VIPC to client layer */
+	VIPC_DisconnectResponse		LIT	'8',	/* response from Client layer */
+
+	VIPC_SignonRequest			LIT	'9',	/* Client layer  to VIPC */
+	VIPC_SignonResponse			LIT	'10',	/* response from VIPC */
+
+	VIPC_ValidateUser			LIT	'11',	/* VIPC to Admin */
+	VIPC_ValidateResponse		LIT	'12',	/* Response from admin */
+
+	VIPC_UserSignedOff			LIT	'13',	/* VIPC to Admin */
+
+	VIPC_SetStatusRequest		LIT	'15',	/* Client layer to VIPC */
+	VIPC_SetStatusResponse		LIT	'16',	/* response from VIPC */
+
+	VIPC_GetStatusRequest		LIT	'17',	/* Client layer to VIPC */
+	VIPC_GetStatusResponse		LIT	'18',	/* response from VIPC */
+
+	VIPC_SignOffRequest			LIT	'19',	/* Client layer to VIPC */
+	VIPC_SignOffResponse		LIT	'20',	/* response from VIPC */
+
+	VIPC_TerminateRequest		LIT	'21',	/* Client layer to VIPC */
+	VIPC_TerminateResponse		LIT	'22',	/* response from VIPC */
+
+	VIPC_SetConnStatusRequest 	LIT '23',	/* Client layer to VIPC */
+	VIPC_SetConnStatusResponse	LIT '24';	/* response from VIPC */
+
+DCL VIPC_ConnectMode			LIT '10';
+DCL VIPC_FunctionClass			LIT	'5000h';
+DCL VIPC_OldFunctionClass		LIT	'50000';
+
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Access/SetConnStatus property types
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL	VIPC_rcvProcessIdProp		LIT	'1',
+	VIPC_serverNameProp			LIT	'2',
+	VIPC_linkNameProp			LIT	'3',
+	VIPC_cardNumProp			LIT	'4',
+	VIPC_portNumProp			LIT	'5',
+	VIPC_stationNumProp			LIT	'6',
+	VIPC_dialTypeProp			LIT	'7',
+	VIPC_baudRateProp			LIT	'9',
+	VIPC_protocolTypeProp		LIT	'10',
+	VIPC_phoneNumProp			LIT	'101';
+
+$EJECT
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Header Types.
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL IpcHeader	LIT '
+		ipcFunctionCode	BYTE,
+		deleteSource	BOOLEAN,
+		RESERVED		(4) BYTE,
+		sourceProcID	WORD,
+		destProcID		WORD,
+		class			WORD,
+		note			WORD,
+		length			WORD';
+
+DCL IpcHeaderLength			LIT	'16';
+DCL MaxVipcMessageLength	LIT '514';
+DCL MaxVipcBufferLength		LIT	'530';
+
+DCL VipcMessageType	LIT 
+		'STRUCTURE (
+			ipcHeader,
+			msgData		(1) BYTE)';
+
+DCL VipcConnectArrivedType	LIT 'STRUCTURE (
+			ipcHeader,
+			userClass		WORD,
+			propertyList 	(1) BYTE)';
+
+DCL VipcConnectResponseType LIT 'STRUCTURE (
+			ipcHeader,
+			status			WORD)';
+
+DCL VipcConnectRequestType LIT 'STRUCTURE (
+			ipcHeader,
+			pathNameLen		BYTE,
+			pathNameChars	(1) BYTE)';
+
+DCL VipcConnectConfirmType LIT 'STRUCTURE (
+			ipcHeader,
+			status			WORD)';
+
+DCL VipcDisconnectArrivedType LIT 'STRUCTURE (
+			ipcHeader,
+			reason			WORD)';
+
+DCL VipcDisconnectResponseType LIT 'STRUCTURE (
+			ipcHeader)';
+
+DCL VipcDisconnectRequestType LIT 'STRUCTURE (
+			ipcHeader,
+			reason			WORD)';
+
+DCL VipcDisconnectConfirmType LIT 'STRUCTURE (
+			ipcHeader,
+			status			WORD)';
+
+DCL VipcSetStatusRequestType LIT 'STRUCTURE (
+			ipcHeader,
+			propertyList	(1) BYTE)';
+
+DCL VipcSetStatusResponseType LIT 'STRUCTURE (
+			ipcHeader,
+			status			WORD)';

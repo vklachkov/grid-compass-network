@@ -1,0 +1,36 @@
+
+/* This is Cp.MemMgr.Ext.Inc */
+
+CpFree: PROCEDURE (pBlock, pError) EXTERNAL;
+    DCL (pBlock, pError) PTR;
+    END;
+
+CpAllocate: PROCEDURE (length, pError) PTR EXTERNAL;
+    DCL length WORD;
+    DCL pError PTR;
+    END;
+
+IntAllocate: PROCEDURE (pid, length, pError) PTR EXTERNAL;
+    DCL pid    PidType;
+    DCL length WORD;
+    DCL pError PTR;
+    END;
+
+CpGetSize: PROCEDURE (pBlock, pError) WORD EXTERNAL;
+    DCL (pBlock, pError) PTR;
+    END;
+ 
+CpFreeTaskMem: PROCEDURE (PID) EXTERNAL;
+    DCL PID PIDType;
+    END;
+
+CpMemInit: PROCEDURE (initSeg, numBlk) EXTERNAL;
+    DCL initSeg SELECTOR;
+    DCL numBlk WORD;
+    END;
+
+CpGetMemStatus: PROCEDURE (pid, pMemStatus, pError) EXTERNAL;
+    DCL pid          PidType;
+    DCL pMemStatus   PTR;
+    DCL pError       PTR;
+    END;

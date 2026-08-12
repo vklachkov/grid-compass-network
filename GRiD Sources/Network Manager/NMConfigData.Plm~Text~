@@ -1,0 +1,396 @@
+$COMPACT
+$TITLE('Network Manager Config data')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Config data	-	1/3/86						*/
+/*																			*/
+/****************************************************************************/
+
+NMConfigData: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`DataForms.PlmTypes.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$RESTORE
+
+/* Data structures for remote forms and menus. */
+
+/* Tokens. */
+
+DCL	passwordToken		(*) BYTE PUB INITIAL(8, 'Password'),
+	optionsToken		(*) BYTE PUB INITIAL(7, 'Options'),
+	cardToken			(*) BYTE PUB INITIAL(4, 'Card'),
+	portToken			(*) BYTE PUB INITIAL(4, 'Port'),
+	serverToken			(*) BYTE PUB INITIAL(6, 'Server'),
+	connectionToken		(*) BYTE PUB INITIAL(10, 'Connection'),
+	phonelinkToken		(*) BYTE PUB INITIAL(9, 'PhoneLink'),
+	gridlinkToken		(*) BYTE PUB INITIAL(8, 'GRiDLink'),
+	fiberlinkToken		(*) BYTE PUB INITIAL(13, 'OpticGRiDLink'),
+	emptyToken			(*) BYTE PUB INITIAL(5, 'Empty'),
+	otherToken			(*) BYTE PUB INITIAL(5, 'Other'),
+	networkToken		(*) BYTE PUB INITIAL(7, 'Network'),
+	publicToken			(*) BYTE PUB INITIAL(6, 'Public'),
+	privateToken		(*) BYTE PUB INITIAL(7, 'Private'),
+	leasedToken			(*) BYTE PUB INITIAL(6, 'Leased');
+
+DCL	tokenStr			(maxTokenStrLength) BYTE PUB,
+	token				stringType PUB AT (@tokenStr),
+	subTokenStr			(maxTokenStrLength) BYTE PUB,
+	subToken			stringType PUB AT (@subTokenStr);
+
+/* The password form. */
+
+DCL	passwordFormLabels		(*) BYTE PUB INITIAL('%Password~|'),
+	passwordForm			STRUCTURE
+	(
+	 form					POINTER,
+	 numItems				WORD,
+	 labelsAndChoices		POINTER,
+	 choiceLines			WORD,
+	 rows					(passwordFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, passwordFormItemCount, @passwordFormLabels, 1);
+
+DCL	passwordRow			dataRowStringType PUB AT (@passwordForm.rows(0));
+
+DCL	passwordStr			(passwordStrLength) BYTE PUB,
+	password			stringType PUB AT (@passwordStr);
+
+/* The main menu */
+
+DCL	mainMenu		(*) BYTE PUB INITIAL(
+					'                  Configure communications~',
+					'                  Define a GRiD Server~',
+					'                  Customize connections~',
+					'                  Change administration password~',
+					'Erase    CODE-E   Erase a GRiD Server definition~',
+					'Options  CODE-O   GRiDNetwork Manager options~',
+					'Transfer CODE-T   Read, write, save~',
+					'Quit     CODE-Q   Exit and save all changes~',
+					'Cancel   CODE-ESC Exit without saving changes~|');
+
+/* The connection menu */
+
+DCL	connMenu		(*) BYTE PUB INITIAL(
+					'Add a connection to a GRiD Server~',
+					'Modify a connection to a GRiD Server~',
+					'Modify an inconsistent connection~',
+					'Erase a connection to a GRiD Server~',
+					'Erase an inconsistent connection~|');
+
+/* Menu for selecting a card to configure. */
+
+DCL	cardMenuItems	(512) BYTE PUB;
+
+DCL	cardCmdMenu		(*) BYTE PUB INITIAL(
+						'Select port protocols~',
+						'Configure port 0~',
+						'Configure port 1~',
+						'Configure port 2~',
+						'Configure port 3~|');
+
+/* Form for entering protocol types for each port on a card. */
+
+DCL	protFormLabels		(*) BYTE PUB INITIAL(
+					'?Port 0 protocol~None~PhoneLink~GRiDLink~OpticGRiDLink~|',
+					'?Port 1 protocol~None~PhoneLink~GRiDLink~OpticGRiDLink~|',
+					'?Port 2 protocol~None~PhoneLink~GRiDLink~OpticGRiDLink~|',
+					'?Port 3 protocol~None~PhoneLink~GRiDLink~OpticGRiDLink~|');
+
+DCL	protForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(protFormRowSize) BYTE
+	)	PUB INITIAL (nullPtr, protFormItemCount, @protFormLabels, 1);
+
+DCL	protocolRow		(4)	dataRowType PUB AT (@protForm.rows(0));
+
+/* Form for port parameters. */
+
+DCL	portInfoFormLabels		(*) BYTE PUB INITIAL(
+				'?PhoneLink type~Originate and answer~Originate only~',
+																'Answer only~|',
+				'?Line type~Switched~Leased~|',
+				'#Baud rate~Number(100-19200)~300~1200~1200/2400~2400~4800~',
+									'7200~9600~14400~16800~19200~External~|',
+				'?Modem type~Hayes Smartmodem 1200~Hayes Smartmodem 2400~',
+				/*- next line changed on 11/4/88 for FBI/Hughes by Will Strang*/
+							'USRobotics 2400~Other~Hayes Smartmodem 9600~|',
+				'$External access code~Access code~',
+										'None required (line is external)~|',
+				'?Dial type~Pulse~Touch-Tone~|',
+				'?Auto dial~Yes~No~|');
+
+DCL	portInfoForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(portInfoFormRowSize) BYTE
+	)	PUB INITIAL (nullPtr, portInfoFormItemCount, @portInfoFormLabels, 1);
+
+DCL	phonelinkTypeRow	dataRowType PUB AT (@portInfoForm.rows(0)),
+	lineTypeRow			dataRowType PUB AT (@portInfoForm.rows(14)),
+	baudRateRow			dataRowType PUB AT (@portInfoForm.rows(28)),
+	modemTypeRow		dataRowType PUB AT (@portInfoForm.rows(42)),
+	prefixRow			dataRowStringType PUB AT (@portInfoForm.rows(56)),
+	dialingModeRow		dataRowType PUB AT (@portInfoForm.rows(70)),
+	dialTypeRow			dataRowType PUB AT (@portInfoForm.rows(84));
+
+DCL	prefixStr			(prefixStrLength) BYTE PUB,
+	prefix				stringType PUB AT (@prefixStr);
+
+/* Form for entering remote system name and network type. */
+
+DCL	remSystemForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(remSystemFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, remSystemFormItemCount, nullPtr, 1);
+
+DCL	remSystemNameRow	dataRowStringType PUB AT (@remSystemForm.rows(0)),
+	sysNetworkTypeRow	dataRowType PUB AT (@remSystemForm.rows(14));
+
+DCL	remSystemNameStr	(serverNameStrLength) BYTE PUB,
+	remSystemName		stringType PUB AT (@remSystemNameStr);
+
+DCL	curSystemChoice		WORD PUB,	/* Current system selection. */
+	pCurSystem			POINTER PUB;
+
+/* For for entering comment. */
+
+DCL commentLabels		(*) BYTE PUB INITIAL('$Comment~|');
+
+DCL	commentForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(commentFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, commentFormItemCount, @commentLabels, 1);
+
+DCL	commentRow			dataRowStringType PUB AT (@commentForm.rows(0));
+
+DCL	commentStr			(commentStrLength) BYTE PUB,
+	comment				stringType PUB AT (@commentStr);
+
+/* Form for entering telephone network parameters. */
+
+DCL	netFormLabels		(*) BYTE PUB INITIAL(
+						'$Phone number1~|',
+						'?Baud rate1~300~1200~1200/2400~2400~4800~7200~9600~|',
+						'$Phone number2~|',
+						'?Baud rate2~300~1200~1200/2400~2400~4800~7200~9600~|',
+						'$Phone number3~|',
+						'?Baud rate3~300~1200~1200/2400~2400~4800~7200~9600~|',
+						'$Phone number4~|',
+						'?Baud rate4~300~1200~1200/2400~2400~4800~7200~9600~|');
+
+DCL	netForm				STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(netFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, netFormItemCount, @netFormLabels, 1);
+
+DCL	phoneNumber1Row		dataRowStringType PUB AT (@netForm.rows(0)),
+	baudRate1Row		dataRowType PUB AT (@netForm.rows(14)),
+	phoneNumber2Row		dataRowStringType PUB AT (@netForm.rows(28)),
+	baudRate2Row		dataRowType PUB AT (@netForm.rows(42)),
+	phoneNumber3Row		dataRowStringType PUB AT (@netForm.rows(56)),
+	baudRate3Row		dataRowType PUB AT (@netForm.rows(70)),
+	phoneNumber4Row		dataRowStringType PUB AT (@netForm.rows(84)),
+	baudRate4Row		dataRowType PUB AT (@netForm.rows(98));
+
+DCL	phoneNumber1Str		(phoneNumberStrLength) BYTE PUB,
+	phoneNumber1		stringType PUB AT (@phoneNumber1Str),
+	phoneNumber2Str		(phoneNumberStrLength) BYTE PUB,
+	phoneNumber2		stringType PUB AT (@phoneNumber2Str),
+	phoneNumber3Str		(phoneNumberStrLength) BYTE PUB,
+	phoneNumber3		stringType PUB AT (@phoneNumber3Str),
+	phoneNumber4Str		(phoneNumberStrLength) BYTE PUB,
+	phoneNumber4		stringType PUB AT (@phoneNumber4Str);
+
+/* Form for selecting network type. */
+
+DCL	netTypeFormLabels		(*) BYTE PUB INITIAL
+								('?Network type~Public~Private~Leased~|');
+
+DCL	netTypeForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(netTypeFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, netTypeFormItemCount, @netTypeFormLabels, 1);
+
+DCL netTypeRow			dataRowType PUB AT (@netTypeForm.rows(0));
+
+/* Form for phonelink connection info - the first item is built. */
+
+DCL	connFormLabelsInit			(*) BYTE PUB INITIAL(122,
+								'#Wait for answer~Seconds~|',
+								'?Cost~Low~Medium~High~|',
+								'?Dedicated~Yes~No~|',
+								'?Use any system port~Yes~No~|',
+								'$Connection name~|');
+
+DCL	connFormLabels	(512) BYTE PUB;
+
+DCL	connForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(connFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, connFormItemCount, @connFormLabels, 1);
+
+DCL	phoneNumberRow		dataRowStringType PUB AT (@connForm.rows(0)),
+	waitRow				dataRowType PUB AT (@connForm.rows(14)),
+	costRow				dataRowType PUB AT (@connForm.rows(28)),
+	dedicatedRow		dataRowType PUB AT (@connForm.rows(42)),
+	anyPortRow			dataRowType PUB AT (@connForm.rows(56)),
+	connNameRow			dataRowStringType PUB AT (@connForm.rows(70));
+
+DCL	phoneNumberStr		(phoneNumberStrLength) BYTE PUB,
+	phoneNumber			stringType PUB AT (@phoneNumberStr);
+
+DCL	connNameStr			(connectionNameStrLength) BYTE PUB,
+	connName			stringType PUB AT (@connNameStr);
+
+/* From for leased connections. */
+
+DCL	leasedConnFormLabels	(*) BYTE PUB INITIAL(
+								'#Wait for answer~Seconds~|',
+								'?Cost~Low~Medium~High~|',
+								'?Dedicated~Yes~No~|',
+								'$Connection name~|');
+
+DCL	leasedConnForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(leasedConnFormRowSize) BYTE
+	)
+		PUB INITIAL(nullPtr, leasedConnFormItemCount, @leasedConnFormLabels, 1);
+
+DCL	leasedWaitRow			dataRowType PUB AT (@leasedConnForm.rows(0)),
+	leasedCostRow			dataRowType PUB AT (@leasedConnForm.rows(14)),
+	leasedDedicatedRow		dataRowType PUB AT (@leasedConnForm.rows(28)),
+	leasedConnNameRow		dataRowStringType PUB AT (@leasedConnForm.rows(42));
+
+DCL	leasedConnNameStr		(connectionNameStrLength) BYTE PUB,
+	leasedConnName			stringType PUB AT (@leasedConnNameStr);
+
+/* Form for assigning system ports. */
+
+DCL	sysPortFormLabels	(1024) BYTE PUB;
+
+DCL	sysPortForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(sysPortFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, sysPortFormItemCount, @sysPortFormLabels, 1);
+
+DCL	systemPortRow	(4) dataRowType PUB AT (@sysPortForm.rows(0));
+
+/* Form for selecting a connection to modify/erase. */
+
+DCL	selectConnForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(selectConnFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, selectConnFormItemCount, nullPtr, 1);
+
+DCL	selectConnNameRow		dataRowType PUB AT (@selectConnForm.rows(0));
+
+DCL	pCurConn			POINTER PUB,
+	curConnChoice		WORD PUB;
+
+/* Options form. */
+
+DCL	optionsFormLabels		(*) BYTE PUB INITIAL(
+							'$Local area code~|',
+							'$Long distance access code~|',
+							'#High speed above~100-19200~|',
+							'#Low speed below~100-19200~|',
+							'#Log file size~Number of bytes (in thousands)~|');
+
+DCL	optionsForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(optionsFormRowSize) BYTE
+	)
+		PUB INITIAL (nullPtr, optionsFormItemCount, @optionsFormLabels, 1);
+
+DCL	localAreaCodeRow	dataRowStringType PUB AT (@optionsForm.rows(0)),
+	longDistCodeRow		dataRowStringType PUB AT (@optionsForm.rows(14)),
+	highSpeedRow		dataRowType PUB AT (@optionsForm.rows(28)),
+	mediumSpeedRow		dataRowType PUB AT (@optionsForm.rows(42)),
+	logFileSizeRow		dataRowType PUB AT (@optionsForm.rows(56));
+
+DCL	localAreaCodeStr	(phoneNumberStrLength) BYTE PUB,
+	localAreaCode		stringType PUB AT (@localAreaCodeStr);
+
+DCL	longDistCodeStr		(phoneNumberStrLength) BYTE PUB,
+	longDistCode		stringType PUB AT (@longDistCodeStr);
+
+/* Choices for system ports. */
+
+DCL	plMap				(32) WORD PUB,
+	plPortChoices		(512) BYTE PUB;
+
+/* Mapping from choices to connections/servers */
+
+DCL	sysMap		(250) POINTER PUB;
+
+/* Table of baud rates. */
+
+DCL	baudTable	(*) WORD PUB INITIAL (0, 1200, 300, 1200, 2400, 2400, 4800,
+								7200, 9600, 14400, 16800, 19200, 0, 0FFFFh);
+
+/* Transfer menu. */
+
+DCL	transferMenu	(*) BYTE PUB INITIAL(
+								'Save configuration changes~',
+								'Read server address directory~',
+								'Write server address directory~|');
+
+DCL	dirMenu			(*) BYTE PUB INITIAL(
+								'Public telephone directory~',
+								'Private telephone directory~|');
+
+END NMConfigData;

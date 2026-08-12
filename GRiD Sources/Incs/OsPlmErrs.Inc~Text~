@@ -1,0 +1,89 @@
+/* this is OsPlmErrs.inc */
+
+/* Avoidable conditions (high bit IS on) */
+
+DCL eOverFlow LIT '8001';      /* integer overflow         */
+DCL eZeroDivide LIT '8000';    /* divide by zero           */
+DCL eArrayBounds LIT '8006';   /* bounds check violation   */
+DCL eNDP LIT '8007';           /* 8087 detected error      */
+
+/* Unavoidable conditions (high bit is off) */
+
+/* system errors */
+
+DCL eOK LIT '0';               /* no error                 */
+DCL eInvString LIT '129';      /* invalid string           */
+DCL eNotSupport LIT '35';      /* request not supported    */
+DCL eShare LIT '40';           /* file can't be shared     */
+DCL eAccess LIT '38';          /* file access denied       */
+DCL ePassword LIT '27';        /* password protected       */
+DCL eCheckSum LIT '29';        /* checksum error           */
+DCL eLocked LIT '30';          /* file is locked           */
+DCL eBadPointer LIT '31';      /* bad pointer              */            
+
+/* memory manager errors */
+
+DCL eOutOfMem LIT '2';         /* out of memory            */
+DCL eInvMemBlock LIT '11';     /* invalid memory block     */
+
+/* file system errors	*/
+
+DCL eInvFileID LIT '200';      /* invalid file ID          */
+DCL eInvFileFSN LIT '201';     /* invalid file FSN         */
+DCL eFileNotFound LIT '33';    /* file does not exist      */
+DCL eFileExists LIT '32';      /* file already exists      */
+DCL eDeviceFull LIT '41';      /* device full              */
+DCL eFileNotOpen LIT '205';    /* file not open            */
+DCL eCrossFS LIT '220';        /* cross volume rename      */
+DCL eBadConn LIT '221';        /* bad connection           */
+DCL eOpen LIT '222';           /* file shouldn't be open   */
+DCL eParam LIT '225';          /* bad parameter            */	
+DCL eBadPath LIT '227';        /* syntax error             */
+DCL eTooManyDev LIT '229';     /* too many devices         */
+DCL eDevActive LIT '230';      /* device already active    */
+DCL eDevNotActive LIT '231';   /* device not active        */
+DCL eInvDirectory LIT '232';   /* invalid directory format */
+DCL eInvBitMap LIT '233';      /* invalid bitmap format    */
+DCL eDirNotFound LIT '234';    /* directory not found      */
+      
+/* device driver errors		*/
+
+DCL eInvalidDrive LIT '101';   /* invalid drive            */
+DCL eInvalidSector LIT '102';  /* invalid sector           */
+DCL eCRCData LIT '103';        /* CRC error in data        */
+DCL eRecordNotFound LIT '104'; /* record not found         */
+DCL eCRCID LIT '105';          /* CRC error in ID field    */
+DCL eWriteProtect LIT '106';   /* device write protected   */
+DCL eDevNotReady LIT '107';    /* device not ready         */
+DCL eOther LIT '108';          /* unknown error            */
+
+/* loader errors			*/
+
+DCL eInvRec LIT '300'; 
+DCL eInvFld LIT '301'; 
+DCL eInvMod LIT '302'; 
+DCL eInvBas LIT '303'; 
+DCL eInvFix LIT '304'; 
+
+/* multi-tasking errors			*/
+
+DCL eTooManyProc LIT '250';    /* too many processes       */
+DCL eProcNotExist LIT '251';   /* process does not exist   */
+DCL eSemaNotExist LIT '252';   /* semaphore does not exist */
+DCL eTimeOut LIT '253';        /* request timed out        */
+
+/* modem errors  */
+
+DCL eModNotAnswer LIT '400'; 
+DCL eModTimeOut LIT '401'; 
+DCL eModLossCarrier LIT '402'; 
+DCL eModParity LIT '403'; 
+DCL eModCrc LIT '404'; 
+DCL eModBadLength LIT '405'; 
+
+/* GPIB errors */
+
+DCL eGPIBBus LIT '450'; 
+DCL eGPIBTimeOut LIT '451'; 
+DCL eGPIBNotResp LIT '452'; 
+

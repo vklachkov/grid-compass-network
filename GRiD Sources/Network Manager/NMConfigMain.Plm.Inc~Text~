@@ -1,0 +1,124 @@
+/* External declarations for NMConfigMain.Plm */
+
+InitForms: PROCEDURE EXT;
+END InitForms;
+
+InitConfig: PROCEDURE EXT;
+END InitConfig;
+
+GetTokenType: PROCEDURE(pToken) BYTE EXT;
+DCL	pToken	POINTER;
+END GetTokenType;
+
+ReadPortConfig: PROCEDURE(conn, portIndex, pError) EXT;
+DCL	conn		WORD,
+	portIndex	BYTE,
+	pError		POINTER;
+END ReadPortConfig;
+
+FindFreeServer: PROCEDURE POINTER EXT;
+END FindFreeServer;
+
+FindFreeConnection: PROCEDURE POINTER EXT;
+END FindFreeConnection;
+
+ReadConfigFile: PROCEDURE(logTheError, pError) BOOLEAN EXT;
+DCL	logTheError		BOOLEAN,
+	pError			POINTER;
+END ReadConfigFile;
+
+CreateDefaultConfigInfo: PROCEDURE EXT;
+END CreateDefaultConfigInfo;
+
+InitDefaultNetForm: PROCEDURE EXT;
+END InitDefaultNetForm;
+
+InitDefaultSysPortForm: PROCEDURE(baudChoice, networkType) EXT;
+DCL	baudChoice	BYTE,
+	networkType	BYTE;
+END InitDefaultSysPortForm;
+
+InitDefaultOptionsForm: PROCEDURE EXT;
+END InitDefaultOptionsForm;
+
+InitDefaultConnForm: PROCEDURE(pServer, networkType) POINTER EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END InitDefaultConnForm;
+
+InitDefaultPortForm: PROCEDURE(card) EXT;
+DCL	card	BYTE;
+END InitDefaultPortForm;
+
+InitPasswordForm: PROCEDURE EXT;
+END InitPasswordForm;
+
+InitOptionsForm: PROCEDURE EXT;
+END InitOptionsForm;
+
+InitCardToken: PROCEDURE(cardNum) EXT;
+DCL	cardNum		BYTE;
+END InitCardToken;
+
+InitPortForm: PROCEDURE(cardNum, portNum, pHasForm) EXT;
+DCL	cardNum		BYTE,
+	portNum		BYTE,
+	pHasForm	POINTER;
+END InitPortForm;
+
+InitServerToken: PROCEDURE(pServer) EXT;
+DCL	pServer		POINTER;
+END InitServerToken;
+
+InitNetForm: PROCEDURE(pServer, networkType) EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END InitNetForm;
+
+InitSysPortForm: PROCEDURE(pConn, baudChoice) EXT;
+DCL	pConn		POINTER,
+	baudChoice	BYTE;
+END InitSysPortForm;
+
+InitLeasedSysPortForm: PROCEDURE(pServer) EXT;
+DCL	pServer		POINTER;
+END InitLeasedSysPortForm;
+
+InitConnectionForm: PROCEDURE(pConn) POINTER EXT;
+DCL	pConn			POINTER;
+END InitConnectionForm;
+
+CopyNetForm: PROCEDURE(pServer, networkType) EXT;
+DCL	pServer		POINTER,
+	networktype	BYTE;
+END CopyNetForm;
+
+CopyOptionsForm: PROCEDURE EXT;
+END CopyOptionsForm;
+
+CopyConnForm: PROCEDURE(pConn, pServer, networkType) EXT;
+DCL	pConn		POINTER,
+	pServer		POINTER,
+	networkType	BYTE;
+END CopyConnForm;
+
+CopySysPortForm: PROCEDURE(pConn) EXT;
+DCL	pConn		POINTER;
+END CopySysPortForm;
+
+CopyPortForm: PROCEDURE(portIndex) EXT;
+DCL	portIndex	BYTE;
+END CopyPortForm;
+
+CopyPortFormToSave: PROCEDURE(portIndex) EXT;
+DCL	portIndex	BYTE;
+END CopyPortFormToSave;
+
+CreateConfigFile: PROCEDURE(pError) EXT;
+DCL	pError		POINTER;
+END CreateConfigFile;
+
+CustomizeConnections: PROCEDURE(pCh, pError) EXT;
+DCL	pCh		POINTER,
+	pError	POINTER;
+END CustomizeConnections;

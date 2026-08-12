@@ -1,0 +1,114 @@
+/*	User message includes	-	Jan 2, 1986	*/
+
+/* Message definitions for application interface. */
+
+DCL	nmUserClass				LIT	'5400h',	/* User interface class. */
+	nmIpcClass				LIT	'5401h',	/* Ipc interface class. */
+	nmUserFunctionCode		LIT	'90',		/* Function code for users. */
+	nmIpcActivateLink		LIT	'91',		/* Activate link function code. */
+	nmIpcLinkActivated		LIT	'92',		/* Activated link function code. */
+	nmIpcLinkDeactivated	LIT	'93',		/* Deactivated link code. */
+	msgHdrSize				LIT	'16',		/* Credit fields not included. */
+	msgCreditSize			LIT	'4',
+	cmdAllocateLink			LIT	'1',
+	cmdFreeLink				LIT	'2',
+	cmdGetRemoteSystemNames	LIT	'3',
+	cmdAllocatePort			LIT	'4',
+	cmdFreePort				LIT	'5',
+	cmdGetCardStatus		LIT	'6',
+	cmdLinkActivated		LIT	'7',
+	cmdLinkDeactivated		LIT	'8',
+	cmdErrorMessage			LIT	'9';
+
+/* User messages. */
+
+DCL	ipcMsgHdr	LIT
+		'functionCode BYTE, toBeFreed BYTE, reserved DWORD, sourcePid WORD,
+		destPid WORD, class WORD, cmd WORD, length WORD';
+
+DCL	msgHeader	LIT
+		'ipcMsgHdr, ctrl BYTE, newCredits BYTE, status WORD';
+
+DCL	stdMessage	LIT 'STRUCTURE (msgHeader)';
+
+DCL	msgAllocateLinkReq			LIT
+		'STRUCTURE (msgHeader, prop (1) BYTE)',
+	msgAllocateLinkRsp			LIT
+		'STRUCTURE (msgHeader, error WORD, prop (1) BYTE)';
+
+DCL	msgFreeLinkReq				LIT
+		'STRUCTURE (msgHeader, prop (1) BYTE)',
+	msgFreeLinkRsp				LIT
+		'STRUCTURE (msgHeader, error WORD)';
+
+DCL	msgGetRemoteSystemNamesReq	LIT
+		'STRUCTURE (msgHeader, connOnly BOOLEAN)',
+	msgGetRemoteSystemNamesRsp	LIT
+		'STRUCTURE (msgHeader, error WORD, lastMsg BOOLEAN, prop (1) BYTE)';
+
+DCL	msgAllocatePortReq			LIT
+		'STRUCTURE (msgHeader, card BYTE, port BYTE, protocol BYTE)',
+	msgAllocatePortRsp			LIT
+		'STRUCTURE (msgHeader, error WORD)';
+
+DCL	msgFreePortReq				LIT
+		'STRUCTURE (msgHeader, card BYTE, port BYTE)',
+	msgFreePortRsp				LIT
+		'STRUCTURE (msgHeader, error WORD)';
+
+DCL	msgGetCardStatusReq			LIT
+		'STRUCTURE (msgHeader, prop (1) BYTE)',
+	msgGetCardStatusRsp			LIT
+		'STRUCTURE (msgHeader, error WORD, configured BOOLEAN,
+		protocol (4) BYTE)';
+
+DCL	msgBadReq					LIT
+		'STRUCTURE (msgHeader)',
+	msgBadRsp					LIT
+		'STRUCTURE (msgHeader, error WORD)';
+
+
+/* Ipc messages. */
+
+/* This message has the same structure as the active connect dlCB. */
+DCL	msgActivateLink				LIT
+		'STRUCTURE (ipcMsgHdr, linkNumber BYTE, stationNumber BYTE,
+		userTimeout DWORD, activeConnect BOOLEAN,
+		disconnectAfter DWORD, waitForAnswer BYTE,
+		linkSpeed WORD, phoneNumber (1) BYTE)';
+
+DCL	msgLinkActivated			LIT
+		'STRUCTURE (ipcMsgHdr, linkNumber BYTE, stationNumber BYTE,
+		cardNumber BYTE, status WORD)';
+
+DCL	msgLinkDeactivated			LIT
+		'STRUCTURE (ipcMsgHdr, linkNumber BYTE, stationNumber BYTE,
+		cardNumber BYTE)';
+
+/* Network manager errors. */
+
+DCL	eNMBadProperty					LIT	'1610',
+	eNMAllPortsNotSpecified			LIT	'1611',
+	eNMIllegalServerName			LIT	'1612',
+	eNMTooManyServers				LIT	'1613',
+	eNMTooManyConnections			LIT	'1614',
+	eNMProtocolNotSupported			LIT	'1615',
+	eNMNoServerSpecified			LIT	'1616',
+	eNMCommCardNotPresent			LIT	'1617',
+	eNMIllegalProtocolCombination	LIT	'1618',
+	eNMNotACommCard					LIT	'1619',
+	eNMIpcFailure					LIT	'1620',
+	eNMConfigInProgress				LIT	'1621',
+	eNMUnknownCommand				LIT	'1622',
+	eNMIllegalConnectionName		LIT	'1623',
+	eNMIllegalCardProperty			LIT	'1624',
+	eNMIllegalPortProperty			LIT	'1625',
+	eNMPortPropertyNotFound			LIT	'1626',
+	eNMSignOnParms					LIT	'1627',
+	eNMServerNotFound				LIT	'1628',
+	eNMConnectionNotFound			LIT	'1629',
+	eNMResourceNotAvailable			LIT	'1630',
+	eNMCardsNotSpecified			LIT	'1631',
+	eNMConnectionMismatch			LIT	'1632',
+	eNMIllegalDirectory				LIT	'1633',
+	eNMConfigFileNotFound			LIT	'1634';

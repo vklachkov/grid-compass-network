@@ -1,0 +1,58 @@
+/* This is os.task.type.inc */
+
+/* constants */
+
+DCL nullProcessPid LIT '0fffeh';
+DCL roundRobin LIT '0ffffh';      /* try round robin scheduling */
+DCL goodbye LIT '0fffeh';         /* this process is begin deleted */
+DCL signalled LIT '0ffffh';       /* semaphore has been signalled */
+DCL semaphoreIdCode LIT '5a5bh';
+DCL processIdCode LIT '0a5b5h';
+DCL initialFlagState LIT '0f246h';
+
+/* state constants */
+
+/* note: wait states = normal state + 10h */
+
+DCL timedMask LIT '0fh';
+
+DCL readyState LIT '0';
+DCL timedWait LIT '10h';
+DCL messageWait LIT '2';
+DCL timedMessageWait LIT '12h';
+DCL semaphoreWait LIT '3';
+DCL timedSemaphoreWait LIT '13h';
+
+DCL loadedPackage LIT '4';
+DCL debugSuspendedState LIT '5';
+
+DCL parentPidInScb LIT '6';
+
+DCL SCBType LIT 'STRUCTURE
+    (QElementPrefix,
+    parentPID PIDType,
+    busy PIDType,
+    note WORD,
+    IdCode WORD,
+    count WORD)';
+    
+DCL MCBType LIT 'STRUCTURE
+    (QElementPrefix,
+    note WORD,
+    messageType WORD,
+    pMessage PTR,
+    sourcePID PIDType)';
+
+DCL RegTableType LIT 'STRUCTURE
+   (bp WORD,
+    kip WORD,
+    ds SELECTOR,
+    es SELECTOR,
+    ip WORD,
+    cs SELECTOR,
+    fl WORD,
+    slot WORD)';
+
+/* this is a picture of a suspended process stack */
+/* except for the slot - it is actually moved to the */
+/* front of the regTable on task switches */

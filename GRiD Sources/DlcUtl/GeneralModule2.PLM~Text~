@@ -1,0 +1,273 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - GENERAL ROUTINES, Part 2')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*                 COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module: GeneralModule2    1/28/83
+*
+*    contains: GenDeferEvent, GenExecuteMachine, 
+*              GenIsFlushDone, GenSendShortFrame.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GeneralModule2: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`commonDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcFrameDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`machineDefines.inc~Text~)
+$INCLUDE (``ccIncs`MacDefines.inc~Text~)
+$INCLUDE (``ccIncs`MemoryDefines.inc~Text~)
+$INCLUDE (``ccIncs`MacModule.inc~Text~)
+$INCLUDE (``ccIncs`UtlModule.inc~Text~)
+$INCLUDE (``ccIncs`TimerModule.inc~Text~)
+$INCLUDE (``ccIncs`GeneralModule1.inc~Text~)
+$INCLUDE (``ccIncs`GeneralModule3.inc~Text~)
+$INCLUDE (``ccIncs`GlobalDataModule.inc~Text~)
+$INCLUDE (``incs`osPlmProcs.inc~Text~)
+$INCLUDE (``incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenDeferEvent: PROCEDURE (pMachine, pDlCB) CLEAN;
+	DCL pMachine			SELECTOR;
+	DCL pDlCB				SELECTOR;
+
+/*-------------------------------------------------------------------------
+
+ purpose:   This procedure will allow the current event to be deferred
+      until a later state.
+
+ Inputs:  pMachine - Selector to state machine control block.
+      pDlCB - selector to the the user request control block.
+
+ sideEffects: message control block associated with current event is
+      placed on defer queue, event is stored in link number
+      field. (note: machine parameter is lost. could
+      be a problem??).
+
+ Algorithm:
+
+-------------------------------------------------------------------------*/
+
+DCL machine				BASED pMachine generalMachineType;
+DCL deferDlCB			BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	/* save event and param in temporary fields and place on defer queue */
+	/* zzz are these fields free to be used temporarily??? */
+
+	deferDlCB.spare2 = DOUBLE(machine.event);
+	deferDlCB.reqError = machine.param;
+	CALL UtlPutQ (@machine.deferQhead, pDlCB);
+
+END GenDeferEvent;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenExecuteMachine: PROCEDURE (pMachine, pDlCB) CLEAN;
+DCL pMachine			SELECTOR;
+DCL pDlCB				SELECTOR;
+
+/*-------------------------------------------------------------------------
+
+ purpose:   This procedure will perform the state machine event
+      transition processing. 
+
+ inputs:  pMachine - Selector to the state machine control block.
+           The state machine variables have already
+           been updated for new processing.
+          pDlCB - selector to the dlc message control block which
+           is associated with the current event (may be null).
+ 
+ sideEffects: action caused by event transition is executed,
+           machine state variables are updated.
+
+ algorithm:
+  1) get state list PTR from machine control block.
+  2) get transition list PTR for that state.
+  3) check to see that event is within range of the transition list.
+  4) If event is not in range then set action index to 0.
+  5) else get action index and next state values from transition list.
+  6) get action PTR list from machine control block.
+  7) get action PTR from list using action index.
+  8) call action directly.
+  9) if state has changed then move the defer queue to tail of
+   deferred queue. (this allows defer events to be checked only
+   after the state has changed).
+  10) do internal trace of machine transition.
+  11) if user trace is on the do user trace.
+  12) if event was caused by last action then set up state machine
+    variables and repeat above steps.
+  13) else if deferred event queue is not empty then pop the
+    queue, set up state machine variables and repeat above steps.
+  14) else if user trace is on then do appropriate trace routine.
+    (this will check to see if any of the trace buffer blocks are
+     full and complete them. It is done here so that tracing will
+     have the least amount of impact on system performance.
+
+-------------------------------------------------------------------------*/
+
+DCL dlCB				BASED pDlCB		STRUCTURE (DlCBgenDescriptor);
+DCL deferDlCB			BASED pDlCB		STRUCTURE (DlCBgenDescriptor);
+DCL machine				BASED pMachine	generalMachineType;
+
+DCL stateListPtr		PTR,
+	stateList			BASED stateListPtr	(255) PTR;
+DCL transitionPtr		PTR,
+	transitionTable		BASED transitionPtr	(255) BYTE;
+DCL actionListPtr		PTR,
+	actionList			BASED actionListPtr (255) WORD;
+
+DCL actionPtr WORD;
+DCL tempEvent BYTE;
+
+/*-----------------------------------------------------------------------*/
+
+	/* get pointers to the state transition tables and action vectors */
+	stateListPtr = machine.stateList;
+	actionListPtr =  machine.actionList;
+    
+executeLoop:
+	/* Find action and next state for the newly parsed event */
+
+	transitionPtr = stateList(machine.state);
+	IF ((machine.event >= transitionTable(0))
+       						AND (machine.event <= transitionTable(1))) THEN 
+	DO;
+		/* adjust event index */
+		tempEvent = machine.event - transitionTable(0) + 1;
+		machine.action = transitionTable(tempEvent * 2);
+		machine.nextState = transitionTable((tempEvent*2) + 1);
+	END;
+	ELSE
+		DO;
+			machine.action = 0;				/* set up for system failure */
+			machine.nextState = nsc;		/* dont change state */
+			machine.causedEvent = noCausedEvent;
+		END;
+
+	/* Now get the Procedure entry point for action and call it */
+
+	actionPtr = actionList(machine.action);
+
+	CALL actionPtr (pMachine, pDlCB);
+
+
+	/* If state has changed then concatenate defer Q to deferred Q */
+	IF machine.nextState <> noStateChange THEN
+	DO;
+		CALL UtlConCatQues (@machine.deferredQhead, @machine.deferQhead);
+		machine.state = machine.nextState;
+	END;
+
+	/* Execute caused event, if any */
+	pDlCB = null; /* cant pass PTR to data link CB */
+	IF machine.causedEvent <> noCausedEvent THEN
+	DO;
+		machine.event = machine.causedEvent;
+		machine.param = machine.causedParam;
+		machine.causedEvent = noCausedEvent;
+		machine.causedParam = 0;
+        GOTO executeLoop;
+	END;
+
+	/* Execute deferred event, if any */
+	IF  machine.deferredQhead(0) <> null THEN 
+	DO;
+		pDlCB = UtlPopQ (@machine.deferredQhead);
+		machine.event = LOW(deferDlCB.spare2);
+		machine.param = deferDlCB.reqError;
+		GOTO executeLoop;
+	END;
+
+END GenExecuteMachine;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenIsFlushDone: PROCEDURE(pMachine) BYTE CLEAN;
+DCL pMachine			SELECTOR;
+DCL machine				BASED pMachine dlcPrimaryMachineType;
+
+DCL pDlCB				SELECTOR,
+	dlCB				BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+												DlCBioDataParams);
+DCL pUserDlCB			SELECTOR,
+	userDlCB			BASED pUserDlCB STRUCTURE (DlCBgenDescriptor,
+													DlCBioDataParams);
+
+	/* if mac i/o has been aborted and havn't flushed user i/o yet,
+		then return all user transmit requests, either with eOk
+		if transmitted and acknowledged, else return with error code
+	*/
+	IF ((NOT machine.userFlushed) AND (machine.fioAborted)) THEN
+	DO;
+		DO WHILE (pDlCB := UtlPopQ (@machine.ackedQhead)) <> null;
+			CALL GenReturnUserRequest (pMachine, pDlCB, ok);
+		END;
+		DO WHILE (pDlCB := UtlPopQ (@machine.outStandingQhead)) <> null;
+			CALL GenReturnUserRequest (pMachine, pDlCB,machine.irrecError);
+		END;
+		DO WHILE (pDlCB := UtlPopQ (@machine.sendQhead)) <> null;
+			CALL GenReturnUserRequest (pMachine, pDlCB,machine.irrecError);
+		END;
+	END;
+
+	/* if error not reported to higher level yet, then do this */
+	IF (NOT machine.abortReported) THEN
+	DO;
+		pDlCB = UtlBuildCB;
+		dlCB.msgFormat = (dlcAbort OR msgResponse);
+		dlCB.stationNumber = machine.stationNumber;
+		dlCB.linkNumber = machine.linkNumber;
+		dlCB.sourcePID = machine.userPID;
+		CALL GenReturnUserRequest (pMachine, pDlCB, machine.irrecError);
+		machine.abortReported = TRUE;
+	END;
+
+	/* check flush done conditions */
+	IF ((machine.userFlushed AND machine.fioAborted)
+											AND machine.abortReported) THEN
+		RETURN TRUE;
+    ELSE
+		RETURN FALSE;
+
+ END GenIsFlushDone;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenSendShortFrame: PROCEDURE (pMachine, ctlField, startTimer) CLEAN;
+DCL pMachine			SELECTOR;
+DCL (ctlField,
+	startTimer)			BYTE;
+DCL machine				BASED pMachine generalMachineType;
+DCL pDlCB				SELECTOR;
+DCL dlcb				BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+												DlCBioDataParams);
+
+	pDlCB = GenBuildTransmitRequest (pMachine, machine.linkAddress,
+									ctlField, msgNoBufferPtr, NIL, 0);
+	
+	/* dont need response returned if transmitted ok */
+	dlCB.freeDisp = freeMsgIfNoError; 
+
+	/* give mac the request */
+	CALL MacTransmitFrame (pDlCB);
+
+	/* start the dlc response timer, if requested */
+	IF startTimer THEN
+		CALL TmrStartResponseTimeout (pMachine);
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END GeneralModule2;

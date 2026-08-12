@@ -1,0 +1,241 @@
+$COMPACT
+$TITLE('Network Manager Main Program')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Main Program	-	1/3/86					*/
+/*																			*/
+/****************************************************************************/
+
+NMConfigMain: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Keys.Plm.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`Dataforms.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`Remoteforms.PlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Parse.PlmProcs.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigData.Plm.Inc~Text~)
+$INCLUDE(NMConfigForms.Plm.Inc~Text~)
+$INCLUDE(NMCreateConfig.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$RESTORE
+$EJ
+/* GetConfigCB */
+
+GetConfigCB: PROCEDURE (card, port, pError) POINTER CLEAN;
+
+DCL	card		BYTE,
+	port		BYTE,
+	portIndex	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	speed		DWORD,
+	pDlCB		POINTER,
+	dlCB		BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBConfigureParams);
+
+	error = eOk;
+	portIndex = cardInfo(card).portInfoIndex + port;
+	IF portInfo(portIndex).protocolType = emptyLink THEN
+		RETURN nullPtr;
+
+	pDlCB = OsAllocate(SIZE(dlCB), @error);
+	IF error <> eOk THEN
+	DO;
+		CALL OsLogError(11, error, card,
+								@(34, 'Network Manager10: Suberror = card'));
+		RETURN nullPtr;
+	END;
+
+	dlCB.ipcCode = msgNetworkIo;
+	dlCB.bufferLength = SIZE(dlCB) - msgHeaderSize;
+	dlCB.stationNumber = anyStationNumber;
+	dlCB.linkNumber = port;
+	dlCB.freeDisp = TRUE;
+
+	IF portInfo(portIndex).protocol = gridLinkProtocol THEN
+	DO;
+		dlCB.protocolType = dlcPrimaryProtocol;
+		IF port = 0 THEN
+			dlCB.linkSpeed = GRiDLink0Divisor;
+		ELSE
+			dlCB.linkSpeed = GRiDLinkDivisor;
+		dlCB.bufferSize = 540;
+		dlCB.duplexType = halfDuplexIo;
+		dlCB.ioType = halfDmaIo;
+		dlCB.numberOfBuffers = 6;
+		dlCB.stationCount = 8;
+		dlCB.retryCount = 25;
+		dlCB.minDeferTO = 20;
+		dlCB.maxDeferTO = 500;
+		dlCB.responseTO = 50;
+		dlCB.pollTO = 0;
+	END;
+	ELSE
+		DO;
+			IF portInfo(portIndex).baudChoice <> baudExternal THEN
+			DO;
+				IF port = 0 THEN
+					speed = 781250/portInfo(portIndex).baudRate;
+				ELSE
+					speed = 3125000/portInfo(portIndex).baudRate;
+				speed = (speed + 5)/10;
+			END;
+			ELSE
+				speed = nullWord;
+			dlCB.protocolType = dlcPhoneLinkProtocol;
+			dlCB.linkSpeed = LOW(speed);
+			dlCB.bufferSize = 540;
+			dlCB.duplexType = duplexIo;
+			dlCB.ioType = asyncInterruptIo;
+			dlCB.numberOfBuffers = 6;
+			dlCB.stationCount = 1;
+			dlCB.retryCount = 10;
+			dlCB.minDeferTO = 6000;
+			dlCB.maxDeferTO = 25000;
+			dlCB.responseTO = 30000;
+			dlCB.pollTO = 0;
+		END;
+
+	RETURN pDlCB;
+
+END GetConfigCB;
+
+$EJ
+/* SendConfigCB */
+
+SendConfigCB: PROCEDURE (pid, pDlCB, pError);
+
+DCL	pid		WORD,
+	pDlCB	POINTER,
+	dlCB	BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBConfigureParams),
+	pError	POINTER,
+	error	BASED pError WORD,
+	dummy	WORD;
+
+	CALL OsSend(pid, (msgNmConfig OR msgRequest), 0, pDlCB, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL OsFree(pDlCB, @dummy);
+		RETURN;
+	END;
+
+	pDlCB = OsReceive(pid, (msgNmConfig OR msgResponse), 60000, @dummy, @error);
+	IF error = eOk THEN
+	DO;
+		error = dlCB.reqError;
+		IF dlCB.freeDisp THEN
+			CALL OsFree(pDlCB, @dummy);
+	END;
+
+END SendConfigCB;
+
+$EJ
+/* Create the configuration. */
+
+CreateConfig: PROCEDURE(pError) CLEAN;
+
+DCL pError		POINTER,
+	error		BASED pError WORD,
+	pDlCB		POINTER,
+	pid			WORD,
+	i			BYTE,
+	cardNum		BYTE;
+
+$IF NOT compassMode
+
+	DO cardNum = 0 TO (maxCards - 1);
+		IF NOT (cardInfo(cardNum).configured AND
+							(cardInfo(cardNum).fileType <> emptyFile)) THEN
+			GOTO loopEnd;
+		IF NOT FindIpc(cardNum, oneMinute) THEN
+		DO;
+			CALL OsLogError(11, eNMIpcNotFound, cardNum,
+								@(34, 'Network Manager00: Suberror = card'));
+			GOTO loopEnd;
+		END;
+		error = eOutOfMem;
+		i = 5;
+		DO WHILE (error = eOutOfMem) AND (i > 0);
+			DO CASE cardInfo(cardNum).fileType;
+
+				/* Empty */
+				error = eOk;	/* Not possible. */
+
+				/* PhoneLink */
+				pid = OsCreateRemoteProcess(cardNum, @PhonelinkProc, 80,
+																FALSE, @error);
+
+				/* GRiDLink */
+				pid = OsCreateRemoteProcess(cardNum, @GRiDlinkProc, 80,
+																FALSE, @error);
+
+				/* GRiDLink and PhoneLink */
+				pid = OsCreateRemoteProcess(cardNum, @GRiDAndPhonelinkProc,
+															80, FALSE, @error);
+
+				error = eOk;	/* Not supported. */
+			END;
+
+			IF error = eOutOfMem THEN
+				CALL OsDelay(20000);
+		END;
+		IF error <> eOk THEN
+		DO;
+			CALL OsLogError(11, error, cardNum,
+								@(34, 'Network Manager01: Suberror = card'));
+			GOTO loopEnd;
+		END;
+
+		dlcMgrName(dlcMgrName(0)) = '0' + cardNum;
+		error = 1; i = 0;
+		DO WHILE (error <> eOk) AND (i < 50);
+			pid = OsLookupName(@dlcMgrName, @error);
+			IF error <> eOk THEN
+				CALL OsDelay(100);
+			i = i + 1;
+		END;
+		IF error = eFileNotFound THEN error = eProcNotExist;
+		IF error <> eOk THEN
+		DO;
+			CALL OsLogError(11, error, cardNum,
+								@(34, 'Network Manager02: Suberror = card'));
+			GOTO loopEnd;
+		END;
+
+		DO i = 0 TO 3;
+			pDlCB = GetConfigCB(cardNum, i, @error);
+			IF error <> eOk THEN
+			DO;
+				CALL OsLogError(11, error, cardNum,
+								@(34, 'Network Manager03: Suberror = card'));
+				GOTO loopEnd;
+			END;
+
+			IF pDlCB <> nullPtr THEN
+			DO;
+				CALL SendConfigCB(pid, pDlCB, @error);
+				IF error <> eOk THEN
+				DO;
+					CALL OsLogError(11, error, cardNum,
+								@(34, 'Network Manager04: Suberror = card'));
+					GOTO loopEnd;
+				END;
+			END;
+		END;
+loopEnd:
+	END;
+
+$ELSE
+	RETURN;
+$ENDIF
+
+END CreateConfig;
+

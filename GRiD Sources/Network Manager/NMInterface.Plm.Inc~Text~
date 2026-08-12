@@ -1,0 +1,14 @@
+/* External declarations for NMInterface.Plm. */
+
+LogBadReq: PROCEDURE(pReq) EXT;
+DCL	pReq	POINTER;
+END LogBadReq;
+
+LogConnect: PROCEDURE EXT;
+END LogConnect;
+
+LogRealConfig: PROCEDURE EXT;
+END LogRealConfig;
+
+InterfaceProc:	PROCEDURE EXT;
+END InterfaceProc;

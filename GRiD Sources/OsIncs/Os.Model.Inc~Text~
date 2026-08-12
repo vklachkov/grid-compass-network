@@ -1,0 +1,71 @@
+$COMPACT (OS -CONST IN CODE- HAS 
+$    OsVar, OsDirectory, OsSubs, OsMisc, OsStartup, OsFsRequest, StandardDevices,
+$    OsBitMap, OsFar, OsFsCommand, OsFsAttach, OsFsMain, OsSysDep, OsAlias,
+$    Loader, LdrLtl, LdrDta, LdrBfr, LdrOvl, OsMemMgr, OsSysVars,
+$    OsExtra, OsName, OsFrontEnd, UserProfile, OsDevice, OsTasks, FsSubs,
+$    OsWinProcs, OsADQMain, OsJumpTable, FormattedIO, OsMessage, OsUdi;
+$ EXPORTS
+$    EnterSystem, ExitSystem, OsUnload, OsAddKbChar, Busy, BusyLooping,
+$    RealCoDevice, RealCiDevice, RealBbDevice, OsMassFileSystem,
+$    GetEntryPoint, OsAddDevice, OsRemoveDevice,  ConLineIn,
+$    OsFloppy, ConCharIn, OsBubbleDriver, OsAddressOf,
+$    ConKeyPressed, ConPeekChar, OsSignal, OsWait,
+$    OsCreateProcess, OsDeleteProcess, OsCreateSemaphore, OsSetPriority,
+$    OsAttach, OsOpen, OsKeyboardHandler, OsUpdateDeviceList,
+$    OsRead, OsWrite, OsTruncate, OsSeek, OsClose, OsSend, OsReceive, OsWhoAmI,
+$    OsDetach, OsRename, OsDelete, OsHandleCancel, RealEntryPoint,
+$    OsReadDescriptor, OsWriteDescriptor, OsFlushAllBuffers, OsGetStatus,
+$    OsExit, OsGetTime, OsGetSystemId, OsDecodeException, OsOverlay, 
+$    OsChangeExtension, OsGetArgument, OsSwitchBuffer, 
+$    OsRegisterName, OsLookupName, OsForkProcess, OsSetStatus, OsGetMemStatus, 
+$    OsGetProperty, OsPutProperty, OsDeleteSemaphore, OsFree, OsAllocate, OsGetSize,
+$    OsAddAlias, OsDeleteAlias, GetMyWindowState, WinGetCurrentWindowState,
+$    IntWinFrameWindow, GetConsoleState, WinSetFont, OsADQDriver,
+$    OsVersionNumber, WinLoadFont, OsCallDriver, DoBoot,
+$    OsNameDevice, OsGetPrefix, OsGetWork, 
+$    OsMatchWildCard, OsOuroBouro, CheckCodeEscape, IntSend, InvalidCall,
+$    ConHexOut, ConMoveCsr, ConDefCsr, ConResetDisplay, WinHandlePhone,
+$    SetDefaultWindow,
+$
+$    XOSOPEN,   XOSCLOSE, XOSADDALIAS, XOSDELETEALIAS,
+$    XOSATTACH, XOSDELETE, XOSDETACH, XOSRENAME, 
+$    XOSGETSystemId, XOSTRUNCATE, XOSGETARGUMENT, XOSSWITCHBUFFER,
+$    XOSREADDESCRIPTOR, XOSDECODEEXCEPTION, XOSFLUSHALLBUFFERS,
+$    XGETENTRYPOINT, XOSCREATEPROCESS, XOSWRITEDESCRIPTOR, XOSOVERLAY, 
+$    XOSADDDEVICE, XOSFORKPROCESS, XOSGETPROPERTY, XOSPUTPROPERTY,
+$
+$    WinAllocateWindowMemory,
+$
+$    DqAllocate, DqFree, DqGetSize, DqExit, DqGetSystemID, DqDecodeException, 
+$    DqChangeExtension, DqGetArgument, DqSwitchBuffer, DqSpecial, DqTrapCC, 
+$    DqTrapException, DqGetExceptionHandler, DqGetTime, DqAttach, DqCreate, DqOpen, 
+$    DqSeek, DqGetConnectionStatus, DqRename, DqDelete, DqOverlay,
+$    DqReserveIOMemory, DqFileInfo, DqDecodeTime, DqChangeAccess,
+$
+$    ConCharOut, ConLineOut, OsSearchForTitle, xOsSearchForTitle)
+
+$LARGE (CpProm EXPORTS
+$    OsCurrentPid, OsProcessQ, OsSemaQ,
+$    BubbleDriver, GpibDriver, OsDskDriver, CnoLineOut,
+$    OsWhereAmI, LineHeight, BaseLine, CharHeight, CharWidth, OsDelay,
+$
+$    xWinClipLine, xWinClipRectangle, xWinDrawLine, xWinEraseLine, 
+$    xWinInvertLine, xWinSetClip, xWinResetClip, xWinSetWindow, 
+$    xWinInitDefaultWindow, xWinEraseRectangle, xWinInvertRectangle, 
+$    xWinEraseWindow, xWinFrameWindow, xWinDrawPixel, xWinErasePixel,
+$    xWinCopyRectangle, xWinScrollRectangle, xWinScrollWindow, xWinDrawChar,
+$    xWinDrawChars, xWinInvertChar, xWinEraseChar, xWinInvertPixel,
+$    xWinGetWindowExtent, xWinTestPixel,
+$
+$    WinClipLine, WinClipRectangle, WinDrawLine, WinEraseLine, 
+$    WinInvertLine, WinSetClip, WinResetClip, WinSetWindow, 
+$    WinInitDefaultWindow, WinEraseRectangle, WinInvertRectangle, 
+$    WinEraseWindow, WinFrameWindow, WinDrawPixel, WinErasePixel,
+$    WinCopyRectangle, WinScrollRectangle, WinScrollWindow, WinDrawChar,
+$    WinDrawChars, WinInvertChar, WinEraseChar, WinInvertPixel,
+$    WinGetWindowExtent, WinTestPixel,
+$
+$    WinSetAlternateWindow, WinCopyRemoteRectangle,  
+$    EnterWindows, LeaveWindows,
+$    InitSysdep)
+$ROM

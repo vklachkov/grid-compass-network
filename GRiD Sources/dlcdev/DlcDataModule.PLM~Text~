@@ -1,0 +1,64 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Dlc Data')
+
+DlcDataModule: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccincs`CommonDefines.inc~text~)
+$INCLUDE(``ccincs`MacDefines.inc~text~)
+$INCLUDE(``ccincs`MachineDefines.inc~text~)
+$INCLUDE(``ccincs`MemoryDefines.inc~text~)
+$RESTORE
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@
+@         COMPASS CENTRAL DATA LINK CONTROL
+@
+@    module:    Global Data Link Variable Storage Definition.
+@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+$IF primary AND secondary
+ DCL dlcVersionStr (*) BYTE PUBLIC INITIAL (10,'11.03.12ps');
+$ELSEIF primary AND phoneLink
+ DCL dlcVersionStr (*) BYTE PUBLIC INITIAL (10,'11.04.04pa');
+$ELSEIF primary
+ DCL dlcVersionStr (*) BYTE PUBLIC INITIAL (9,'11.04.04p');
+$ELSEIF phoneLink
+ DCL dlcVersionStr (*) BYTE PUBLIC INITIAL (9,'11.04.04a');
+$ELSEIF secondary
+ DCL dlcVersionStr (*) BYTE PUBLIC INITIAL (9,'11.03.12s');
+$ENDIF
+
+ DCL numberArray (*) BYTE PUBLIC INITIAL ('0123456789ABCDEF');
+
+ DCL dlcProcessId (maxNumberOfLinks) WORD PUBLIC 
+  INITIAL (null, null, null, null);
+
+ DCL globalDebug WORD PUBLIC INITIAL (0);
+
+ DCL dlcPriority WORD PUBLIC INITIAL (80);
+ DCL dlcHiPriority WORD PUBLIC INITIAL (70);
+
+ DCL timerPriority WORD PUBLIC INITIAL (90);
+ DCL timerHiPriority WORD PUBLIC INITIAL (60);
+
+ DCL globalStateMachinePtr (maxNumberOfLinks) POINTER PUBLIC 
+  INITIAL (NIL, NIL, NIL, NIL);
+
+ /* seed used for allocating new address */
+ DCL lastAllocatedAddress BYTE PUBLIC INITIAL (95h);
+
+ DCL pCbFreeQueue SELECTOR PUBLIC INITIAL (null);
+
+$IF primary
+ DCL priSdlcMachineInitValues dlcPrimaryMachineType PUBLIC
+   INITIAL (primaryMachineInitValues);
+$ENDIF
+
+$IF secondary
+ DCL secSdlcMachineInitValues dlcSecondaryMachineType PUBLIC
+   INITIAL (secondaryMachineInitValues);
+$ENDIF
+
+END DlcDataModule;

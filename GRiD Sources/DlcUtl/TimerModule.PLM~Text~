@@ -1,0 +1,776 @@
+$COMPACT (EXPORTS TmrTimerProcess)
+$OPTIMIZE(3)
+$TITLE ('CCDLC - Timer Handling')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*
+*
+*                    COMPASS CENTRAL DATA LINK CONTROL
+*
+*        Module:        Timer Control, including timer process.
+*
+*        Contains:      Data Structures: deferTimerList, responseTimer.
+*                       
+*        Procedures:    TmrConfigureTimer, TmrEnableTimer,
+*                       TmrDisableTimer, TmrGetTimerAccess,
+*                       TmrFreeTimerAccess, TmrAbortTimerRequest,
+*                       TmrAddTimerRequest, TmrCompleteTimerRequests,
+*                       TmrTimerProcess,
+*                       TmrAbortTimeOut, TmrStartDeferTimeOut,
+*                       TmrStartPollTimeOut, TmrStartResponseTimeOut,
+*                       TmrStartUserTimeOut.
+*
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TimerModule: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`CommonDefines.inc~Text~)
+$INCLUDE(``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE(``ccIncs`MacDefines.inc~Text~)
+$INCLUDE(``ccIncs`MachineDefines.inc~Text~)
+$INCLUDE(``ccIncs`MemoryDefines.inc~Text~)
+$INCLUDE(``ccIncs`GeneralModule3.inc~Text~)
+$INCLUDE(``ccIncs`GlobalDataModule.inc~Text~)
+$INCLUDE(``ccIncs`UtlModule.inc~Text~)
+$INCLUDE(``Incs`CpPlmProcs.inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.inc~Text~)
+$INCLUDE(``Incs`Os.Type.inc~Text~)
+$INCLUDE(``Incs`OsExtra.Plm.inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+DCL	timerName		(*) BYTE INITIAL (16, '`n`system`timer ');
+
+DCL pPromVars		POINTER;
+DCL promVars		BASED pPromVars promVariablesType;
+
+DCL timerStartTime	DWORD;
+
+DCL maxRelativeTime	LIT '10000h';
+DCL waitMax			LIT '65000';  /* wait for long OS time */
+
+DCL timerAccessSemaphore		WORD PUBLIC INITIAL (null);
+DCL timerRequestSemaphore		WORD PUBLIC INITIAL (null);
+DCL (timerQhead, timerQTail)	SELECTOR INITIAL (null, null);
+
+DCL dlcTimerProcessID		WORD PUBLIC INITIAL (null);
+DCL deferTimerMinimum		WORD INITIAL (20);
+DCL deferTimerMaximum		WORD INITIAL (600);
+DCL deferTimerFence			WORD INITIAL (100);
+DCL newDeferTimerDefault	WORD INITIAL (3000);
+
+DCL dfPlus					BYTE INITIAL (3); /* shifter for defer increase */
+DCL dfMinus					BYTE INITIAL (2); /* shifter for defer decrease */
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrConfigureTimer: PROCEDURE(pDlCB, pError) CLEAN;
+
+DCL pDlCB		SELECTOR;
+DCL pError		POINTER;
+DCL configDlCB	BASED pDlCB STRUCTURE (DlCBGenDescriptor, dlCBConfigureParams);
+DCL error BASED pError WORD;
+
+	error = 0;
+	deferTimerMinimum = configDlCB.minDeferTO;
+	deferTimerMaximum = configDlCB.maxDeferTO;
+	deferTimerFence = deferTimerMinimum * 2;
+	newDeferTimerDefault = deferTimerMaximum * 5;
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrEnableTimer: PROCEDURE(pError) CLEAN;
+DCL pError	POINTER;
+DCL error	BASED pError WORD;
+DCL error2	WORD;
+
+	IF dlcTimerProcessId <> null THEN
+	DO;
+		error = eDlcAlreadyExists;
+		RETURN;
+	END;
+
+	/* create semaphore */
+	timerAccessSemaphore = OsCreateSemaphore(pError);
+	IF error <> 0 THEN GOTO enableError;
+
+	/* set to NOT busy condition */
+	CALL OsSignal(timerAccessSemaphore, 1, null, pError);
+
+	timerRequestSemaphore = OsCreateSemaphore(pError);
+	IF error <> 0 THEN GOTO enableError;
+
+	dlcTimerProcessId = OsForkProcess(@TmrTimerProcess, timerPriority,
+												FALSE, timerStackSize, pError);
+	IF error <> 0 THEN GOTO enableError;
+
+	/* add name to directory */
+	timerName(timerName(0)) = numberArray(OsCardNumber);
+
+	/* first delete previous entry, if existing, and add name */
+	CALL OsRegisterName(@timerName(0), NIL, 2, pError);
+	CALL OsRegisterName(@timerName(0), DOUBLE(dlcTimerProcessId), 1, pError);
+
+enableError:
+	IF error <> 0 THEN CALL TmrDisableTimer(@error2);
+END;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrDisableTimer: PROCEDURE(pError) CLEAN;
+DCL pError	POINTER;
+DCL error	BASED pError WORD;
+
+/* delete name from directory */
+	CALL OsRegisterName(@timerName(0), NIL, 2, pError);
+	CALL OsDeleteProcess(dlcTimerProcessId, pError);
+	dlcTimerProcessId = null;
+
+/* delete timer semaphore */
+	CALL OsDeleteSemaphore(timerAccessSemaphore, pError);
+	CALL OsDeleteSemaphore(timerRequestSemaphore, pError);
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrGetTimerAccess: PROCEDURE BYTE CLEAN;
+DCL note	WORD;
+DCL	error	WORD;
+/* 
+   This semaphore is used to ensure that MAC data structures and hardware
+   are access by one process at a time, (may be slower but eliminates
+   exclusive access bugs. 
+*/
+	note = OsWait(timerAccessSemaphore, waitForEver, @error);
+	IF error <> 0 THEN 
+	DO;
+		CALL OsLogError(2, error, 0, @(6,'TmrAcc'));
+		RETURN FALSE;
+	END;
+	ELSE
+		RETURN TRUE;
+
+END TmrGetTimerAccess;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrFreeTimerAccess: PROCEDURE CLEAN;
+DCL error	WORD;
+
+	CALL OsSignal(timerAccessSemaphore, 1, 0, @error);
+	IF error <> 0 THEN
+		CALL OsLogError(2, error, 1, @(6,'TmrAcc'));
+
+END TmrFreeTimerAccess;
+
+$EJ
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrAbortTimerRequest: PROCEDURE (pAbortReq) BYTE CLEAN;
+DCL pAbortReq	SELECTOR;
+DCL abortReq	BASED pAbortReq STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL pReq		SELECTOR;
+DCL	pPrevReq	SELECTOR;
+DCL req			BASED pReq STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL prevReq		BASED pPrevReq STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL returnVal	BYTE;
+
+	IF pAbortReq = null THEN RETURN FALSE;
+	IF NOT TmrGetTimerAccess THEN RETURN FALSE;
+
+	returnVal = FALSE;
+	pPrevReq = null;
+	pReq = timerQhead;
+	DO WHILE (pReq <> null) AND (pReq <> pAbortReq);
+		pPrevReq = pReq;
+		pReq = req.qLink;         
+	END;
+	IF pReq = pAbortReq THEN
+	DO;
+		returnVal = TRUE;
+		IF pPrevReq <> null THEN 
+		DO;
+			prevReq.qLink = req.qLink;
+			IF timerQtail = pReq THEN timerQtail = pPrevReq;
+		END;
+		ELSE
+			DO;
+				/* at top of queue */
+				timerQhead = req.qLink;
+				/* if only one request on queue, then none now */
+				IF timerQhead = null THEN timerQtail = null;
+			END;
+		req.Qlink = null;
+	END;
+	CALL TmrFreeTimerAccess;
+	RETURN returnVal;
+
+END TmrAbortTimerRequest;
+
+$EJ
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrAddTimerRequest: PROCEDURE(pNewReq, timerType) CLEAN;
+DCL pNewReq			SELECTOR;
+DCL newReq			BASED pNewReq STRUCTURE (dlCBGenDescriptor,
+												dlCBTimerParams);
+DCL timerType		WORD;
+DCL pReq			SELECTOR;
+DCL	pPrevReq		SELECTOR;
+DCL req				BASED pReq STRUCTURE (dlCBGenDescriptor,
+												dlCBTimerParams);
+DCL prevReq			BASED pPrevReq STRUCTURE (dlCBGenDescriptor,
+												dlCBTimerParams);
+DCL relativeTime	DWORD;
+DCL	currentTime		DWORD;
+DCL error			WORD;
+DCL found			BYTE;
+
+	/* add to queue by order of time out time, considering timer wrap */
+	IF newReq.timeOut = 0 THEN
+	DO;
+		/* if zero timeout, then return immediately to initiator */
+		CALL OsSend(OsWhoAmI, (timerType OR msgResponse),
+											0, BUILD$PTR(pNewReq, 0), @error);
+		RETURN;
+	END;
+
+	newReq.msgFormat = timerType OR msgRequest;
+	newReq.sourcePid = OsWhoAmI;
+
+	IF NOT TmrGetTimerAccess THEN RETURN;
+
+	currentTime = promVars.sysCounter;
+	relativeTime = currentTime - timerStartTime;
+
+	IF relativeTime >= maxRelativeTime THEN
+	DO;
+		/* need to update relative time and timer queue */
+		error = TmrCompleteTimerRequests(currentTime);
+												/* ignore function return */
+		relativeTime = 0;
+	END;
+
+	/* find time to expire based on relative time */
+	newReq.endTime = newReq.timeOut + relativeTime;
+
+	/* find place to insert in queue:
+		Insert before entry with endtime greater than new entry,
+		and after entries of less or equal endtime
+	*/
+	found = FALSE;
+	pPrevReq = null;
+	pReq = timerQhead;
+	DO WHILE (pReq <> null) AND (NOT found);
+		IF req.endTime > newReq.endTime THEN found = TRUE;
+		ELSE
+			DO;
+				pPrevReq = pReq;
+				pReq = req.qLink;
+			END;
+	END;
+
+	IF pPrevReq <> null THEN
+	DO;
+		newReq.qLink = pReq;
+		prevReq.qLink = pNewReq;
+	END;
+	ELSE
+		DO;
+			newReq.qLink = timerQhead;
+			timerQhead = pNewReq;
+		END;
+	IF pReq = null THEN timerQtail = pNewReq;
+
+	/* signal timer process if entry put at top of timer queue,
+		this will cause timer process to restart its delay
+	*/
+	IF pNewReq = timerQhead THEN
+		CALL OsSignal(timerRequestSemaphore, 1, null, @error);
+	CALL TmrFreeTimerAccess;
+
+END TmrAddTimerRequest;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrCompleteTimerRequests: PROCEDURE(currentTime) WORD CLEAN;
+DCL currentTime		DWORD;
+
+DCL pReq			SELECTOR;
+DCL req				BASED pReq STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL relativeTime	DWORD;
+DCL	returnVal		DWORD;
+DCL error			WORD;
+DCL complete		BYTE;
+
+/* NOTE: must have obtained timer Access Semaphore before entering here */
+
+	/* find relative time */
+	relativeTime = currentTime - timerStartTime;
+
+	/*	find entries in queue whose endtime is less or equal to 
+		relative time and complete them. Repeat until entry endtime is
+		greater than relativeTime.
+	*/
+	pReq = timerQhead;
+	complete = TRUE;
+	DO WHILE complete AND (pReq <> null);
+		IF relativeTime >= req.endTime THEN
+		DO;
+			/* if head of queue needs to be completed */
+			pReq = UtlPopQ(@timerQhead);
+			/* if request has been aborted then free it, else return  */
+			IF (req.msgFormat AND msgTmrFormatMask) = tmrAbortTimer THEN
+				pReq = UtlFreeCB(pReq);
+			ELSE
+			CALL OsSend(req.sourcePid, 
+						((req.msgFormat AND msgTmrFormatMask) OR msgResponse),
+												0, BUILD$PTR(pReq, 0), @error);
+			pReq = timerQhead;
+		END;
+		ELSE
+			complete = FALSE;
+	END;
+
+	/*	make sure relative time doesnt cause overflow with respect to 
+		startTime and entry endtime relationship.
+	*/
+	IF relativeTime >= maxRelativeTime THEN
+	DO;
+		pReq = timerQhead;
+		DO WHILE pReq <> null;
+			req.endTime = req.endTime - relativeTime;
+			pReq = req.qLink;
+		END;
+		timerStartTime = currentTime;
+		relativeTime = 0;
+	END;
+
+	/*	find timer process delay time:
+		If nothing on queue then wait forever,
+		Else If head entry endtime greater than WORD size then wait max,
+		Else return difference of head entry endtime and relative time.
+	*/
+	IF (pReq := timerQhead) = null THEN returnVal = waitForever;
+	ELSE
+		IF ((returnVal := req.endTime - relativeTime) >= DOUBLE(waitMax)) THEN
+			returnVal = waitMax;
+
+	RETURN LOW(returnVal);
+
+END TmrCompleteTimerRequests;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrTimerProcess: PROCEDURE CLEAN;
+
+/*-------------------------------------------------------------------------
+
+   purpose:        This process will manage the timer requests.
+
+   inputs:         timer requests are sent as dlc message control blocks
+                   to this process, via OsSend.
+
+   outputs:        timer requests are completed when the timeout value
+                   expires.
+
+-------------------------------------------------------------------------*/
+
+DCL	(delay, note, error)	WORD;
+
+	/* initialize prom variables data structure pointer */
+	pPromVars = CpAddressOf;
+	timerStartTime = promVars.sysCounter;
+
+	delay = waitForever;
+	DO WHILE TRUE;
+		note = OsWait(timerRequestSemaphore, delay, @error);
+		IF TmrGetTimerAccess THEN 
+		DO;
+			/* increase priority to ensure comletion of task */
+			CALL OsSetPriority(OsWhoAmI, timerHiPriority, @error);
+			delay = TmrCompleteTimerRequests(promVars.sysCounter);
+			CALL TmrFreeTimerAccess;
+			CALL OsSetPriority(OsWhoAmI, timerPriority, @error);
+		END;
+		ELSE
+			delay = waitForever;
+	END;
+
+END TmrTimerProcess;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrAbortTimeout: PROCEDURE(pMachine, timerType) CLEAN;
+DCL pMachine	SELECTOR;
+DCL timerType	WORD;
+
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will cancel a pending timer request.
+
+   inputs:         timerType - which timer should be aborted.
+
+   outputs:        none.
+
+   sideEffects:    timer request is removed from timer queue.
+
+   algorithm:
+     1) set message control block format to timer abort.
+        (This is done so that if the timer request control block is
+         either pending on the timer message queue or the callers message
+         queue then the receiving process will ignore the timeout.)
+     2) get timer queue semaphore.
+     3) search queue for request, and remove if on queue.
+     4) release the timer queue semaphore.
+
+-------------------------------------------------------------------------*/
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+   
+DCL pDlCB		SELECTOR;
+DCL dlCB		BASED pDlCB STRUCTURE (DlCBGenDescriptor, DlCBTimerParams);
+DCL note		WORD;
+DCL	error		WORD;
+DCL pPrevDlCB	SELECTOR;
+DCL	pCurDlCB	SELECTOR;
+DCL prevDlCB	BASED pPrevDlCB STRUCTURE (DlCBGenDescriptor, DlCBTimerParams);
+DCL curDlCB		BASED pCurDlCB STRUCTURE (DlCBGenDescriptor, DlCBTimerParams);
+
+	IF timerType = tmrResponseTimer THEN 
+	DO;
+		pDlCB = machine.responseTimerCB;
+		machine.responseTimerCB = null;
+	END;
+	ELSE
+		IF timerType = tmrDeferTimer THEN
+		DO;
+			pDlCB = machine.deferTimerCB;
+			machine.deferTimerCB = null;
+		END;
+	ELSE
+		IF timerType = tmrPollTimer THEN 
+		DO;   
+			pDlCB = machine.pollTimerCB;
+			machine.PollTimerCB = null;
+		END;
+	ELSE
+		IF timerType = tmrUserTimer THEN 
+		DO;
+			pDlCB = machine.userTimerCB;
+			machine.UserTimerCB = null;
+		END;
+	ELSE
+		RETURN;
+
+	IF pDlCB = null THEN RETURN;
+
+	IF TmrAbortTimerRequest(pDlCB) THEN
+		pDlCB = UtlFreeCB(pDlCB);
+	ELSE
+		/* else not on queue, then already timed out */
+		dlCB.msgFormat = 
+					(dlCB.msgFormat AND msgFormatReqRspMask) OR tmrAbortTimer;
+
+END TmrAbortTimeout;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+$EJ
+
+TmrStartDeferTimeOut: PROCEDURE(pMachine) CLEAN;
+DCL pMachine	SELECTOR;
+   
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will start the machine defer timer.
+
+   inputs:         pMachine - pointer to the state machine control block.
+
+   outputs:        none.
+
+   sideEffects:    timer request is sent to timer process. 
+
+   algorithm:
+      1) if defer time is not null and defer timer message control block
+            exists then
+         1) set machine active flag to false, (this allows other machines
+               to become active).
+         2) set machine deferring flag to true.
+         3) if defer time is zero then send timer control block
+               directly to dlc.
+         4) else
+            1) adjust defer timer value accordingly, if last exchange 
+                  resulted in idle poll (no info frames exchanged) then
+                  add 12.5% of current value to current value, else
+                  subtract 25% of current value from current value.
+            2) send defer timer request control block to timer process.
+
+-------------------------------------------------------------------------*/
+DCL machine			BASED pMachine dlcPrimaryMachineType;
+
+DCL pTimerCB		SELECTOR;
+DCL timerCB			BASED pTimerCB STRUCTURE (dlCBGenDescriptor,
+												dlCBTimerParams);
+DCL newTimerValue	WORD;
+
+	IF (machine.deferTimerCB <> null) THEN
+	DO;
+		CALL OsLogError(2, eCcInternalError, tooManyUserTimers, @(6,'TmrDef'));
+		RETURN;
+	END;
+
+	IF (machine.deferTime <> null) THEN
+	DO;
+		machine.deferring = TRUE; /* set machine start to deferring */
+		machine.active = FALSE;
+		machine.deferTimerCB, pTimerCB = UtlBuildCB;
+		IF machine.deferTime = 0 THEN
+		DO;
+			/* zero means start new station defer timeout */
+			newTimerValue = newDeferTimerDefault;
+		END;
+		ELSE
+			DO;
+				IF machine.idlePoll AND (machine.sendQhead(0) = null) THEN
+				DO;
+					/* if this poll idle and nothing to send */
+					IF machine.lastPollIdle THEN
+					DO;
+						/* if last poll idle then increase defer time */
+						machine.deferTime = machine.deferTime + 
+												SHR(machine.defertime, dfPlus);
+						IF machine.deferTime > deferTimerMaximum THEN
+							machine.deferTime = deferTimerMaximum;
+					END;
+					/* else keep defer time the same */
+					newTimerValue = machine.deferTime;
+				END;
+				ELSE /* if poll had info exchange */
+					DO;
+						/* decrease defer for next time and use 0 this time */
+						IF machine.deferTime <> deferTimerMinimum THEN
+						DO;
+							machine.deferTime = machine.deferTime -
+												SHR(machine.deferTime, dfMinus);
+							IF machine.deferTime < deferTimerMinimum THEN
+								machine.deferTime = deferTimerMinimum;
+							ELSE 
+								IF machine.deferTime > deferTimerFence THEN
+									machine.deferTime = deferTimerFence;
+						END;
+						IF machine.idlePoll THEN
+							/* back off if nothing happened this poll */
+							newTimerValue = machine.deferTime;
+						ELSE
+							/* start timeout with 0 defer */
+						newTimerValue = 0;
+					END;
+					/* update last idle poll flag */
+					machine.lastPollIdle = machine.idlePoll;
+			END;
+		timerCB.ipcCode = msgNetworkIo;
+		timerCB.timeOut = DOUBLE(newTimerValue);
+		timerCB.linkNumber = machine.linkNumber;
+		timerCB.stationNumber = machine.stationNumber;
+		CALL TmrAddTimerRequest(pTimerCB, tmrDeferTimer);
+	END;
+
+END TmrStartDeferTimeOut;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrPreEmptDeferTimeOut: PROCEDURE(pMachine) CLEAN;
+DCL pMachine	SELECTOR;
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will preempt the currently running 
+                   defer timer and restart it with a zero delay.
+                   (Thus, effectively putting it into the ready 
+                   machine queue for immediate processing).
+
+-------------------------------------------------------------------------*/
+DCL machine	BASED pMachine dlcPrimaryMachineType;
+DCL pDlCB	SELECTOR;
+DCL timerCB	BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL error WORD;
+
+	pDlCB = machine.deferTimerCB;
+	IF (pDlCB <> null) THEN
+	DO;
+		/* first, abort current timer */
+		IF TmrAbortTimerRequest(pDlCB) THEN
+		DO;
+			/*	if removed from timer queue, then send to dlc
+				else timer has already expired
+			*/
+			CALL OsSend(OsWhoAmI, (msgResponse OR tmrDeferTimer),
+											2, BUILD$PTR(pDlCB, 0), @error);
+		END;
+	END;
+
+END TmrPreEmptDeferTimeOut;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+TmrStartPollTimeOut: PROCEDURE(pMachine) CLEAN;
+DCL pMachine	SELECTOR;
+
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will start the poll timer.
+
+   inputs:         pMachine - pointer to state machine control block.
+
+   outputs:        none.
+
+   sideEffects:    timer request is sent to timer process.
+
+   algorithm:
+      1) if poll timer message control block exists and poll time is
+            not null then
+         1) if poll time value is zero then send timer control block
+               directly to dlc.
+         2) else send timer control block to timer process.
+
+-------------------------------------------------------------------------*/
+
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+
+DCL pTimerCB	SELECTOR;
+DCL timerCB		BASED pTimerCB STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+
+	IF (machine.PollTimerCB <> null) THEN
+	DO;
+		CALL OsLogError(2, eCcInternalError, tooManyUserTimers, @(6,'TmrPol'));
+		RETURN;
+	END;
+
+	IF (machine.pollTime <> null) THEN
+	DO;
+		machine.pollTimerCB, pTimerCB = UtlBuildCB;
+		timerCB.ipcCode = msgNetworkIo;
+		timerCB.timeOut = DOUBLE(machine.pollTime);
+		timerCB.linkNumber = machine.linkNumber;
+		timerCB.stationNumber = machine.stationNumber;
+		CALL TmrAddTimerRequest(pTimerCB, tmrPollTimer);
+	END;
+
+END TmrStartPollTimeOut;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+$EJ
+
+TmrStartResponseTimeOut: PROCEDURE(pMachine) CLEAN;
+DCL pMachine	SELECTOR;
+
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will start the response timer.
+
+   inputs:         pMachine - pointer to state machine control block.
+
+   outputs:        none.
+
+   sideEffects:    timer request is sent to timer process.
+
+   algorithm:
+      1) if response timer message control block exists and response 
+            time is not null then
+         1) if response time value is zero then send timer control block
+               directly to dlc.
+         2) else send timer control block to timer process.
+
+-------------------------------------------------------------------------*/
+
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL pTimerCB	SELECTOR;
+DCL timerCB		BASED pTimerCB STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+
+	IF (machine.ResponseTimerCB <> null) THEN
+	DO;
+		CALL OsLogError(2, eCcInternalError, tooManyUserTimers, @(6,'TmrRsp'));
+		RETURN;
+	END;
+
+	IF (machine.ResponseTime <> null) THEN
+	DO;
+		machine.responseTimerCB, pTimerCB = UtlBuildCB;
+		timerCB.ipcCode = msgNetworkIo;
+		timerCB.timeOut = DOUBLE(machine.responseTime);
+		timerCB.linkNumber = machine.linkNumber;
+		timerCB.stationNumber = machine.stationNumber;
+		CALL TmrAddTimerRequest(pTimerCB, tmrResponseTimer);
+	END;
+
+END TmrStartResponseTimeOut;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+$EJ
+
+TmrStartUserTimeOut: PROCEDURE(pMachine, pDlCB) CLEAN;   
+DCL pMachine	SELECTOR;
+DCL pDlCB		SELECTOR;
+
+/*-------------------------------------------------------------------------
+
+   purpose:        This procedure will start the user timer.
+
+   inputs:         pMachine - pointer to state machine control block.
+                   pDlCB - selector to the user message control block 
+                           which is to be timed.
+
+   outputs:        none.
+
+   sideEffects:    timer request is sent to timer process.
+
+   algorithm:
+      1) if user timer message control block exists and user 
+            time is not null then
+         1) if user time value is zero then send timer control block
+               directly to dlc.
+         2) else send timer control block to timer process.
+
+-------------------------------------------------------------------------*/
+   
+DCL machine		BASED pMachine dlcPrimaryMachineType;
+DCL userDlCB	BASED pDlCB STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+DCL pTimerCB	SELECTOR;
+DCL timerCB		BASED pTimerCB STRUCTURE (dlCBGenDescriptor, dlCBTimerParams);
+
+	IF machine.userRequestCB = null THEN 
+	DO;
+		machine.userRequestCB = pDlCB;
+		IF ((machine.UserTime := userDlCB.timeout) <> doubleNull) THEN
+		DO;
+			machine.userTimerCB, pTimerCB = UtlBuildCB;
+			timerCB.ipcCode = msgNetworkIo;
+			timerCB.timeOut = machine.userTime;
+			timerCB.linkNumber = machine.linkNumber;
+			timerCB.stationNumber = machine.stationNumber;
+			CALL TmrAddTimerRequest(pTimerCB, tmrUserTimer);
+		END;
+	END;
+	ELSE
+		DO;
+			CALL OsLogError(2, eCcInternalError, tooManyUserTimers,
+															@(6,'TmrUsr'));
+			CALL GenReturnUserRequest(pMachine, pDlCB, eDlcInvalidRequest);
+		END;
+
+END TmrStartUserTimeOut;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END TimerModule;

@@ -1,0 +1,263 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - GENERAL ROUTINES, Part 1')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*                 COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:   GeneralModule1               1/28/83
+*
+*    contains: GenBuildTransmitRequest, GenBuildUserTransmitRequest, 
+*              GenCauseEvent.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GeneralModule1: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`commonDefines.inc~Text~)
+$INCLUDE(``ccIncs`DlcFrameDefines.inc~Text~)
+$INCLUDE(``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE(``ccIncs`machineDefines.inc~Text~)
+$INCLUDE(``ccIncs`MacDefines.inc~Text~)
+$INCLUDE(``ccIncs`MemoryDefines.inc~Text~)
+$INCLUDE(``ccIncs`GeneralModule3.inc~Text~)
+$INCLUDE(``ccIncs`MacModule.inc~Text~)
+$INCLUDE(``ccIncs`UtlModule.inc~Text~)
+$INCLUDE(``ccIncs`GeneralModule2.inc~Text~)
+$INCLUDE(``ccIncs`GlobalDataModule.inc~Text~)
+$INCLUDE(``incs`osPlmProcs.inc~Text~)
+$INCLUDE(``incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenBuildTransmitRequest: PROCEDURE(pMachine, addressField, controlField, 
+						bufferType, pDataBuffer, dataLength) SELECTOR CLEAN;
+
+DCL pMachine			SELECTOR,
+    (addressField,
+	controlField)		BYTE,
+	pDataBuffer			PTR,
+	(bufferType,
+	dataLength)			WORD;
+
+/*-------------------------------------------------------------------------
+
+ purpose:   This procedure will build a dlc message control block
+      with the parameters necessary for transmitting a frame.
+
+
+ inputs:  pMachine - Selector to state machine control block.
+      addressField - value to be used for dlc frame address.
+      controlField - value to be used for dlc frame control,
+           (should be only static field value)
+      bufferType - signifies whether the buffer will be appended
+           to the message control block, or will have
+           a separate PTR value.
+           (note: if no buffer ptr, then buffer area
+           will be allocated along with the msg block)
+      pBuffer - If separate buffer, points to the data buffer.
+      dataLength - amount of user data in the buffer.
+
+
+ Algorithm:
+  1)
+  x) If control type is information frame, then get current
+    V(s) and V(r) values from the machine protocol variables.
+    Increment V(s) for next frame to be sent.
+  x) If control type is supervisory (e.g. RR, RNR), then get
+    the current value of V(r) from the machine protocol variables.
+  x) If control type is unnumberred, no variables are needed.
+  x) Using the variables collected for the frame type, construct the
+   appropriate control field by filling in the passed param ctl
+   with these variables. 
+  x) If param len is greater than zero, then insert it into the
+   dlc frame header, else frame header doesn't contain this field.
+
+-------------------------------------------------------------------------*/
+
+DCL machine				BASED pMachine		dlcPrimaryMachineType;
+DCL pDlCB				SELECTOR,
+	dlCB				BASED pDlCB	STRUCTURE (DlCBgenDescriptor,
+												DlCBIoDataParams),
+	dataDlCB			BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+												DlCBIoDataParams),
+	pBuffer				PTR,
+	buffer				BASED pBuffer	STRUCTURE (dlcHeaderFormat);
+
+	/* build new control block for i/o request */
+	pDlCB = UtlBuildCB;
+	dlCB.msgFormat = macFrameOut OR msgRequest;
+
+	/* set up buffer pointer and length */
+	IF bufferType = msgWithBufferPtr THEN
+	DO;
+		pBuffer = pDataBuffer;
+		dataDlCB.dataLength = msgWithBufferPtr OR
+						(dlcHeaderSize + dataLength);
+		dataDlCB.pBuffer = pDataBuffer;
+	END;
+	ELSE 
+		DO;
+			pBuffer = @dataDlCB.pBuffer;
+			IF dataLength <> 0 THEN
+				dataDlCB.dataLength = msgNoBufferPtr OR
+											(dlcHeaderSize + dataLength);
+			ELSE
+				dataDlCB.dataLength = msgNoBufferPtr OR dlcShortHeaderSize;
+		END;
+
+	/* set the dlc header fields: control, address, and length */
+	IF (controlfield AND iBitMask) = 0 THEN
+	DO;
+		/* info frame type */
+		buffer.ctlField = controlfield OR (SHL(machine.vr, 5) AND nrMask)
+							OR (SHL(machine.vs, 1) AND nsMask);
+		machine.vs = (machine.vs + 1) MOD dlcModulo;
+	END;
+	ELSE
+		IF (controlfield AND sBitMask) = 0 THEN
+		DO;
+			/* supervisory type */
+			buffer.ctlField = controlfield OR (SHL(machine.vr, 5) AND nrMask);
+		END;
+	ELSE
+		buffer.ctlField = controlfield;
+	buffer.addrfield = addressfield;
+	IF dataLength > 0 THEN buffer.lengthField = dataLength;
+
+	/* set up message header fields */
+	dlCB.freeDisp = returnMsg;
+	dlCB.ipcCode = msgNetworkIo;
+	dlCB.stationNumber = machine.stationNumber;
+	dlCB.linkNumber = machine.linkNumber;
+	dlCB.sourcePid = OsWhoAmI;
+	dlCB.destPid = null;
+	dlCB.bufferLength = SIZE(buffer) + dataLength - 1;
+
+	/* return pointer to mac transmit request */
+	RETURN pDlCB;
+
+END GenBuildTransmitRequest;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenBuildUserTransmitRequest: PROCEDURE (pMachine, pfBitNeeded) SELECTOR CLEAN;
+DCL pMachine			SELECTOR,
+	pfBitNeeded			BYTE;
+
+/*-------------------------------------------------------------------------
+
+ Purpose:   This procedure will get the next user send request off of
+      the queue and prepare it for transmission.
+
+ Inputs:  pMachine - Selector to the state machine control block,
+         may be NIL.
+      pfBitNeeded - flag denotes whether p/f bit should be set
+         in the dlc frame.
+
+ Outputs:   Returns a selector to the frame out request control block.
+
+ Algorithm:
+  1) get next user send request control block.
+  2) get PTR to user buffer.
+  3) if p/f bit is set in the dlc control field if specified by caller.
+  4) a frame out request control block is contructed.
+  5) frame out request type is set to frame out with user data.
+  6) status of user request control block is set to sending.
+  7) user control block is put on outstanding queue
+  8) selector to transmit control block is returned.
+
+-------------------------------------------------------------------------*/
+
+DCL machine 			BASED pMachine dlcPrimaryMachineType;
+DCL (pDlCB,
+	pUserDlCB)			SELECTOR,
+	dlCB				BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+												DlCBioDataParams),
+	userDlCB			BASED pUserDlCB STRUCTURE (DlCBgenDescriptor,
+													DlCBioDataParams);
+DCL pUserBuffer			PTR,
+	ctl					BYTE;
+
+	/* get next dlc send request */
+	pUserDlCB = UtlPopQ(@machine.sendQhead);
+
+	/* get pointer to data buffer */
+	IF (userDlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr THEN
+		pUserBuffer = userDlCB.pBuffer;
+	ELSE
+		pUserBuffer = @userDlCB.pBuffer;
+
+	/* set up dlc frame control field */
+	ctl = cI;
+	IF pfBitNeeded THEN
+		ctl = cI OR pfBit;
+	
+	/* build a mac transmit request control block */
+	pDlCB = GenBuildTransmitRequest (pMachine, machine.linkAddress, ctl,
+							msgWithBufferPtr, pUserBuffer, 
+							(userDlCB.dataLength AND lengthMask));
+
+	/* change message header to reflect user data i/o request */
+	dlCB.msgFormat = macFrameOutInfo OR msgRequest;
+	dlCB.pUserCB = pUserDlCB;
+
+	/* set i/o pending status */
+	userDlCB.reqError = intCmpStatusSending;
+
+	/* queue user request on outstanding queue and increment send count */
+	CALL UtlPutQ(@machine.outstandingQhead, pUserDlCB);
+	machine.sendCount = machine.sendCount + 1;
+
+	/* return pointer to mac transmit request */
+	RETURN pDlCB;
+
+END GenBuildUserTransmitRequest;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+GenCauseEvent: PROCEDURE(pMachine, event, param) CLEAN;
+DCL pMachine			SELECTOR;
+DCL event				BYTE;
+DCL param				WORD;     
+
+/*-------------------------------------------------------------------------
+
+ purpose:   This procdeure allows the actions to generate another
+      event to be processed after the action processing is
+      done.
+
+ inputs:  pMachine - Selector to the state machine control block.
+      event - the event number to be caused.
+      param - a word parameter to be passed to the action
+        which is activated by the caused event.
+
+ sideEffects: The caused event and param are stored in the state machine
+      control block. 
+
+ algorithm: 
+  1) If a caused event has already been set up then call machine
+   failure (should never have more than one caused event outstanding)
+  2) Else put the caused event and parameter into the machine control
+   block.
+
+-------------------------------------------------------------------------*/
+
+DCL machine				BASED pMachine generalMachineType;
+
+	IF machine.causedEvent = noCausedEvent THEN
+	DO;
+		machine.causedEvent = event;
+		machine.causedParam = param;
+	END;
+	ELSE
+		CALL GenMachineFailure(pMachine, null, tooManyCausedEvents);
+
+END GenCauseEvent;
+
+END GeneralModule1;

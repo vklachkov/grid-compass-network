@@ -1,0 +1,403 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Primary Parse Module')
+
+$SET (primary)
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*         COMPASS CENTRAL DATA LINK CONTROL
+*
+*    Module:    PrimaryParseModule.   1/28/83
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PriParseModule: DO;
+$SAVE NOLIST
+$INCLUDE (``ccIncs`CommonDefines.inc~text~)
+$INCLUDE (``ccIncs`MachineDefines.inc~text~)
+$INCLUDE (``ccIncs`MemoryDefines.inc~text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~text~)
+$INCLUDE (``ccIncs`DlcFrameDefines.inc~text~)
+$INCLUDE (``ccIncs`PriStAndEvDefines.inc~text~)
+$INCLUDE (``ccIncs`DlcDataModule.inc~text~)
+$INCLUDE (``ccIncs`PriMachineModule.inc~text~)
+$INCLUDE (``ccIncs`DlcActionModule1.inc~text~)
+$INCLUDE (``ccIncs`DlcActionModule3.inc~text~)
+$INCLUDE (``ccIncs`GeneralModule.inc~text~)
+$INCLUDE (``ccIncs`UtlModule.inc~text~)
+$INCLUDE (``ccIncs`DlcSupportModule.inc~text~)
+$INCLUDE (``Incs`OsPlmProcs.inc~text~)
+$INCLUDE (``Incs`MovRtns.Plm.inc~text~)
+$RESTORE
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+ 
+/* binary values for dlc unnumbered control field identification */
+
+DCL	priCtlFieldTable (*) BYTE DATA (
+	cIf,
+	cI,
+	cRrF,
+	cRr,
+	cRnrF,
+	cRnr,
+	cXidF,
+	cXid,
+	cUaF,
+	cUa,
+	cRdF,
+	cRd,
+	cDmF,
+	cDm,
+	cCmdrF,
+	cCmdr,
+	cTestF,
+	cTest);
+     
+/* list of event numbers associated with received frames */
+
+DCL	priRecvEventTable (*) BYTE DATA (
+	priExRecvdIf,
+	priExRecvdInf,
+	priExRecvdRrF,
+	priExRecvdRrNf,
+	priExRecvdRnrF,
+	priExRecvdRnrNf,
+	priExRecvdXidF,
+	priExRecvdXidNf,
+	priExRecvdUaF,
+	priExRecvdUaNf,
+	priExRecvdRdF,
+	priExRecvdRdNf,
+	priExRecvdDmF,
+	priExRecvdDmNf,
+	priExRecvdCmdrF,
+	priExRecvdCmdrNf,
+	priExRecvdTestF,
+	priExRecvdTestNf);
+
+/* list of event numbers associated with dlc user request CBs */
+
+DCL	priDlcEventTable (*) BYTE DATA (
+	priExBadEvent,			/* 0 = configure, error here */
+	priExBadEvent,			/* 1 = shutdown, error here */
+	priExDlcAttachRequest,	/* 2 = attach */
+	priExDlcDetachRequest,	/* 3 = detach */
+	priExDlcConnRequest,	/* 4 = connect */
+	priExDlcDiscRequest,	/* 5 = disconnect */
+	priExDlcSendRequest,	/* 6 = send */
+	priExDlcReceiveRequest,	/* 7 = receive */
+	noEv,					/* 8 = abort, return immediately */
+	priExDlcStatusRequest,	/* 9 = status */
+	priExDlcControlRequest,	/* 10 = control */
+	priExDlcFlushRequest,	/* 11 = flush */
+	priExDlcDiscRequest,	/* 12 = forced disconnect */
+	priExBadEvent,			/* 13 = Die, error here */
+	priExBadEvent,			/* 14 = initialize, error here */
+	priExBadEvent);			/* 15 = not defined, error */
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PriParseReceiveEvent: PROCEDURE(pMachineArray, pDlCB, numberOfStations)
+															SELECTOR CLEAN;
+DCL pMachineArray		POINTER;
+DCL pDlCB				SELECTOR;
+DCL numberOfStations	BYTE;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL dlCB				BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+DCL dataDlCB			BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+													DlCBIoDataParams);
+DCL (event, ctlField)	BYTE;
+DCL (index, param)		WORD;
+DCL	freeStationCount	WORD;
+DCL	error				WORD;
+DCL pReturnMachine		SELECTOR;
+DCL returnMachine		BASED pReturnMachine dlcPrimaryMachineType;
+DCL pBuffer				POINTER;
+DCL buffer				BASED pBuffer STRUCTURE (dlcHeaderFormat);
+
+	IF ((dataDlCB.dataLength AND bufferTypeMask) = msgWithbufferPtr) THEN
+		pBuffer = dataDlCB.pBuffer;
+	ELSE
+		pBuffer = @dataDlCB.pBuffer;
+
+	IF (pReturnMachine := FindMachine(pMachineArray, numberOfStations,
+											buffer.addrField)) = null THEN
+	DO;
+		/* unknown address, ignore receive event */
+		CALL AcFreeCB(null, pDlCB);
+	END;
+	ELSE
+		DO;
+			error = dlCB.reqError;
+			IF (error <> 0) AND (error <> recMacOutOfBuffers) THEN
+			DO;
+				CALL AcFreeCB(null, pDlCB);
+				pReturnMachine = null;
+			END;
+			ELSE
+				DO;
+					/* mask off n(s) and n(r) fields, if present */
+					/* if i-frame, mask n(s) and n(r) */
+					IF (buffer.ctlField AND iBitMask) = 0 THEN
+						ctlField = buffer.ctlField AND iMask;
+					ELSE
+						/* if supervisory-frame, mask n(r) */
+						IF (buffer.ctlField AND sBitMask) = 0 THEN
+							ctlField = buffer.ctlField AND supMask;
+					ELSE
+						/* else use field as is */
+						ctlField = buffer.ctlField;  
+
+					param = 0;
+					event = noEv;
+
+					index = FINDB(@priCtlFieldTable, ctlField,
+													SIZE(priCtlFieldTable));
+					IF index <> null THEN
+					DO;
+						event = priRecvEventTable(index);
+						IF error = recMacOutOfBuffers THEN
+						DO;
+							IF event = priExRecvdIf THEN
+								event = priExRecvdNoBufferf;
+							ELSE
+								IF event = priExRecvdInf THEN
+									event = priExRecvdNoBufferNf;
+						END;
+						ELSE
+							IF event = priExRecvdXidF THEN
+							DO;
+								/* check for too many stations */
+								freeStationCount = 0;
+								DO index = 0 TO (numberOfStations - 1);
+									IF machineArray(index) = null THEN
+										freeStationCount = freeStationCount + 1;
+								END;
+								IF freeStationCount = 0 THEN
+									param = eDlcTooManyStations;
+							END;
+					END;
+					ELSE
+						DO;
+							event = priExRecvdInvalid;
+							param = eDlcInvalidFrame;
+							CALL AcFreeCB(null, pDlCB);
+							pDlCB = null;
+						END;
+				END;
+		END;
+
+	IF pReturnMachine <> null THEN
+	DO;
+		returnMachine.event = event;
+		returnMachine.param = param;
+	END;
+	RETURN pReturnMachine;
+
+END PriParseReceiveEvent;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PriParseTransmitEvent: PROCEDURE(pMachineArray, pDlCB) SELECTOR CLEAN;
+DCL pMachineArray	POINTER;
+DCL machineArray	BASED pMachineArray (1) SELECTOR;
+DCL pDlCB			SELECTOR;
+DCL dlCB			BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+DCL (found, x)		BYTE;
+DCL pReturnMachine	SELECTOR;
+DCL returnMachine	BASED pReturnMachine dlcPrimaryMachineType;
+
+	IF (pReturnMachine := machineArray(dlCB.stationNumber)) <> null THEN
+	DO;
+		returnMachine.event = priExXmitComplete;
+		returnMachine.param = dlCB.reqError;
+		IF dlCB.reqError <> 0 THEN
+		DO;
+			CALL AcFreeCB(pReturnMachine, pDlCB);
+			pReturnMachine = null;
+		END;
+	END;
+	ELSE
+		CALL GenMachineFailure(null, pDlCB, invalidParseEvent);
+    RETURN pReturnMachine;
+
+END PriParseTransmitEvent;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PriParseTimerEvent: PROCEDURE(pMachineArray, pDlCB, 
+										numberOfStations) SELECTOR CLEAN;
+DCL pMachineArray		POINTER;
+DCL machineArray		BASED pMachineArray (1) SELECTOR;
+DCL numberOfStations	BYTE;
+DCL pDlCB				SELECTOR;
+DCL dlCB				BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+DCL pReturnMachine		SELECTOR;
+DCL returnMachine		BASED pReturnMachine dlcPrimaryMachineType;
+DCL msgType				WORD;
+
+	pReturnMachine = null;
+
+	IF dlCB.stationNumber < numberOfStations THEN
+	DO;
+		pReturnMachine = machineArray(dlCB.stationNumber);
+		msgType = dlCB.msgFormat AND msgTmrFormatMask;
+		returnMachine.param = 0;
+		IF msgType = tmrDeferTimer THEN
+		DO;
+			returnMachine.deferTimerCB = null;
+			returnMachine.event = priExDeferTimeOut;
+			returnMachine.deferring = FALSE;
+			returnMachine.active = TRUE;
+		END;
+		ELSE
+			IF msgType = tmrResponseTimer THEN 
+			DO;
+				returnmachine.responseTimerCB = null;
+				returnMachine.event = priExResponseTimeOut;
+				returnMachine.param = eDlcResponseTimeOut;
+			END;
+		ELSE
+			IF msgType = tmrPollTimer THEN 
+			DO; 
+				returnmachine.pollTimerCB = null;
+				returnMachine.event = priExPollTimeOut;
+			END;
+		ELSE
+			IF msgType = tmrUserTimer THEN
+			DO;
+				returnmachine.userTimerCB = null;
+				returnMachine.event = priExUserTimeOut;
+			END;
+		ELSE
+			pReturnMachine = null;	/* ignore aborted timers */
+	END;
+	pDlCB = UtlFreeCB(pDlCB);
+	RETURN pReturnMachine;
+
+END PriParseTimerEvent;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PriParseDlcEvent: PROCEDURE(pMachineArray, pDlCB, numberOfStations,
+									pLastAllocatedAddress) SELECTOR CLEAN;
+DCL pMachineArray				POINTER;
+DCL pDlCB						SELECTOR;
+DCL numberOfStations			BYTE;
+DCL pLastAllocatedAddress		POINTER;
+DCL lastAllocatedAddress		BASED pLastAllocatedAddress BYTE;
+DCL machineArray				BASED pMachineArray (1) SELECTOR;
+DCL dlCB						BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+DCL attDlCB						BASED pDlCB STRUCTURE (DlCBgenDescriptor,
+															DlCBattParams);
+DCL (machineId, linkAddress)	BYTE;
+DCL	(addressSet, newAddress)	BYTE;
+DCL (event, state, returnReq)	BYTE;
+DCL (error, param)				WORD;
+DCL pReturnMachine				SELECTOR;
+DCL returnMachine				BASED pReturnMachine dlcPrimaryMachineType;
+
+	pReturnMachine = null;
+	returnReq = TRUE;		/* assume request to be returned */
+	event = noEv;			/* assume no event generated */
+	param = 0;
+	error = ok;				/* assume no error */
+
+	event = priDlcEventTable(dlCB.msgFormat AND msgDlcCaseMask);
+
+	IF event = priExBadEvent THEN error = eDlcInvalidRequest;
+	ELSE
+		DO;
+			IF event = priExDlcAttachRequest THEN
+			DO;
+				IF attDlCB.stationAddress = noStationAddress THEN
+				DO;
+					state = priSxClosed;
+					linkAddress = newStationAddress;
+					newAddress = FindUnusedLinkAddress(pMachineArray,
+									numberOfStations, lastAllocatedAddress);
+					lastAllocatedAddress = newAddress;
+					addressSet = FALSE;
+				END;
+				ELSE
+					IF (pReturnMachine := FindMachine(pMachineArray,
+						numberOfStations,attDlCB.stationAddress)) = null THEN
+					DO;
+						state = priSxDisconnected;
+						linkAddress = attDlCB.stationAddress;
+						newAddress = linkAddress;
+						addressSet = TRUE;
+					END;
+				ELSE
+					error = eDlcStationAlreadyExists;
+
+				IF error = ok THEN
+				DO;
+					IF (machineId := FindUnusedMachine(pMachineArray,
+									numberOfStations)) >= numberOfStations THEN
+						error = eDlcTooManyStations;
+					ELSE
+						DO;
+							/* no error, process attach */
+							returnReq = FALSE;
+							pReturnMachine = machineArray(machineId);
+							CALL MOVB(@priSdlcMachineInitValues,
+										BUILD$PTR(pReturnMachine, 0),
+														SIZE(returnMachine));
+							dlCB.stationNumber = machineId;
+							returnMachine.stationNumber = machineId;
+							returnMachine.linkNumber = dlCB.linkNumber;
+							returnMachine.userPID = attDlCB.userPID;
+							returnMachine.state = state;
+							returnMachine.stateList = @priStateList;
+							returnMachine.actionList = @priActionList;
+							returnMachine.linkAddress = linkAddress;
+							returnMachine.newAddress = newAddress;
+							returnMachine.addressSet = addressSet;
+						END;
+				END;
+			END;
+			ELSE
+				IF event = priExDlcReceiveRequest THEN
+				DO;
+					/* just queue buffer at MAC. no err return, no event */
+					returnReq = FALSE;
+					CALL PriAcQueueReceive(pReturnMachine, pDlCB);
+				END;
+			ELSE
+				IF event <> noEv THEN
+				DO;
+					IF (dlCB.stationNumber >= numberOfStations) OR
+								(machineArray(dlCB.stationNumber) = null) THEN
+						error = eDlcInvalidStationNumber;
+					ELSE 
+						DO;
+							returnReq = FALSE;
+							pReturnMachine = machineArray(dlCB.stationNumber);
+						END;
+				END;
+		END;
+
+	IF returnReq THEN
+	DO;
+		CALL GenReturnUserRequest(pReturnMachine, pDlCB, error);
+		pReturnMachine = null;
+	END;
+	ELSE
+		IF (pReturnMachine <> null) THEN
+		DO;
+			returnMachine.event = event;
+			returnMachine.param = param;
+		END;
+
+	RETURN pReturnMachine;
+
+END PriParseDlcEvent;
+
+END PriParseModule;

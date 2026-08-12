@@ -1,0 +1,90 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	Remote Forms Procs
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL eRmFormsUnknownMsg			LIT '1512';
+
+RemoteConnectToInterface: PROCEDURE (pUserClass, pUserIDBuffer, pUserIDLength, 
+							pConnectionProps, propsLength,
+							pMsgPtr, pError) WORD EXTERNAL;
+	DCL (pUserClass, pUserIdBuffer, pUserIDLength, 
+		pConnectionProps, pMsgPtr, pError) PTR;
+	DCL propsLength	WORD;
+	END;
+
+RemoteDisconnectInterface: PROCEDURE (Conn, reason, pError) EXTERNAL; 
+	DCL conn	WORD;
+	DCL reason	WORD;
+	DCL pError	PTR;
+	END;
+
+RemoteInterfaceConnected: PROCEDURE (conn, pError) BOOLEAN EXTERNAL; 
+	DCL conn	WORD;
+	DCL pError	PTR;
+	END;
+
+RemoteConCharIn: PROCEDURE (Conn, pError) WORD EXTERNAL; 
+	DCL conn	WORD;
+	DCL pError	PTR;
+	END;
+
+RemoteDataFormConfirmed: PROCEDURE (Conn, pDataForm, pLitStr, pCh, pError) 
+							BOOLEAN EXTERNAL;
+	DCL conn	WORD;
+	DCL (pDataForm, pLitStr, pCh, pError) PTR;
+	END;
+
+RemoteDataMenuConfirmed: PROCEDURE (Conn, pDataMenu, pLitStr, pItemSelected, 
+							pCh, pError) BOOLEAN EXTERNAL;
+	DCL conn	WORD;
+	DCL (pDataMenu, pLitStr, pItemSelected, pCh, pError) PTR;
+	END;
+
+RemoteMsgClearMessage: PROCEDURE (conn) EXTERNAL;
+	DCL conn	WORD;
+	END;
+
+RemoteMsgShowDecoded: PROCEDURE (Conn, error) EXTERNAL;
+	DCL conn	WORD;
+	DCL error WORD;
+	END;
+
+RemoteMsgShowLitError: PROCEDURE (Conn, pLitStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pLitStr	POINTER;
+	END;
+
+RemoteMsgShowError: PROCEDURE (Conn, pStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pStr	POINTER;
+	END;
+
+RemoteMsgShowLitMessage: PROCEDURE (Conn, pLitStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pLitStr	POINTER;
+	END;
+
+RemoteMsgShowMessage: PROCEDURE (Conn, pStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pStr	POINTER;
+	END;
+
+RemoteMsgStackLitMessage: PROCEDURE (Conn, pLitStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pLitStr	POINTER;
+	END;
+
+RemoteMsgStackMessage: PROCEDURE (Conn, pStr) EXTERNAL;
+	DCL conn	WORD;
+	DCL pStr	POINTER;
+	END;
+
+SetRowKinds: PROCEDURE (pForm) EXTERNAL;
+	DCL pForm	PTR;
+	END;
+
+GetRowKind: PROCEDURE (rowKindChar) BYTE EXTERNAL;
+
+	DCL rowKindChar	BYTE;
+	END;
+

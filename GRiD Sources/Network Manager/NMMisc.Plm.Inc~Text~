@@ -1,0 +1,87 @@
+/*	Miscellaneous procedures. */
+
+TellMessageWaiters: PROCEDURE(pid, error) EXT;
+DCL	pid		WORD,
+	error	WORD;
+END;
+
+AllocateBytes: PROCEDURE(length) POINTER EXT;
+DCL	length	WORD;
+END;
+
+FreeBytes: PROCEDURE(pBlock, length) EXT;
+DCL	pBlock	POINTER,
+	length	WORD;
+END;
+
+CopyOfString: PROCEDURE(pStr) POINTER EXT;
+DCL pStr	POINTER;
+END;
+
+CopyString: PROCEDURE(pSrc, pDest) EXT;
+DCL	pSrc	POINTER,
+	pDest	POINTER;
+END;
+
+NewString: PROCEDURE(length) POINTER EXT;
+DCL	length	WORD;
+END;
+
+NewStringLit: PROCEDURE(pLit) POINTER EXT;
+DCL	pLit	POINTER;
+END;
+
+IntegerToString: PROCEDURE(n) POINTER EXT;
+DCL	n	WORD;
+END;
+
+FreeString: PROCEDURE(ppStr) EXT;
+DCL	ppStr	POINTER;
+END;
+
+EqualStrings: PROCEDURE(pStr1, pStr2) BOOLEAN EXT;
+DCL	pStr1	POINTER,
+	pStr2	POINTER;
+END;
+
+ConcatStrings: PROCEDURE(pStr1, pStr2) POINTER EXT;
+DCL	pStr1	POINTER,
+	pStr2	POINTER;
+END;
+
+OsGetCardStatus: PROCEDURE(pid, pInfo, length, pError) EXT;
+DCL	pid		WORD,
+	pInfo	POINTER,
+	length	WORD,
+	pError	POINTER;
+END;
+
+GetVersionString: PROCEDURE(pid) POINTER EXT;
+DCL	pid	WORD;
+END;
+
+Max: PROCEDURE(a, b) WORD EXT;
+DCL	a	WORD,
+	b	WORD;
+END;
+
+LogInitLog: PROCEDURE(pName, fileLength, doTimestamp, doLineOut, doCrLf, pError)
+																	WORD EXT;
+DCL	pName		POINTER,
+	fileLength	WORD,
+	doTimestamp	BOOLEAN,
+	doLineOut	BOOLEAN,
+	doCrLf		BOOLEAN,
+	pError		POINTER;
+END LogInitLog;
+
+LogWriteLog: PROCEDURE(userConn, pStr, pError) EXT;
+DCL	userConn	WORD,
+	pStr		POINTER,
+	pError		POINTER;
+END LogWriteLog;
+
+LogEndLog: PROCEDURE(userConn, pError) EXT;
+DCL	userConn	WORD,
+	pError		POINTER;
+END LogEndLog;

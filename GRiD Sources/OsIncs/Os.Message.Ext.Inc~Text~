@@ -1,0 +1,20 @@
+
+/*        This is Os.Message.Ext.Inc.       */
+
+
+OsSend: PROCEDURE (procID, messageType, note, pMsg, pError) EXTERNAL;
+    DCL procID          WORD;
+    DCL messageType     WORD;
+    DCL note            WORD;
+    DCL pMsg            PTR;
+    DCL pError          PTR;
+    END;
+
+OsReceive: PROCEDURE (procID, messageType, time, pNote, pError) PTR EXTERNAL;
+    DCL procID          WORD;
+    DCL messageType     WORD;
+    DCL time            WORD;
+    DCL pNote           PTR;
+    DCL pError          PTR;
+    END;
+

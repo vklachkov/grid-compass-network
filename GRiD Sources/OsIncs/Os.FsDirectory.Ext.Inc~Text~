@@ -1,0 +1,19 @@
+/* This is Os.FsDirectory.Ext.Inc */
+
+DoPathName: PROCEDURE (pPath, mode, dirFID, pFID, pType,
+                       pCur, pNext) WORD EXTERNAL;
+  DCL mode        BYTE;
+  DCL dirFID      FIDType;
+  DCL pPath       PTR;
+  DCL pFID        PTR;
+  DCL pType       PTR;
+  DCL pCur        PTR;
+  DCL pNext       PTR;
+  END;
+
+FakeOpen: PROCEDURE (FID, drive, pMsEntry, pError) ConnectionType EXTERNAL;
+  DCL drive       BYTE;
+  DCL FID         WORD;
+  DCL pMsEntry    PTR;
+  DCL pError      PTR; 
+  END;

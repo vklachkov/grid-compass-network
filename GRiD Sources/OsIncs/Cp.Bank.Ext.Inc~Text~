@@ -1,0 +1,18 @@
+/* This is Cp.Bank.Ext.Inc */
+
+CpGetMySlot: PROCEDURE (romId) BYTE EXTERNAL;
+  DCL romId     WORD;
+  END;
+
+CpBankInfo: PROCEDURE PTR EXTERNAL;
+  END;
+
+CpSetActiveSlot: PROCEDURE (slot) BYTE EXTERNAL;
+  DCL slot     BYTE;
+  END;
+
+CpGetSlotAddress: PROCEDURE (slot) PTR EXTERNAL;
+  DCL slot      BYTE;
+  END;
+
+

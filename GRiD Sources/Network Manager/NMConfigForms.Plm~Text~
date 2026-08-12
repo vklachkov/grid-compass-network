@@ -1,0 +1,1626 @@
+$COMPACT
+$TITLE('Network Manager Display Procedures')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Display Procedures	-	1/3/86				*/
+/*																			*/
+/****************************************************************************/
+
+NMConfigForms: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Keys.Plm.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`Dataforms.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`RemoteFormsProcs.Plm.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigData.Plm.Inc~Text~)
+$INCLUDE(NMConfigMain.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$INCLUDE(NMMisc.Plm.Inc~Text~)
+$RESTORE
+
+/* Varying messages. */
+
+DCL	cardCmd			(*) BYTE INITIAL ('Card n: Select item and confirm');
+
+DCL cardMsg			(*) BYTE INITIAL ('Card n: Select port protocols'),
+	cardMsgIndex	LIT '5';
+
+DCL	portMsg			(*) BYTE INITIAL
+								('Card n/Port n: Fill in form and confirm'),
+	portMsgIndex	LIT '12';
+
+$EJ
+BuildCardMenu: PROCEDURE(pCardSelect) CLEAN;
+
+DCL	pCardSelect	POINTER,
+	cardSelect	BASED pCardSelect (1) BYTE,
+	nCard		BYTE,
+	i			BYTE,
+	j			WORD;
+
+	nCard, j = 0;
+	DO i = 0 TO 7;
+		IF cardInfo(i).cardType = csCard THEN
+		DO;
+			DO CASE cardInfo(i).memSize;
+				CALL MOVB(@('U R IN TROUBLE!!!                        ~'),
+														@cardMenuItems(j), 42);
+				CALL MOVB(@('Card in slot   (128K)                    ~'),
+														@cardMenuItems(j), 42);
+				CALL MOVB(@('Card in slot   (256K)                    ~'),
+														@cardMenuItems(j), 42);
+				CALL MOVB(@('Card in slot   (384K)                    ~'),
+														@cardMenuItems(j), 42);
+				CALL MOVB(@('Card in slot   (512K)                    ~'),
+														@cardMenuItems(j), 42);
+			END;
+			cardMenuItems(j + 13) = '0' + i;
+			IF NOT cardInfo(i).configured THEN
+			DO;
+				IF CardNotAvailable(i) THEN
+					CALL MOVB(@('Configured for app'),
+													@cardMenuItems(j + 22), 18);
+				ELSE
+					CALL MOVB(@('Not used'), @cardMenuItems(j + 22), 8);
+			END;
+			ELSE
+				CALL MOVB(@('Configured for comm'), @cardMenuItems(j + 22), 19);
+			j = j + 42;
+			cardSelect(nCard) = i;
+			nCard = nCard + 1;
+		END;
+	END;
+	cardMenuItems(j) = '|';
+
+END BuildCardMenu;
+
+$EJ
+BuildConnLabelsAndChoices: PROCEDURE(pServer, networkType) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	i			WORD,
+	j			BYTE,
+	pStr		POINTER,
+	str			BASED pStr stringType;
+
+	CALL MOVB(@('$Phone number~Phone number~'), @connFormLabels, 27);
+	i = 27;
+	DO j = 0 TO 3;
+		IF networkType = publicNetwork THEN
+		DO;
+			IF ((pStr := serverInfo.pPubNumber(j)) <> nullPtr) THEN
+			DO;
+				IF str.len <> 0 THEN
+				DO;
+					CALL MOVB(@str.chars, @connFormLabels(i), str.len);
+					i = i + str.len;
+					connFormLabels(i) = '~';
+					i = i + 1;
+				END;
+			END;
+		END;
+		ELSE
+			IF networkType = privateNetwork THEN
+			DO;
+				IF ((pStr := serverInfo.pPvtNumber(j)) <> nullPtr) THEN
+				DO;
+					IF str.len <> 0 THEN
+					DO;
+						CALL MOVB(@str.chars, @connFormLabels(i), str.len);
+						i = i + str.len;
+						connFormLabels(i) = '~';
+						i = i + 1;
+					END;
+				END;
+			END;
+	END;
+	connFormLabels(i) = '|';
+	i = i + 1;
+	CALL MOVB(@connFormLabelsInit(1), @connFormLabels(i),connFormLabelsInit(0));
+
+END BuildConnLabelsAndChoices;
+
+$EJ
+/* Build choices for system ports. */
+
+BuildPortChoices: PROCEDURE(baudChoice, networkType) CLEAN;
+
+DCL	baudChoice	BYTE,
+	networkType	BYTE,
+	baudRate	WORD,
+	i			WORD,
+	j			WORD,
+	plChoice	BYTE;
+
+	baudRate = baudTable(baudChoice);
+	plChoice = 0;
+	CALL MOVB(@('?System port ~none~'), @plPortChoices(0), 19);
+	j = 18;
+	DO i = 0 TO 31;
+		IF cardInfo(i/4).configured THEN
+		DO;
+			IF	(portInfo(i).protocol = phonelink) AND
+				(portInfo(i).phonelinkType <> answerOnlyPdl) AND
+				(NOT ((baudRate <> nullWord) AND (networkType = privateNetwork)
+							AND (portInfo(i).lineKind = externalLine))) AND
+				((baudRate = nullWord) OR
+				 ((baudRate = 0) AND (portInfo(i).lineType = leased)) OR
+				 ((portInfo(i).lineType <> leased) AND
+				  ((baudRate = portInfo(i).baudRate) OR
+				   ((portInfo(i).baudChoice = baud1200and2400) AND
+					((baudRate = 1200) OR (baudRate = 2400))) OR
+				   ((baudChoice = baud1200and2400) AND
+					((portInfo(i).baudRate = 1200) OR
+					 (portInfo(i).baudRate = 2400)))))) THEN
+			DO;
+				CALL MOVB(@('Card /Port ~'), @plPortChoices(j + 1), 12);
+				plPortChoices(j + 5) = '0' + (i/4);
+				plPortChoices(j + 11) = '0' + (i MOD 4);
+				j = j + 12;
+				plMap(plChoice) = i;
+				plChoice = plChoice + 1;
+				portInfo(i).choice = plChoice + 1;
+			END;
+			ELSE
+				portInfo(i).choice = noPort;
+		END;
+		ELSE
+			portInfo(i).choice = noPort;
+	END;
+	j = j + 1;
+	plPortChoices(j) = '|';
+
+END BuildPortChoices;
+
+$EJ
+/* Build system port menu labels and choices. */
+
+BuildSysPortLabelsAndChoices: PROCEDURE(baudChoice, networkType) CLEAN;
+
+DCL	baudChoice	BYTE,
+	networkType	BYTE,
+	i			WORD,
+	j			BYTE,
+	len			WORD,
+	numIndex	LIT	'12';
+
+	CALL BuildPortChoices(baudChoice, networkType);
+	len = FINDB(@plPortChoices, '|', SIZE(plPortChoices)) + 1;
+	i = 0;
+	DO j = 0 TO 3;
+		CALL MOVB(@plPortChoices, @sysPortFormLabels(i), len);
+		sysPortFormLabels(i + numIndex) = '0' + j;
+		i = i + len;
+	END;
+
+END BuildSysPortLabelsAndChoices;
+
+$EJ
+/* Get password from user and verify it. */
+
+GoodPassword: PROCEDURE(pCh, pError) BOOLEAN CLEAN;
+
+DCL	pCh			POINTER,
+	ch			BASED pCh BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	confirmed	BOOLEAN;
+
+	password.len, password.dummy = 0;
+	passwordRow.currentChoice = 1;
+	CALL RemoteMsgStackLitMessage(remConn, @('GRiDNetwork Manager'));
+	confirmed = RemoteDataFormConfirmed(remConn, @passwordForm,
+				@('Password: Enter administration password and confirm'),
+																@ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1625, attentionOff);
+		ch = escapeKey;
+		RETURN FALSE;
+	END;
+
+	IF ch = confirmKey THEN
+	DO;
+		password.dummy = password.len;
+		IF SameStrings(@nmPassword, @password.dummy) THEN
+			RETURN TRUE;
+	END;
+	RETURN FALSE;
+
+END GoodPassword;
+
+$EJ
+/* Check for valid protocol combination. */
+
+ValidCombination: PROCEDURE(pProtocol, pFileType) BOOLEAN CLEAN;
+
+DCL	pProtocol	POINTER,
+	temp		BASED pProtocol (4) BYTE,
+	p			(4) BYTE,
+	pFileType	POINTER,
+	fileType	BASED pFileType BYTE,
+	i			BYTE;
+
+	DO i = 0 TO 3;
+		IF temp(i) = fiberlinkPrimary THEN p(i) = gridlinkPrimary;
+		ELSE
+			p(i) = temp(i);
+	END;
+
+	IF (p(0) <> p(1)) AND (p(0) <> emptyLink) AND (p(1) <> emptyLink) THEN
+		GOTO errExit;
+	ELSE
+		IF (p(2) <> p(3)) AND (p(2) <> emptyLink) AND (p(3) <> emptyLink) THEN
+			GOTO errExit;
+	ELSE
+		IF ((p(0) = gridlinkPrimary) OR (p(1) = gridlinkPrimary)) AND
+							((p(2) = phonelink) OR (p(3) = phonelink)) THEN
+			GOTO errExit;
+
+	fileType = emptyFile;
+	DO i = 0 TO 3;
+		IF p(i) <> emptyLink THEN
+		DO;
+			IF fileType = emptyFile THEN
+			DO;
+				IF p(i) = gridlinkPrimary THEN
+					fileType = gridlinkPrimaryFile;
+				ELSE
+					fileType = phonelinkFile;
+			END;
+			ELSE
+				IF (fileType = phonelinkFile) AND (p(i) = gridlinkPrimary) THEN
+					fileType = gridAndPhonelinkFile;
+		END;
+	END;
+
+	RETURN TRUE;
+
+errExit:
+	RETURN FALSE;
+
+END ValidCombination;
+
+$EJ
+/* Configure a comm card. */
+
+ConfigureCommCard: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	oldBaudRate		WORD,
+	oldChoice		BYTE,
+	confirmed		BOOLEAN,
+	modified		BOOLEAN,
+	prefixChanged	BOOLEAN,
+	hasform			BOOLEAN,
+	warning128k		BOOLEAN,
+	cardNum			BYTE,
+	portNum			BYTE,
+	portIndex		BYTE,
+	fileType		BYTE,
+	selection		WORD,
+	dummy			WORD,
+	cardSelect		(8) BYTE,
+	configPort		(4) BOOLEAN,
+	protocolChoice	(4) BYTE,
+	i				BYTE;
+
+	DO i = 0 TO 3;
+		configPort(i) = FALSE;
+	END;
+	warning128k = FALSE;
+	error = eOk;
+	CALL BuildCardMenu(@cardSelect);
+
+	/* Select a comm card */
+
+	confirmed = RemoteDataMenuConfirmed(remConn, @cardMenuItems,
+		@('Configure card: Select item and confirm'), @selection, @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN GOTO procExit;
+	cardNum = cardSelect(selection - 1);
+	portIndex = 4*cardNum;
+
+	selection = 1;
+	IF cardInfo(cardNum).configured THEN
+	DO;
+		cardCmd(cardMsgIndex) = '0' + cardNum;
+		confirmed = RemoteDataMenuConfirmed(remConn, @cardCmdMenu, @cardCmd,
+													@selection, @ch, @error);
+		CALL RemoteMsgClearMessage(remConn);
+		IF (error <> eOk) OR (ch <> confirmKey) THEN GOTO procExit;
+	END;
+
+	prefixChanged, modified = FALSE;
+	IF cardInfo(cardNum).configured THEN
+	DO portNum = 0 TO 3;
+		protocolChoice(portNum), protocolRow(portNum).currentChoice =
+									portInfo(portIndex + portNum).protocol;
+	END;
+	ELSE
+		DO portNum = 0 TO 3;
+			protocolChoice(portNum), protocolRow(portNum).currentChoice =
+																	emptyLink;
+		END;
+
+	IF selection = 1 THEN
+	DO i = 0 TO 3;
+		configPort(i) = TRUE;
+	END;
+	ELSE
+		configPort(selection - 2) = TRUE;
+
+	IF selection = 1 THEN
+	DO;
+		cardMsg(cardMsgIndex) = '0' + cardNum;
+		confirmed = RemoteDataFormConfirmed(remConn, @protForm, @cardMsg,
+																@ch, @error);
+		CALL RemoteMsgClearMessage(remConn);
+		IF (error <> eOk) OR (ch <> confirmKey) THEN GOTO procExit;
+		DO portNum = 0 TO 3;
+			protocolChoice(portNum) = protocolRow(portNum).currentChoice;
+			modified = modified OR protocolRow(portNum).changed;
+		END;
+		IF NOT ValidCombination(@protocolChoice(0), @fileType) THEN
+		DO;
+			CALL RemoteMsgShowDecoded(remConn, eNMIllegalProtocolCombination);
+			GOTO procExit;
+		END;
+	END;
+	ELSE
+		fileType = cardInfo(cardNum).fileType;
+
+	CALL SavePortInfo(portIndex);
+	DO portNum = 0 TO 3;
+		IF configPort(portNum) THEN
+		DO CASE (protocolChoice(portNum) - 1);
+
+			DO;										/* Empty */
+				portInfoSave(portNum).protocol = emptyLink;
+			END;
+
+			DO;										/* Phonelink */
+				portMsg(cardMsgIndex) = '0' + cardNum;
+				portMsg(portMsgIndex) = '0' + portNum;
+				IF protocolRow(portNum).changed OR
+										(NOT cardInfo(cardNum).configured) THEN
+					CALL InitDefaultPortForm(cardNum);
+				ELSE
+					CALL InitPortForm(cardNum, portNum, @hasForm);
+				oldBaudRate = baudRateRow.theData;
+				oldChoice = baudRateRow.currentChoice;
+				confirmed = RemoteDataFormConfirmed(remConn, @portInfoForm,
+														@portMsg, @ch, @error);
+				CALL RemoteMsgClearMessage(remConn);
+				IF (error <> eOk) OR (ch <> confirmKey) THEN
+					GOTO procExit;
+				IF (baudRateRow.currentChoice = baudEdit) AND
+								((baudRateRow.theData < 100) OR
+											(baudRateRow.theData > 19200)) THEN
+				DO;
+					ch = escapeKey;
+					CALL RemoteMsgShowLitError(remConn,@('Invalid baud rate'));
+					GOTO procExit;
+				END;
+				modified = modified OR lineTypeRow.changed OR
+														modemTypeRow.changed;
+				modified = modified OR dialingModeRow.changed
+														OR dialTypeRow.changed;
+				IF cardInfo(cardNum).memSize > 1 THEN
+					modified = modified OR phonelinkTypeRow.changed;
+				ELSE
+					DO;
+						warning128k = warning128k OR
+							(phonelinkTypeRow.currentChoice <> answerOnlyPdl);
+						phonelinkTypeRow.currentChoice = answerOnlyPdl;
+					END;
+				prefixChanged = prefixChanged OR prefixRow.changed;
+				IF baudRateRow.changed THEN
+				DO;
+					IF (oldChoice <> baudRateRow.currentChoice) AND
+							((oldChoice = baudExternal) OR
+								(baudRateRow.currentChoice = baudExternal)) THEN
+						modified = TRUE;
+					ELSE
+						IF (baudRateRow.currentChoice = baudEdit) THEN
+							modified = modified OR
+										(baudRateRow.theData <> oldBaudRate);
+					ELSE
+						modified = modified OR
+								(baudTable(baudRateRow.currentChoice) <>
+																oldBaudRate);
+				END;
+				CALL CopyPortFormToSave(portIndex + portNum);
+			END;
+
+			DO;										/* GRiDlink */
+				portInfoSave(portNum).protocol = gridlinkPrimary;
+			END;
+
+			DO;										/* Fiberlink */
+				portInfoSave(portNum).protocol = fiberlinkPrimary;
+			END;
+		END;
+	END;
+
+	CALL GetAccess(@error);
+	IF error <> eOk THEN
+	DO;
+		CALL RemoteMsgShowDecoded(remConn, error);
+		GOTO procExit;
+	END;
+	IF (protocolChoice(0) = emptyLink) AND (protocolChoice(1) = emptyLink) AND
+	   (protocolChoice(2) = emptyLink) AND (protocolChoice(3) = emptyLink) THEN
+	DO;
+		IF cardInfo(cardNum).configured THEN
+		DO;
+			cardInfo(cardNum).configured = FALSE;
+			changed, needsToReboot = TRUE;
+		END;
+	END;
+	ELSE
+		DO;
+			CALL RestorePortInfo(portIndex);
+			cardInfo(cardNum).fileType = fileType;
+			cardInfo(cardNum).configured = TRUE;
+			cardInfo(cardNum).changed = cardInfo(cardNum).changed OR modified;
+			changed = changed OR modified OR prefixChanged;
+			needsToReboot = needsToReboot OR modified;
+		END;
+	IF modified THEN CALL SetPortSearchOrder;
+	consistent = CheckConsistency(nullPtr);
+	CALL FreeAccess(@error);
+	IF warning128k THEN
+		CALL RemoteMsgShowLitError(remConn,
+				@('WARNING: 128k card does not support call origination'));
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1626, attentionOff);
+
+END ConfigureCommCard;
+
+$EJ
+/* Build editable choice form for remote system names. */
+
+BuildRemSystemForm: PROCEDURE(pMap, pError) BOOLEAN CLEAN;
+
+DCL pMap				POINTER,
+	map					BASED pMap (1) POINTER,
+	pError				POINTER,
+	error				BASED pError WORD,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	pStr				POINTER,
+	str					BASED pStr stringType,
+	i					WORD,
+	j					WORD,
+	k					WORD,
+	remSystemFormLabels	BASED remSystemForm.labelsAndChoices (1) BYTE;
+
+	i = nServers*(serverNameLength + commentLength + 10) + commentLength + 100;
+	remSystemForm.labelsAndChoices = AllocateMemory(i, @error);
+	IF error <> eOk THEN RETURN FALSE;
+
+	CALL MOVB(@('$GRiD Server name~Enter GRiD Server name~'),
+											@remSystemFormLabels(0), 41);
+	j = 41;
+	k = 0;
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		pStr = serverInfo.pName;
+		CALL MOVB(@str.chars, @remSystemFormLabels(j), str.len);
+		j = j + str.len;
+
+		pStr = serverInfo.pComment;
+		IF (pStr <> nullPtr) AND (str.len > 0) THEN
+		DO;
+			remSystemFormLabels(j) = ' ';
+			remSystemFormLabels(j + 1) = '(';
+			j = j + 2;
+			CALL MOVB(@str.chars, @remSystemFormLabels(j), str.len);
+			j = j + str.len;
+			remSystemFormLabels(j) = ')';
+			j = j + 1;
+		END;
+		remSystemFormLabels(j) = '~';
+		j = j + 1;
+		map(k) = pServer;
+		k = k + 1;
+		IF pCurSystem = pServer THEN
+			curSystemChoice = k + 1;
+		pServer = serverInfo.pNext;
+	END;
+	remSystemFormLabels(j) = '|';
+	j = j + 1;
+	CALL MOVB(@('?Network type~Public~Private~Leased~|'),
+												@remSystemFormLabels(j), 37);
+	j = j + 37;
+
+	/* Adjust curSystemChoice */
+
+	IF curSystemChoice > (k + 1) THEN
+		curSystemChoice = 1;
+
+	RETURN TRUE;
+
+END BuildRemSystemForm;
+
+$EJ
+/* Get a server for add/modify. */
+
+GetServerInfo: PROCEDURE(pNewSystem, pNetworkType, numItems, formType, pCh,
+														pError) BOOLEAN CLEAN;
+
+DCL	pNewSystem			POINTER,
+	newSystem			BASED pNewSystem BOOLEAN,
+	pNetworkType		POINTER,
+	networkType			BASED pNetworkType BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	numItems			WORD,
+	formType			BYTE,
+	pCh		    		POINTER,
+	ch					BASED pCh BYTE,
+	dummy				WORD,
+	confirmed			BOOLEAN,
+	needToDealloc		BOOLEAN,
+	i					WORD,
+	j					WORD,
+	remSystemFormLabels	BASED remSystemForm.labelsAndChoices (1) BYTE,
+	commentFound		BOOLEAN;
+
+	commentFound, newSystem = FALSE;
+	needToDealloc = BuildRemSystemForm(@sysMap, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL RemoteMsgShowDecoded(remConn, error);
+		GOTO procExit;
+	END;
+
+	remSystemName.len = 0;
+	remSystemNameRow.currentChoice = curSystemChoice;
+	sysNetworkTypeRow.currentChoice = publicNetwork;
+
+	remSystemForm.choiceLines = Max(nServers + 1, 3);
+	remSystemForm.numItems = numItems;
+	IF formType = serverDefinition THEN
+		confirmed = RemoteDataFormConfirmed(remConn, @remSystemForm,
+			@('Define server: Fill in form and confirm'), @ch, @error);
+	ELSE
+		IF formType = connectionDefinition THEN
+			confirmed = RemoteDataFormConfirmed(remConn, @remSystemForm,
+				@('Add connection: Fill in form and confirm'), @ch, @error);
+	ELSE
+		/* formType = serverErasure */
+		confirmed = RemoteDataFormConfirmed(remConn, @remSystemForm,
+			@('Erase server definition: Fill in form and confirm'),
+																@ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN GOTO procExit;
+
+	networkType = sysNetworkTypeRow.currentChoice;
+	IF (curSystemChoice := remSystemNameRow.currentChoice) = 1 THEN
+	DO;
+		i = FINDB(@remSystemName.chars, '(', remSystemName.len);
+		IF i <> nullWord THEN
+		DO;
+			j = FINDB(@remSystemName.chars, ')', remSystemName.len);
+			remSystemName.len = i;
+			IF (j <> nullWord) AND (j > i) THEN
+			DO;
+				commentFound = TRUE;
+				j = j - i - 1;
+				i = i + 1;
+				comment.len, comment.dummy = j;
+				CALL MOVB(@remSystemName.chars(i), @comment.chars, j);
+			END;
+		END;
+		i = remSystemName.len;
+		DO WHILE (i > 0) AND (remSystemName.chars(i - 1) = ' ');
+			i = i - 1;
+		END;
+		remSystemName.len, remSystemName.dummy = i;
+	END;
+
+	IF (curSystemChoice = 1) AND (remSystemName.len = 0) THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+								@('System name must have non-zero length'));
+		ch = escapeKey;
+		goto procExit;
+	END;
+
+	/* If choice is 1, see if it is one of the choices. */
+
+	IF (curSystemChoice = 1) THEN
+	DO;
+		IF NOT FindServer(remSystemName.dummy, @remSystemName.chars,
+																@pServer) THEN
+		DO;
+			/* We have a new system. */
+			newSystem = TRUE;
+		END;
+		ELSE
+			DO i = 1 TO nServers;
+				IF sysMap(i - 1) = pServer THEN
+				DO;
+					curSystemChoice = i + 1;
+					GOTO procExit;
+				END;
+			END;
+	END;
+	ELSE
+		DO;
+			pServer = sysMap(curSystemChoice - 2);
+			CALL CopyString(serverInfo.pName, @remSystemName);
+		END;
+
+procExit:
+	IF needToDealloc THEN
+		CALL OsFree(remSystemForm.labelsAndChoices, @dummy);
+	RETURN commentFound;
+
+END GetServerInfo;
+
+$EJ
+/* Define a GRiD server */
+
+DefineServer: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh		    		POINTER,
+	ch					BASED pCh BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	pStr				POINTER,
+	str					BASED pStr stringType,
+	confirmed			BOOLEAN,
+	newSystem			BOOLEAN,
+	networktype			BYTE,
+	numberChanged		BOOLEAN,
+	baudChanged			BOOLEAN,
+	sysPortChanged		BOOLEAN,
+	addDefConn			BOOLEAN,
+	pMsgStr				POINTER,
+	msgStr				BASED pMsgStr stringType,
+	commentFound		BOOLEAN,
+	i					BYTE;
+
+	pMsgStr = nullPtr;
+	numberChanged = FALSE;
+	baudChanged = FALSE;
+	addDefConn = FALSE;
+	sysPortChanged = FALSE;
+	commentFound = GetServerInfo(@newSystem, @networkType, 2, serverDefinition,
+																@ch, @error);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+	IF NOT newSystem THEN pServer = sysMap(curSystemChoice - 2);
+
+	pMsgStr = ConcatStrings(NewStringLit(@('Server ')),
+											CopyOfString(@remSystemName));
+	IF networkType = publicNetwork THEN
+		pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@('/ Public ')));
+	ELSE
+		IF networkType = privateNetwork THEN
+			pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@('/ Private ')));
+	ELSE
+		pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@('/ Leased ')));
+	msgStr.chars(msgStr.len - 1) = '';
+
+	IF NOT commentFound THEN
+	DO;
+		commentRow.currentChoice = 1;
+		comment.len = 0;
+		IF (NOT newSystem) AND ((pStr := serverInfo.pComment) <> nullPtr) THEN
+		DO;
+			IF (str.len <> 0) THEN
+				CALL CopyString(pStr, @comment);
+		END;
+		CALL RemoteMsgShowLitMessage(remConn, @msgStr.chars);
+
+		confirmed = RemoteDataFormConfirmed(remConn, @commentForm,
+						@('Comment: Fill in form and confirm'), @ch, @error);
+		CALL RemoteMsgClearMessage(remConn);
+		IF (error <> eOk) OR (ch <> confirmKey) THEN GOTO procExit;
+	END;
+
+	IF networkType <> leasedNetwork THEN
+	DO;
+		IF newSystem THEN
+			CALL InitDefaultNetForm;
+		ELSE
+			CALL InitNetForm(pServer, networkType);
+		CALL RemoteMsgShowLitMessage(remConn, @msgStr.chars);
+		confirmed = RemoteDataFormConfirmed(remConn, @netForm,
+			@('Access information: Fill in form and confirm'), @ch, @error);
+		CALL RemoteMsgClearMessage(remConn);
+		IF (error <> eOk) OR (ch <> confirmKey) THEN
+			GOTO procExit;
+
+		numberChanged = phoneNumber1Row.changed;
+		numberChanged = numberChanged OR phoneNumber2Row.changed;
+		numberChanged = numberChanged OR phoneNumber3Row.changed;
+		numberChanged = numberChanged OR phoneNumber4Row.changed;
+		baudChanged = baudRate1Row.changed;
+		baudChanged = baudChanged OR baudRate2Row.changed;
+		baudChanged = baudChanged OR baudRate3Row.changed;
+		baudChanged = baudChanged OR baudRate4Row.changed;
+
+		IF NOT EqualStrings(@myServerName, @remSystemName) THEN
+			addDefConn = newSystem OR numberChanged OR baudChanged;
+	END;
+	ELSE
+		IF NOT EqualStrings(@myServerName, @remSystemName) THEN
+		DO;
+			IF newSystem THEN
+				CALL InitDefaultSysPortForm(baudExternal, leasedNetwork);
+			ELSE
+				CALL InitLeasedSysPortForm(pServer);
+			CALL RemoteMsgShowLitMessage(remConn, @msgStr.chars);
+			confirmed = RemoteDataFormConfirmed(remConn, @sysPortForm,
+					@('System ports: Fill in form and confirm'), @ch, @error);
+			CALL RemoteMsgClearMessage(remConn);
+			IF (error <> eOk) OR (ch <> confirmKey) THEN
+				GOTO procExit;
+			DO i = 0 TO 3;
+				sysPortChanged = sysPortChanged OR systemPortRow(i).changed;
+			END;
+			addDefConn = sysPortChanged;
+		END;
+
+	IF newSystem THEN
+	DO;
+		IF pMsgStr <> nullPtr THEN
+			CALL FreeString(@pMsgStr);
+		pMsgStr = ConcatStrings(
+						NewStringLit(@('Confirm to add server ')),
+											CopyOfString(@remSystemName));
+		pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@(' ')));
+		msgStr.chars(msgStr.len - 1) = '';
+		IF NOT ConfirmMsg(@msgStr.chars, @ch, @error) THEN
+			GOTO procExit;
+	END;
+	ELSE
+		IF addDefConn THEN
+		DO;
+			IF MarkCustomConnections(pServer, networkType) THEN
+			DO;
+				IF pMsgStr <> nullPtr THEN
+					CALL FreeString(@pMsgStr);
+				pMsgStr = NewStringLit(@('Confirm to update connections '));
+				msgStr.chars(msgStr.len - 1) = '';
+				IF NOT ConfirmMsg(@msgStr.chars, @ch, @error) THEN
+					GOTO procExit;
+			END;
+		END;
+
+	CALL GetAccess(@error);
+	IF newSystem THEN
+	DO;
+		pServer = FindFreeServer;
+		serverInfo.pName = CopyOfString(@remSystemName);
+		CALL InsertServer(pServer);
+	END;
+	IF serverInfo.pComment <> nullPtr THEN
+	DO;
+		CALL FreeString(@serverInfo.pComment);
+		serverInfo.pComment = nullPtr;
+	END;
+	IF comment.len <> 0 THEN
+		serverInfo.pComment = CopyOfString(@comment);
+	IF networkType <> leasedNetwork THEN
+		CALL CopyNetForm(pServer, networkType);
+	IF (NOT newSystem) AND baudChanged THEN
+		CALL UpdateBaudRate(pServer, networkType);
+	IF addDefConn THEN
+		CALL AddDefaultConnections(pServer, networkType);
+	pCurSystem = pServer;
+	changed = changed OR newSystem OR commentRow.changed OR numberChanged OR
+												baudChanged OR sysPortChanged;
+	IF NOT newSystem THEN
+		consistent = CheckConsistency(nullPtr);
+	CALL FreeAccess(@error);
+
+procExit:
+	IF pMsgStr <> nullPtr THEN
+		CALL FreeString(@pMsgStr);
+	IF error <> eOk THEN
+		CALL LogError(error, 1627, attentionOff);
+
+END DefineServer;
+
+$EJ
+/* Erase a server definition and all its connections. */
+
+EraseServer: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh		    		POINTER,
+	ch					BASED pCh BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	newSystem			BOOLEAN,
+	networkType			BYTE,
+	pMsgStr				POINTER,
+	msgStr				BASED pMsgStr stringType,
+	commentFound		BOOLEAN;
+
+	pMsgStr = nullPtr;
+	commentFound = GetServerInfo(@newSystem, @networkType, 1, serverErasure,
+																@ch, @error);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	IF newSystem THEN
+		CALL RemoteMsgShowLitError(remConn, @('GRiD Server not found'));
+	ELSE
+		DO;
+			pServer = sysMap(curSystemChoice - 2);
+			pMsgStr = ConcatStrings(
+						NewStringLit(@('Confirm to erase server ')),
+											CopyOfString(serverInfo.pName));
+			pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@(' ')));
+			msgStr.chars(msgStr.len - 1) = '';
+			IF NOT ConfirmMsg(@msgStr.chars, @ch, @error) THEN
+				GOTO procExit;
+
+			CALL GetAccess(@error);
+			CALL DeleteServer(pServer);
+			pCurSystem = nullPtr;
+			IF NOT consistent THEN
+				consistent = CheckConsistency(nullPtr);
+			changed = TRUE;
+			CALL FreeAccess(@error);
+		END;
+
+procExit:
+	IF pMsgStr <> nullPtr THEN CALL FreeString(@pMsgStr);
+	IF error <> eOk THEN
+		CALL LogError(error, 1628, attentionOff);
+
+END EraseServer;
+
+$EJ
+/* Make a default connection name. */
+
+GetDefaultConnName: PROCEDURE(pConnName, pServerName) CLEAN;
+
+DCL	pConnName	POINTER,
+	cName		BASED pConnName stringType,
+	pServerName	POINTER,
+	sName		BASED pServerName stringType,
+	nConn		WORD,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	maxLen		BYTE,
+	len			BYTE;
+
+	maxLen = connectionNameLength - 9;
+	IF sName.len > maxLen THEN len = maxLen;
+	ELSE
+		len = sName.len;
+	CALL MOVB(@sName.chars, @cName.chars, len);
+	CALL MOVB(@('-Link/'), @cName.chars(len), 6);
+	len = len + 6;
+
+	nConn = 0;
+	CALL IntToStr2(nConn, @cName.chars(len));
+	cName.len, len = len + 2;
+	DO WHILE (nConn < 99) AND FindConnection(cName.len, @cName.chars, @pConn);
+		nConn = nConn + 1;
+		CALL IntToStr2(nConn, @cName.chars(len - 2));
+	END;
+
+END GetDefaultConnName;
+
+$EJ
+/* Get connection information from user. */
+
+GetConnValues: PROCEDURE(isNewConn, pConn, pServer, networkType,
+														pCh, pError) CLEAN;
+
+DCL	isNewConn		BOOLEAN,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	networkType		BYTE,
+	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	confirmed		BOOLEAN,
+	pStr			POINTER,
+	str				BASED pStr stringType,
+	pNumber			POINTER,
+	pTemp			POINTER,
+	baudChoice		BYTE,
+	i				BYTE,
+	pMsgStr			POINTER,
+	msgStr			BASED pMsgStr stringType;
+
+	pMsgStr = nullPtr;
+	IF networkType = publicNetwork THEN
+		pMsgStr = NewStringLit(@('Public network '));
+	ELSE
+		IF networkType = privateNetwork THEN
+			pMsgStr = NewStringLit(@('Private network '));
+	ELSE
+		pMsgStr = NewStringLit(@('Leased line '));
+	msgStr.chars(msgStr.len - 1) = '';
+
+	IF isNewConn THEN
+	DO;
+		pTemp = InitDefaultConnForm(pServer, networkType);
+		IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+			CALL GetDefaultConnName(@connName, serverInfo.pName);
+		ELSE
+			CALL GetDefaultConnName(@leasedConnName, serverInfo.pName);
+	END;
+	ELSE
+		pTemp = InitConnectionForm(pConn);
+
+	CALL RemoteMsgShowLitMessage(remConn, @msgStr.chars);
+	confirmed = RemoteDataFormConfirmed(remConn, pTemp,
+		@('Connection parameters: Fill in form and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+		pStr = @connName;
+	ELSE
+		pStr = @leasedConnName;
+	IF str.len = 0 THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn, @('Connection must have a name'));
+		ch = escapeKey;
+		GOTO procExit;
+	END;
+
+	IF FindConnection(str.len, @str.chars, @pTemp) THEN
+	DO;
+		IF isNewConn OR ((NOT isNewConn) AND (pTemp <> pConn)) THEN
+		DO;
+			CALL RemoteMsgShowLitError(remConn,
+										@('Connection name is a duplicate'));
+			ch = escapeKey;
+			GOTO procExit;
+		END;
+	END;
+	pMsgStr = ConcatStrings(NewStringLit(@('/ ')), pMsgStr);
+	pMsgStr = ConcatStrings(CopyOfString(pStr), pMsgStr);
+	pMsgStr = ConcatStrings(NewStringLit(@('Connection ')), pMsgStr);
+
+	IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+	DO;
+		IF (phoneNumberRow.currentChoice = 1) AND (phoneNumber.len = 0) THEN
+		DO;
+			CALL RemoteMsgShowLitError(remConn,
+										@('Phone number must be specified'));
+			ch = escapeKey;
+			GOTO procExit;
+		END;
+		pNumber = FindPhoneNumber(pServer, networkType,
+												phoneNumberRow.currentChoice);
+		IF ConnExists(isNewConn, pConn, pServer, pNumber) THEN
+		DO;
+			CALL RemoteMsgShowLitError(remConn,
+						@('Connection already exists for phone number'));
+			ch = escapeKey;
+			GOTO procExit;
+		END;
+	END;
+
+	IF (networkType = leasedNetwork) OR
+								(anyPortRow.currentChoice = noChoice) THEN
+	DO;
+		IF networkType = leasedNetwork THEN
+		DO;
+			IF isNewConn THEN
+				CALL InitDefaultSysPortForm(baudExternal, networkType);
+			ELSE
+				CALL InitSysPortForm(pConn, baudExternal);
+		END;
+		ELSE
+			DO;
+				baudChoice = GetBaudChoice(pServer, networkType, pNumber);
+				IF isNewConn THEN
+					CALL InitDefaultSysPortForm(baudChoice, networkType);
+				ELSE
+					CALL InitSysPortForm(pConn, baudChoice);
+			END;
+		CALL RemoteMsgShowLitMessage(remConn, @msgStr.chars);
+		IF networkType = leasedNetwork THEN sysPortForm.numItems = 1;
+		confirmed = RemoteDataFormConfirmed(remConn, @sysPortForm,
+				@('System ports: Fill in form and confirm'), @ch, @error);
+		sysPortForm.numItems = sysPortFormItemCount;
+		CALL RemoteMsgClearMessage(remConn);
+
+		IF (error <> eOk) OR (ch <> confirmKey) THEN
+			GOTO procExit;
+
+		DO i = 0 TO 3;
+			IF (systemPortRow(i).currentChoice <> noPort) THEN
+				GOTO procExit;
+		END;
+
+		CALL RemoteMsgShowLitError(remConn,
+										@('System port(s) must be specified'));
+		ch = escapeKey;
+	END;
+
+procExit:
+	IF pMsgStr <> nullPtr THEN
+		CALL FreeString(@pMsgStr);
+
+END GetConnValues;
+
+$EJ
+/* Add a connection to a remote system. */
+
+AddConnection: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh					POINTER,
+	ch					BASED pCh BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	pConn				POINTER,
+	connInfo			BASED pConn connInfoType,
+	confirmed			BOOLEAN,
+	newSystem			BOOLEAN,
+	networkType			BYTE,
+	protocolChoice		BYTE,
+	pMsgStr				POINTER,
+	msgStr				BASED pMsgStr stringType,
+	commentFound		BOOLEAN;
+
+	pMsgStr = nullPtr;
+	commentFound = GetServerInfo(@newSystem, @networkType, 2,
+											connectionDefinition, @ch, @error);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	IF newSystem THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn, @('GRiD Server not found'));
+		GOTO procExit;
+	END;
+	pServer = sysMap(curSystemChoice - 2);
+	IF EqualStrings(@myServerName, @remSystemName) THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+							@('Cannot add connections to local GRiD Server'));
+		GOTO procExit;
+	END;
+	IF (networkType = leasedNetwork) AND FourOrMoreLeasedConns(pServer) THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+					@('GRiD Server already has four leased connections'));
+		GOTO procExit;
+	END;
+
+	/* Set protocol type to phonelink for now. */
+	protocolChoice = phonelink;
+
+	CALL GetConnValues(TRUE /* is new conn */, pConn, pServer, networkType,
+																@ch, @error);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	pMsgStr = NewStringLit(@('Confirm to create connection '));
+	IF networkType = leasedNetwork THEN
+		pMsgStr = ConcatStrings(pMsgStr, CopyOfString(@leasedConnName));
+	ELSE
+		pMsgStr = ConcatStrings(pMsgStr, CopyOfString(@connName));
+	pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@(' ')));
+	msgStr.chars(msgStr.len - 1) = '';
+	IF NOT ConfirmMsg(@msgStr.chars, @ch, @error) THEN
+		GOTO procExit;
+
+	CALL GetAccess(@error);
+	pConn = FindFreeConnection;
+	connInfo.protocol = protocolChoice;
+	CALL CopyConnForm(pConn, pServer, networkType);
+	CALL InsertConnection(pServer, pConn);
+	IF (networkType = leasedNetwork) OR (NOT connInfo.useAnyPort) THEN
+		CALL CopySysPortForm(pConn);
+	pCurSystem = pServer;
+	pCurConn = pConn;
+	changed = TRUE;
+	CALL FreeAccess(@error);
+
+procExit:
+	IF pMsgStr <> nullPtr THEN CALL FreeString(@pMsgStr);
+	IF error <> eOk THEN
+		CALL LogError(error, 1629, attentionOff);
+
+END AddConnection;
+
+$EJ
+/* Build choice only form for connection names. */
+
+BuildConnForm: PROCEDURE(inconsistentOnly, pMap, pError) BOOLEAN CLEAN;
+
+DCL	inconsistentOnly		BOOLEAN,
+	pMap					POINTER,
+	map						BASED pMap (1) POINTER,
+	pError					POINTER,
+	error					BASED pError WORD,
+	pServer					POINTER,
+	serverInfo				BASED pServer serverInfoType,
+	pConn					POINTER,
+	connInfo				BASED pConn connInfoType,
+	pStr					POINTER,
+	str						BASED pStr stringType,
+	i						WORD,
+	j						WORD,
+	k						WORD,
+	selectConnFormLabels	BASED selectConnForm.labelsAndChoices (1) BYTE;
+
+	i = nConnections*(connectionNameLength + serverNameLength + 20) + 100;
+	selectConnForm.labelsAndChoices = AllocateMemory(i, @error);
+	IF error <> eOk THEN RETURN FALSE;
+
+	CALL MOVB(@('?Connection~'), @selectConnFormLabels, 12);
+	j = 12;
+	k = 0;
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		pConn = serverInfo.pConnInfo;
+		DO WHILE pConn <> nullPtr;
+			IF NOT (inconsistentOnly AND connInfo.consistent) THEN
+			DO;
+				pStr = connInfo.pName;
+				CALL MOVB(@str.Chars, @selectConnFormLabels(j), str.len);
+				j = j + str.len;
+				CALL MOVB(@(' to '), @selectConnFormLabels(j), 4);
+				j = j + 4;
+				pStr = serverInfo.pName;
+				CALL MOVB(@str.chars, @selectConnFormLabels(j), str.len);
+				j = j + str.len;
+				IF connInfo.networkType = publicNetwork THEN
+					CALL MOVB(@(' (Public) '), @selectConnFormLabels(j), 10);
+				ELSE
+					IF connInfo.networkType = privateNetwork THEN
+						CALL MOVB(@(' (Private)'), @selectConnFormLabels(j),10);
+				ELSE
+					CALL MOVB(@(' (Leased) '), @selectConnFormLabels(j), 10);
+				j = j + 10;
+				selectConnFormLabels(j) = '~';
+				j = j + 1;
+				map(k) = pConn;
+				k = k + 1;
+				IF pCurConn = pConn THEN
+					curConnChoice = k;
+			END;
+			pConn = connInfo.pNext;
+		END;
+		pServer = serverInfo.pNext;
+	END;
+	selectConnFormLabels(j) = '|';
+
+	/* Adjust curConnChoice */
+
+	IF curConnChoice > k THEN
+		curConnChoice = 1;
+
+	RETURN TRUE;
+
+END BuildConnForm;
+
+$EJ
+/* Modify a connection to a remote system. */
+
+ModifyConnection: PROCEDURE(inconsistentOnly, pCh, pError) CLEAN;
+
+DCL	inconsistentOnly	BOOLEAN,
+	pCh					POINTER,
+	ch					BASED pCh BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	confirmed			BOOLEAN,
+	allocated			BOOLEAN,
+	needToDealloc		BOOLEAN,
+	modified			BOOLEAN,
+	portsModified		BOOLEAN,
+	pServer				POINTER,
+	serverInfo			BASED pServer serverInfoType,
+	pConn				POINTER,
+	connInfo			BASED pConn connInfoType,
+	dummy				WORD,
+	i					BYTE,
+	networkType			BYTE,
+	portIndex			WORD;
+
+	needToDealloc = FALSE;
+	error = eOk;
+	IF nConnections = 0 THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn, @('Network has no connections'));
+		ch = escapeKey;
+		GOTO procExit;
+	END;
+	IF inconsistentOnly AND consistent THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+									@('All connections are consistent'));
+		ch = escapeKey;
+		GOTO procExit;
+	END;
+
+	needToDealloc = BuildConnForm(inconsistentOnly, @sysMap, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL RemoteMsgShowDecoded(remConn, error);
+		GOTO procExit;
+	END;
+
+	selectConnNameRow.currentChoice = curConnChoice;
+	selectConnForm.choiceLines = nConnections;
+	confirmed = RemoteDataFormConfirmed(remConn, @selectConnForm,
+				@('Modify connection: Fill in form and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	curConnChoice = selectConnNameRow.currentChoice;
+	pConn = sysMap(curConnChoice - 1);
+	pServer = connInfo.pServerInfo;
+	allocated = connInfo.allocated;
+	networkType = connInfo.networkType;
+
+	CALL GetConnValues(FALSE /* is old conn */, pConn, pServer, networkType,
+																@ch, @error);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	CALL GetAccess(@error);
+	IF error <> eOk THEN
+	DO;
+		CALL RemoteMsgShowDecoded(remConn, error);
+		GOTO procExit;
+	END;
+
+	portsModified = FALSE;
+	IF networkType = leasedNetwork THEN
+		portsModified = portsModified OR systemPortRow(0).changed;
+	ELSE
+		IF anyPortRow.currentChoice = noChoice THEN
+		DO i = 0 TO 3;
+			portsModified = portsModified OR systemPortRow(i).changed;
+		END;
+	IF networkType <> leasedNetwork THEN
+		modified = portsModified OR phoneNumberRow.changed OR
+			waitRow.changed OR costRow.changed OR dedicatedRow.changed OR
+							anyPortRow.changed OR connNameRow.changed;
+	ELSE
+		modified = portsModified OR leasedWaitRow.changed OR
+				leasedCostRow.changed OR leasedDedicatedRow.changed OR
+												leasedConnNameRow.changed;
+	modified = modified OR (NOT connInfo.consistent);
+
+	IF modified THEN
+	DO;
+		DO i = 0 TO 3;
+			IF (portIndex := connInfo.port(i)) <> nullWord THEN
+			DO;
+				IF portInfo(portIndex).pConnInfo = pConn THEN
+					portInfo(portIndex).pConnInfo = nullPtr;
+			END;
+		END;
+		connInfo.allocated = FALSE;
+		CALL CopyConnForm(pConn, pServer, networkType);
+		CALL ReinsertConnection(pConn);
+		IF (networkType = leasedNetwork) OR (NOT connInfo.useAnyPort) THEN
+			CALL CopySysPortForm(pConn);
+	END;
+	pCurConn = pConn;
+	pCurSystem = pServer;
+	changed = changed OR modified;
+	modConnWarning = modConnWarning OR (modified AND allocated);
+	IF NOT consistent THEN
+		consistent = CheckConsistency(nullPtr);
+	CALL FreeAccess(@error);
+
+procExit:
+	IF needToDealloc THEN
+	DO;
+		CALL OsFree(selectConnForm.labelsAndChoices, @dummy);
+		IF error = eOk THEN error = dummy;
+	END;
+	IF error <> eOk THEN
+		CALL LogError(error, 1630, attentionOff);
+
+END ModifyConnection;
+
+$EJ
+/* Erase a connection to a remote system. */
+
+EraseConnection: PROCEDURE(inconsistentOnly, pCh, pError) CLEAN;
+
+DCL	inconsistentOnly	BOOLEAN,
+	pCh					POINTER,
+	ch					BASED pCh BYTE,
+	pError				POINTER,
+	error				BASED pError WORD,
+	confirmed			BOOLEAN,
+	allocated			BOOLEAN,
+	needToDealloc		BOOLEAN,
+	pConn				POINTER,
+	connInfo			BASED pConn connInfoType,
+	dummy				WORD,
+	i					BYTE,
+	portIndex			WORD,
+	pMsgStr				POINTER,
+	msgStr				BASED pMsgStr stringType;
+
+	pMsgStr = nullPtr;
+	needToDealloc = FALSE;
+	error = eOk;
+	IF nConnections = 0 THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn, @('Network has no connections'));
+		ch = escapeKey;
+		GOTO procExit;
+	END;
+	IF inconsistentOnly AND consistent THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+									@('All connections are consistent'));
+		ch = escapeKey;
+		GOTO procExit;
+	END;
+
+	needToDealloc = BuildConnForm(inconsistentOnly, @sysMap, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL RemoteMsgShowDecoded(remConn, error);
+		GOTO procExit;
+	END;
+
+	selectConnNameRow.currentChoice = curConnChoice;
+	selectConnForm.choiceLines = nConnections;
+	confirmed = RemoteDataFormConfirmed(remConn, @selectConnForm,
+				@('Erase connection: Fill in form and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+
+	curConnChoice = selectConnNameRow.currentChoice;
+	pConn = sysMap(curConnChoice - 1);
+	allocated = connInfo.allocated;
+
+	pMsgStr = ConcatStrings(NewStringLit(@('Confirm to erase connection ')),
+											CopyOfString(connInfo.pName));
+	pMsgStr = ConcatStrings(pMsgStr, NewStringLit(@(' ')));
+	msgStr.chars(msgStr.len - 1) = '';
+	IF NOT ConfirmMsg(@msgStr.chars, @ch, @error) THEN
+		GOTO procExit;
+
+	CALL GetAccess(@error);
+	CALL DeleteConnection(pConn);
+	pCurConn = nullPtr;
+	changed = TRUE;
+	eraseConnWarning = eraseConnWarning OR allocated;
+	IF NOT consistent THEN
+		consistent = CheckConsistency(nullPtr);
+	CALL FreeAccess(@error);
+
+procExit:
+	IF pMsgStr <> nullPtr THEN
+		CALL FreeString(@pMsgStr);
+	IF needToDealloc THEN
+	DO;
+		CALL OsFree(selectConnForm.labelsAndChoices, @dummy);
+		IF error = eOk THEN error = dummy;
+	END;
+	IF error <> eOk THEN
+		CALL LogError(error, 1631, attentionOff);
+
+END EraseConnection;
+
+$EJ
+DoChangePassword: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	confirmed		BOOLEAN,
+	tempPassword	(passwordLength) BYTE;
+
+	password.len, password.dummy = 0;
+	passwordRow.currentChoice = 1;
+	confirmed = RemoteDataFormConfirmed(remConn, @passwordForm,
+				@('Password: Enter new password and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+	password.dummy = password.len;
+	CALL MOVB(@password.dummy, @tempPassword, password.dummy + 1);
+
+	password.len, password.dummy = 0;
+	passwordRow.currentChoice = 1;
+	confirmed = RemoteDataFormConfirmed(remConn, @passwordForm,
+			@('Password: Enter new password again and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOK) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+	password.dummy = password.len;
+	IF NOT SameStrings(@password.dummy, @tempPassword) THEN
+	DO;
+		CALL RemoteMsgShowLitError(remConn,
+					@('New passwords don''t match. Password not set'));
+	
+    	GOTO procExit;
+	END;
+
+	CALL MOVB(@password.dummy, @nmPassword, password.dummy + 1);
+	changed = TRUE;
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1632, attentionOff);
+
+END DoChangePassword;
+
+$EJ
+EditOptions: PROCEDURE(pCh, pError) CLEAN;
+
+DCL	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	confirmed		BOOLEAN;
+
+	CALL InitOptionsForm;
+	confirmed = RemoteDataFormConfirmed(remConn, @optionsForm,
+						@('Options: Fill in form and confirm'), @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF (error <> eOk) OR (ch <> confirmKey) THEN
+		GOTO procExit;
+	
+	changed = changed OR localAreaCodeRow.changed OR longDistCodeRow.changed OR
+							highSpeedRow.changed OR mediumSpeedRow.changed OR
+														logFileSizeRow.changed;
+	CALL GetAccess(@error);
+	CALL CopyOptionsForm;
+	CALL FreeAccess(@error);
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1633, attentionOff);
+
+END EditOptions;
+
+$EJ
+ConfirmMsg: PROCEDURE(pMsg, pCh, pError) BOOLEAN CLEAN;
+
+DCL	pMsg			POINTER,
+	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD;
+
+	CALL RemoteMsgShowLitMessage(remConn, pMsg);
+	ch = RemoteConCharIn(remConn, @error);
+	IF error = eOk THEN
+	DO;
+		CALL RemoteMsgClearMessage(remConn);
+		RETURN (ch = confirmKey);
+	END;
+	ELSE
+		RETURN FALSE;
+
+END ConfirmMsg;
+
+$EJ
+DoQuit: PROCEDURE(pCh, pError) BOOLEAN CLEAN;
+
+DCL	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	dummy			WORD,
+	done			BOOLEAN;
+
+	IF changed THEN
+		done = ConfirmMsg(@('Quit: Confirm to save and exit'), @ch, @error);
+	ELSE
+		done = ConfirmMsg(
+			@('Quit: Confirm to exit without saving (unchanged)'),
+																@ch, @error);
+
+	IF error <> eOk THEN
+	DO;
+		ch = confirmKey;
+		GOTO procExit;
+	END;
+
+	IF ch <> confirmKey THEN GOTO procExit;
+
+	IF changed THEN
+	DO;
+		CALL RemoteMsgShowLitMessage(remConn,
+									@('Saving configuration changes'));
+		CALL GetAccess(@dummy);
+		CALL CreateConfigFile(@error);
+		CALL LogString(NewStringLit(@('Saved configuration changes')));
+		CALL FreeAccess(@dummy);
+		IF error = eOk THEN changed = FALSE;
+		ELSE
+			DO;
+				CALL RemoteMsgShowDecoded(remConn, error);
+				ch = escapeKey;
+			END;
+	END;
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1634, attentionOff);
+	RETURN (ch = confirmKey);
+
+END DoQuit;
+
+$EJ
+DoCancel: PROCEDURE(pCh, pError) BOOLEAN CLEAN;
+
+DCL	pCh				POINTER,
+	ch				BASED pCh BYTE,
+	pError			POINTER,
+	error			BASED pError WORD,
+	dummy			WORD,
+	done			BOOLEAN;
+
+	IF changed THEN
+		done = ConfirmMsg(
+		  @('Cancel: Confirm to exit without saving (changed)'), @ch, @error);
+	ELSE
+		done = ConfirmMsg(
+		  @('Cancel: Confirm to exit without saving (unchanged)'), @ch,@error);
+	IF error <> eOk THEN
+		ch = confirmKey;
+
+	IF (ch = confirmKey) AND changed THEN
+	DO;
+		CALL GetAccess(@error);
+		CALL LogString(NewStringLit(@('Cancelled configuration changes')));
+		CALL DeallocateData;
+		CALL InitConfig;
+		dummy = ReadConfigFile(TRUE, @error);	/* log eFileNotFound */
+		CALL FreeAccess(@dummy);
+		changed, needsToReboot = FALSE;
+	END;
+
+	IF error <> eOk THEN
+		CALL LogError(error, 1635, attentionOff);
+	RETURN (ch = confirmKey);
+
+END DoCancel;
+
+END NMConfigForms;

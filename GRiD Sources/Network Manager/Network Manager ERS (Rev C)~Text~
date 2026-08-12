@@ -1,0 +1,814 @@
+^lm 10
+^rm 80
+^pn 1
+^fo "^d""GRiD Confidential""Page ^p"
+^bo^en
+		  GRiD NETWORK MANAGER
+
+	EXTERNAL REFERENCE SPECIFICATION
+
+             (PRELIMINARY)
+
+^en^bo
+^cl
+Document No. 800075
+Revision C
+
+Copyright (c) 1985 GRiD Systems Corporation.
+^cl
+^sl 2
+^bo^unTable of Contents^un^bo
+
+1.	Scope
+	1.1	Terminology
+	1.2	References
+	1.3	Open Issues
+
+2.	Functional Description
+	2.1	Network Manager Overview
+	2.2	Network Manager Operation
+	2.3	Configuration Interface
+		2.3.1	Configure a communications server card
+		2.3.2	Add a connection to a remote system
+		2.3.3	Modify a connection to a remote system
+		2.3.4	Erase a connection to a remote system
+		2.3.5	Edit options
+		2.3.6	Change password
+		2.3.7	Print configuration, save configuration
+		2.3.8	Quit, save configuration changes
+		2.3.9	Cancel, don't save changes
+ 	2.4	Configuration Database
+	2.5	Application Interface
+		2.5.1	Allocate Link
+		2.5.2	Free Link
+		2.5.3	Get Remote System Name
+		2.5.4	Get Access Link Set
+		2.5.5	Get Link Properties
+		2.5.6	Get Card Status
+		2.5.7	Properties
+	2.6	Application Interface Protocol
+	2.7	Application Interface Usage
+	2.8	System Manager Interface
+
+3.	Feature Availability
+
+4.	Publications
+^ep
+^he "Network Manager ERS - Preliminary""""Scope"
+^bo^un1. Scope^un^bo
+
+This document defines the external specifications of GRiD Network Manager (called Network Manager in the remainder of this document). Network Manager provides a central framework for configuring a GRiD Network and controls allocation of network resources to applications wishing to utilize the GRiD Server's communications capabilities.
+
+^boTHOSE FEATURES OF NETWORK MANAGER THAT ARE NOT PART OF THE FIRST RELEASE ARE FLAGGED WITH AN ASTERISK (*).^bo
+
+^bo1.1 Terminology^bo
+
+Refer to GRiDMail Overview Specification (Doc. No. 800077).
+
+^bo1.2 References^bo
+
+Refer to GRiDMail Overview Specification (Doc. No. 800077).
+
+^bo1.3 Open Issues^bo
+
+	(1)	What should Network Manager do if the option to exit after loading is set to 'Yes'? Should a stub always be present in memory for configuration purposes?
+^ep
+^he "Network Manager ERS - Preliminary""""Functional Description"
+^bo^un2. Functional Description^un^bo
+
+^bo2.1 Network Manager Overview^bo
+
+Network Manager provides a central framework for configuring a GRiD Network and controls allocation of network resources to applications wishing to utilize the GRiD Server's communications capabilities. This is accomplished by maintaining a central database of information about network configuration and keeping track of the current state of the network.
+
+A ^itGRiD Network^it comprises ^itRemote Systems^it, ^itwork stations^it, and ^itapplications^it. The only remote systems known to Network Manager are GRiD Servers. A GRiD Server allows users to sign on from work stations and access the server's resources. Direct connections between work stations are not supported. Applications resident in a GRiD Server may sign on to other GRiD Servers in exactly the same way as users, using a ^itnetwork link^it (or ^itconnection^it) configured for this purpose. Of course, an application can sign on to its own GRiD Server - this does not require a network link.
+
+A GRiD Server or any other remote system is identified by its ^itremote system name^it. A network link or connection is identified by its ^itlink name^it (or ^it connection name^it). Network Manager maintains mappings between remote system names and sets of link names, and between link names and link properties. The set of link names associated with a remote system name, called the ^itaccess link set^it, identifies the network links through which the remote system can be accessed. The link properties associated with a network link specify the link protocol, protocol parameters, and ^itsystem port^it. Three link protocols are supported - GRiDLink Primary, GRiDLink Secondary (*), and Phonelink. There are three flavors of Phonelink. GRiDLink Primary and Phonelink ^itAnswer^it permit users (or applications on other GRiD Servers) to sign on. GRiDLink Secondary (*) and ^itPhonelink Originate^it allow server resident applications to sign on to other GRiD Servers. Phonelink ^itOriginate and Answer^it allows a phone line to be used for dialing out as well as accepting calls. Note that the Phonelink (Originate, Answer, and Originate and Answer) protocols do not allow more than one user or application to use the network link at the same time.
+
+Network Manager also maintains mappings between system ports (or physical ports, or simply, ports) and port properties. Port properties reflect the actual hardware configured at the port, and specify the protocol the port is to handle. Sometimes the hardware is implicitly specified by the protocol (for example, GRiDLink).
+
+^bo2.2  Network Manager Operation^bo
+
+Like Admin Manager and VFS Manager, Network Manager is an essential application that gets started when a GRiD Server is powered on or reset. Network Manager does not have an installation phase. Upon starting, Network Manager registers the names 'Network Manager~Manager~' and 'Network Manager~Standard~' in the name device. If a configuration file is not found, Network Manager creates a default configuration file, and puts the default configuration into effect. The default configuration loads the first communications server card with Phonelink Answer at ports 0 and 1, and GRiDLink Primary at ports 2 and 3. At this point the network administrator should connect to Network Manager using RemoteAdministrator and create the desired network configuration. ^itNote: In the first release, the GRiD Server may have to be reset in order for the configuration to take effect, under certain circumstances. If the GRiD Server has to be reset, Network Manager will display a message to that effect.^it
+
+There are two phases to Network Manager configuration - configuration of the communications server cards and system ports, and configuration of remote systems and their access link sets.
+
+A communications server card supports four ports. A port is identified by the pair (x, y), where x is the card number (2-7) and y is the line number (0-3). Within a card, a port is unambiguously identified by just the line number. For each port, the administrator specifies a protocol type, certain protocol parameters, and hardware related information (such as modem type). There are some restrictions on protocol combinations supported by a communications server card - these restrictions are detailed in a later section.
+
+In order to facilitate signing on to other GRiD Servers, Network Manager allows specification of GRiD Servers that are part of the network (as remote systems). For each remote system, the administrator specifies an access link set through which the remote system may be accessed. Thus, an application wishing to sign on to a GRiD Server need only specify the remote system name corresponding to that GRiD Server (and optionally, more parameters) in the sign-on command.
+
+A network link or connection is a logical entity that is dynamically bound to a port at sign-on time. For each network link, the administrator specifies a protocol type, telephone numbers if the protocol involves dialing, certain protocol related parameters, and a set of ports the network link may get mapped on to at sign-on time. The protocol types specified for the ports must match the protocol type specified for the network link.
+
+A global option specifies whether Network Manager should exit after loading the communications server cards with the appropriate protocol machines. By default, Network Manager does not exit. The purpose of this option is to let Network Manager exit in minimal GRiD Server configurations that don't require GRiD Server to GRiD Server networking. Other global parameters specify thresholds for low speed, medium speed, and high speed lines.
+
+Network Manager supports an application interface, different from the configuration interface, that allows applications to allocate network links, free allocated links, and query Network Manager for network related information. Through this interface, applications can get lists of all remote systems, network links in a given remote system's access link set, network link parameters for a given network link, and port parameters for a given port. Sophisticated applications may look into network link parameters, and select a network link with the desired parameters.
+
+^bo2.3 Configuration Interface^bo
+
+After connecting to Network Manager via RemoteAdministrator, the first form seen by the administrator is the password form:
+
+		Enter Password:
+
+This form is skipped if the administrator also happens to be the system administrator.
+
+Next, the main menu of Network Manager is presented:
+
+					Configure a communications server card
+					Add a connection to a remote system
+					Modify a connection to a remote system
+		(CODE-E)	Erase a connection to a remote system
+		(CODE-O)	Edit options
+					Change password
+		(CODE-T)	Print configuration, save configuration
+		(CODE-Q)	Quit, save configuration changes
+		(CODE-ESC)	Cancel, don't save changes
+
+Note that the word 'connection' in the above form denotes a network link, and 'remote system' denotes any remote processor the network link connects to, including GRiD Servers.
+
+^bo2.3.1 Configure a communications server card^bo
+
+Selecting this command results in the following menu to be displayed:
+
+	Select card to configure:
+
+	Card2 (128K)
+	Card3 (512k)
+	etc.
+
+The exact format of the above menu is TBD. After a card is selected for configuration, the form for card parameters is presented:
+
+	Enter card parameters:
+
+	Port0 protocol type:
+	Port1 protocol type:
+	Port2 protocol type:
+	Port3 protocol type:
+
+Choices for protocol types are the three protocol types supported and 'other'. For each port whose protocol type is Phonelink, an additional form is presented:
+
+	Enter port^itx^it parameters:
+
+	Phonelink Type:     [Originate, Answer, Originate and Answer]
+	Line Type:			[Switched, Leased]
+	Speed:				[choices are baud rates]
+	Modem type:			[Smartmodem-1200,  Other]
+	Phone number prefix:[a string]
+	Dial mode:			[pulse, touch-tone]
+	Dial type:			[manual, automatic]
+
+If the line type is leased, there is no dialing involved in establishing connection: therefore phone number prefix, dial mode, and dial type are ignored. The phone number is prefixed with the phone number prefix - this is useful for getting an outside line in local switchboard operation.
+
+If the protocol type specified is 'other', the port can be used by an application in a manner unknown to Network Manager. If all ports in a card have their protocol types set to 'other', the whole card is reserved for applications not involving Network Manager. ^itNote: In the first release, protocol types for all ports on a card must be set to 'other' in order for an application to use one or more ports on that card for non-networking purposes.^it
+
+The following table illustrates the restrictions on protocol combinations supported by a card. Type A stands for Phonelink types, and Type B stands for GRiDLink (Primary or Secondary).
+
+			^un^boAllowed protocol combinations^bo^un
+
+	+-----------+-----------+-----------+---------------+
+	|	Port 0	|	Port 1	|	Port 2	|	Port 3		|
+	+===========+===========+===========+===============+
+	|	Type A	|	Type A	|	Type A	|	Type A		|
+	+-----------+-----------+-----------+---------------+
+	|	Type A	|	Type A	|	Type B	|	Type B		|
+	+-----------+-----------+-----------+---------------+
+	|	Type B	|	Type B	|	Type B	|	Type B		|
+	+-----------+-----------+-----------+---------------+
+	|	Other	|	Other	|	Other	|	Other		|
+	+-----------+-----------+-----------+---------------+
+
+^bo2.3.2 Add a connection to a remote system^bo
+
+Selecting this command results in a series of forms being presented to the administrator. The first form asks the administrator to fill in the remote system name:
+^ep
+	Enter remote system name:
+
+	Remote System name:	[Editable/choice field]
+
+The choices are previously defined names (if any). Once a remote system is selected, a form for selecting the connection protocol type is presented:
+
+	Select protocol type:
+
+	Protocol type:	[GRiDLink Secondary (*), Phonelink, Other]
+
+^itNote: In the first release, GRiDLink Secondary is not supported.^it
+
+The next form depends on the protocol type assigned to the network link. For Phonelink the following form is presented:
+
+	Enter connection parameters:
+
+	Phone number:		[string]
+	Alternate number1:	[string]
+	Alternate number2:	[string]
+	Disconnect after:	[1-255 minutes, default = 10]
+	Wait for answer:	[seconds, default = 30]
+	Cost (*):			[low, medium, high]
+	Dedicated:			[yes, no]
+	System port0:		[choice of system ports, none]
+	System port1:		[choice of system ports, none]
+	System port2:		[choice of system ports, none]
+	System port3:		[choice of system ports, none]
+	Connection name:	[Editable field]
+
+Alternate number1 and Alternate number2 are alternate telephone numbers to be used if the main number is busy. Up to four system ports may be specified for a connection - the first unallocated port is selected. The connection name (or network link name) is set by the administrator (the default name is TBD). For GRiDLink Secondary (*) and Other, the following form is presented:
+
+	Enter connection parameters:
+
+	Dedicated:			[yes, no]
+	System port0:		[choice of system ports]
+	System port1:		[choice of system ports]
+	System port2:		[choice of system ports]
+	System port3:		[choice of system ports]
+	Connection name:	[Editable choice field]
+
+If the connection is dedicated, it will be allocated only to applications that ask for it by name. Cost for connections supporting GRiDLink Secondary is 'low'. Choices for system port are strings of the form 'Card^itx^it Line^ity^it'. Only those system ports that have been assigned the same protocol type as the connection (network link) are present among the choices.
+
+^bo2.3.3 Modify a connection to a remote system^bo
+
+This command presents a menu of connections:
+
+	Select connection from:
+
+	Connection1 to Remote system1
+	Connection2 to Remote system2
+	etc.
+
+Once the connection is selected, the form for modifying connection parameters (see 2.3.2) is presented.
+
+^bo2.3.4 Erase a connection to a remote system^bo
+
+This command presents a menu of connections:
+
+	Select connection from:
+
+	Connection1 to Remote system1
+	Connection2 to Remote system2
+	etc.
+
+The selected connection is erased from the configuration.
+
+^bo2.3.5 Edit options^bo
+
+The following options form is presented:
+
+	Enter options:
+	Exit after initializing network:	[Yes, No]
+	High speed threshold (*):			[integer]
+	Medium speed threshold (*):			[integer]
+
+If 'Yes' is selected, Network Manager exits after starting up the network. This option should be set to 'Yes' only if there is no necessity to sign on to other GRiD Servers (^itsee open issues^it). Any baud rate value beolw the medium speed threshold is a low speed value.
+
+^bo2.3.6 Change password^bo
+
+This command lets the administrator change the administrator's password through suitable forms. The initial password (before GRiD Network is configured for the first time) is a null string.
+
+^bo2.3.7 Print configuration, save configuration^bo
+
+This command presents the administrator with the usual transfer menu:
+^ep
+	Select command from:
+	Save configuration changes
+	Print configuration
+
+^bo2.3.8 Quit, save configuration changes^bo
+
+This command saves any configuration changes and causes an exit from Network Manager.
+
+^bo2.3.11 Cancel, don't save changes^bo
+
+This command exits from Network Manager without saving configuration changes.
+
+^bo2.4 Configuration Database^bo
+
+In this section, the configuration file format for a hypothetical network configuration is illustrated. Consider a GRiD Server supporting three communications server cards in slots 2, 3 and 4, and that the card in slot 4 is not used for networking. Also suppose the GRiD Server has communication links to two other GRiD Servers (say Timbuctoo and Zanzibar). A typical configuration file for this case is illustrated below.
+
+	^boNetwork Manager Configuration File^bo
+
+	:Password:
+	Password = Aaarghh!
+
+	:Options:
+	Exit after initializing network = No<tab>
+	High speed threshold = 19200<tab>
+	Medium speed threshold = 4800<tab>
+
+	:Card 2:
+	Port0 protocol type = Phonelink<tab>
+	Port1 protocol type = Phonelink<tab>
+	Port2 protocol type = GRiDLink Primary<tab>
+	Port3 protocol type = GRiDLink Primary
+
+	:Port0:
+	Phonelink Type = Answer<tab>
+	Line Type = Switched<tab>
+	Speed = 1200<tab>
+	Modem type = Smartmodem-1200<tab>
+	Phone number prefix = <tab>
+	Dial mode = touchtone<tab>
+	Dial type = automatic
+
+	:Port1:
+	Phonelink Type = Answer<tab>
+	Line Type = Switched<tab>
+	Speed = 1200<tab>
+	Modem type = Smartmodem-1200<tab>
+	Phone number prefix = <tab>
+	Dial mode = touchtone<tab>
+	Dial type = automatic
+
+	:Port2:
+	:Port3:
+
+	:Card 3:
+	Port0 protocol type = Phonelink<tab>
+	Port1 protocol type = Phonelink<tab>
+	Port2 protocol type = Phonelink<tab>
+	Port3 protocol type = Phonelink
+
+	:Port0:
+	Phonelink Type = Originate<tab>
+	Line Type = Switched<tab>
+	Speed = 1200<tab>
+	Modem type = Smartmodem-1200<tab>
+	Phone number prefix = ^9^<tab>
+	Dial mode = touchtone<tab>
+	Dial type = automatic
+
+	:Port1:
+	Phonelink Type = Originate<tab>
+	Line Type = Switched<tab>
+	Speed = 19200<tab>
+	Modem type = Other<tab>
+	Phone number prefix = <tab>
+	Dial mode = <tab>
+	Dial type = 
+
+	:Port2:
+	Phonelink Type = Originate<tab>
+	Line Type = Switched<tab>
+	Speed = 1200<tab>
+	Modem type = Smartmodem-1200<tab>
+	Phone number prefix = ^9^<tab>
+	Dial mode = touchtone<tab>
+	Dial type = automatic
+
+	:Port3:
+	Phonelink Type = Originate<tab>
+	Line Type = Switched<tab>
+	Speed = 1200<tab>
+	Modem type = Smartmodem-1200<tab>
+	Phone number prefix = ^9^<tab>
+	Dial mode = touchtone<tab>
+	Dial type = automatic
+
+	:Card 4:
+	Port0 protocol type = Other<tab>
+	Port1 protocol type = Other<tab>
+	Port2 protocol type = Other<tab>
+	Port3 protocol type = Other
+
+	:Server Timbuctoo:
+
+	:NetworkLink:
+	Phone number = 87667598755<tab>
+	Alternate number1 = 8965856495<tab>
+	Alternate number2 = <tab>
+	Disconnect after = 10<tab>
+	Wait for answer = 50<tab>
+	Cost = high<tab>
+	Dedicated = no<tab>
+	System port0 = 30<tab>
+	Connection name = TimbuctooLink1
+
+	:NetworkLink:
+ 	Phone number = 4567989856<tab>
+	Alternate number1 = <tab>
+	Alternate number2 = <tab>
+	Disconnect after = 10<tab>
+	Wait for answer = 50<tab>
+	Cost = low<tab>
+	Dedicated = yes<tab>
+	System port0 = 31<tab>
+	Connection name = TimbuctooLink2
+
+	:Server Zanzibar:
+
+	:NetworkLink:
+ 	Phone number = 0998787566<tab>
+	Alternate number1 = 656543547689<tab>
+	Alternate number2 = 24354676778<tab>
+	Disconnect after = 10<tab>
+	Wait for answer = 30<tab>
+	Cost = high<tab>
+	Dedicated = no<tab>
+	System port0 = 32<tab>
+	Connection name = ZanzibarLink1
+
+	:NetworkLink:
+ 	Phone number = 0998787566<tab>
+	Alternate number1 = 656543547689<tab>
+	Alternate number2 = 24354676778<tab>
+	Disconnect after = 10<tab>
+	Wait for answer = 30<tab>
+	Cost = high<tab>
+	Dedicated = no<tab>
+	System port0 = 33<tab>
+	Connection name = ZanzibarLink2
+
+	:EndConfig:
+^ep
+^bo2.5 Application Interface^bo
+
+This section describes a procedural interface (available as a link module) for Network Manager's application interface.
+
+Network Manager supports an application interface that allows server applications to allocate network links, free allocated links, and query Network Manager for network related information. Through this interface, applications can get lists of all remote systems, network links in a given remote system's access link set, or network link parameters for a given network link. 
+
+^bo2.5.1 Allocate Link^bo
+
+AllocateLink: PROCEDURE (pProperties, propLength, pRetProps,
+								length, pRetLength, pError);
+DCL	pProperties	POINTER,
+	propLength	WORD,
+	pRetProps	POINTER,
+	length		WORD,
+	pRetLength	POINTER,
+	pError		POINTER;
+
+The parameters are:
+
+pProperties:	(INPUT) Pointer to a list of properties.
+				Property formats and the properties required
+				for this command are described below.
+
+propLength:		(INPUT) Total length of above list.
+
+pRetProps:		(OUTPUT) Pointer to buffer containing returned
+				properties (provided by user).
+
+length:			(INPUT) Length of buffer pointed to by
+				pRetProps.
+
+pRetLength:		(OUTPUT) Pointer to word containing total
+				length of returned properties.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	- TBD
+					Invalid command		- TBD
+					Link is in use		- TBD
+
+
+Each property has the following format:
+
+	+------+------+------+------+------------
+	| 0FDH |   Length    | Type | Property
+	+------+------+------+------+------------
+
+Length is a word that specifies the length (in bytes) of the remainder of the record. Type is the property type, and Property is the property itself. The properties that go with this command are: Remote System name, network link (or connection) name, link speed, link cost, link protocol type, card number, port number, telephone number, and station number. Minimally, the command should have the GRiD Server name or the network link name (or both). Additionally, the command could have link speed, link cost and link protocol type. Alternately, the command could have the card number, port number, and station number - these server as manual overrides over automatic selection of these parameters.
+
+The returned properties are GRiD Server name, network link name, line speed, line cost, card number, port number, and station number.
+
+^bo2.5.2 Free Link^bo
+
+FreeLink: PROCEDURE (pName, pError);
+DCL	pName		POINTER,
+	pError		POINTER;
+
+The parameters are:
+
+pName:			(INPUT) Pointer to a buffer containing link
+				name formatted as SHORTSTRING.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	 - TBD
+					Invalid command		 - TBD
+					Link is already free - TBD
+
+^bo2.5.3 Get Remote System Names^bo
+
+GetRemoteSystemNames: PROCEDURE (pNames, nameLen, pRetLen, pError);
+DCL	pNames		POINTER,
+	nameLen		WORD,
+	pRetLen		POINTER,
+	pError		POINTER;
+
+The parameters are:
+
+pNames:			(OUTPUT) Pointer to a buffer containing remote
+				system names formatted as properties.
+
+nameLen:		(INPUT) Length of buffer pointed to by pNames.
+
+pRetLen:		(OUTPUT) Pointer to word containing total length
+				of returned properties.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	 - TBD
+					Invalid command		 - TBD
+
+^bo2.5.4 Get Access Link Set^bo
+
+GetAccessLinkSet: PROCEDURE (pName, pLinkNames, len, pRetLen, pError);
+DCL	pName		POINTER,
+	pLinkNames	POINTER,
+	len			WORD,
+	pRetLen		POINTER,
+	pError		POINTER;
+
+The parameters are:
+
+pName:			(INPUT) Pointer to a remote system name formatted
+				as a SHORTSTRING.
+
+pLinkNames:		(OUTPUT) Pointer to buffer (provided by user)
+				containing returned link names formatted as
+				properties.
+
+len:			(INPUT) Length of buffer pointed to by
+				pLinkNames.
+
+pRetLen:		(OUTPUT) Pointer to word containing total length
+				of returned properties.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	 - TBD
+					Invalid command		 - TBD
+
+^bo2.5.5 Get Link Properties^bo
+
+GetLinkProperties: PROCEDURE (pName, pLinkProps, len, pRetLen, pError);
+DCL	pName		POINTER,
+	pLinkProps	POINTER,
+	len			WORD,
+	pRetLen		POINTER,
+	pError		POINTER;
+
+The parameters are:
+
+pName:			(INPUT) Pointer to a network link name formatted
+				as a SHORTSTRING.
+
+pLinkProps:		(OUTPUT) Pointer to buffer (provided by user)
+				containing returned link properties.
+
+len:			(INPUT) Length of buffer pointed to by
+				pLinkProps.
+
+pRetLen:		(OUTPUT) Pointer to word containing total length
+				of returned properties.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	 - TBD
+					Invalid command		 - TBD
+
+The properties returned are link name, link protocol type, link speed, link cost, card number, port number, and the main telephone number.
+
+^bo2.5.6 Get Card Status^bo
+
+GetCardStatus: PROCEDURE (cardNumber, pCardStatus, pError);
+DCL	cardNumber		BYTE,
+	pCardStatus		POINTER,
+	PError			POINTER;
+
+The parameters are:
+
+cardNumber:		(INPUT) A communications server card number.
+
+pCardStatus:	(OUTPUT) Pointer to a buffer (4 bytes long,
+				supplied bu user). Byte ^itn^it of the buffer is
+				TRUE if port ^itn^it is used by GRiD Network, and
+				FALSE otherwise.
+
+pError:			(OUTPUT) Pointer to a word containing returned
+				error code. Possible Error values are:
+					Invalid parameter	 - TBD
+					Invalid command		 - TBD
+
+
+^bo2.5.7 Properties^bo
+
+The following table lists property types and property values. All values, unless specified otherwise, are of type BYTE. The STRING type is an array of BYTE types.
+^ep
+						^bo^unTable of Properties^un^bo
+
+	+-------------------+----------------+-------------------------+
+	|     Property      |  Property Type | Property value          |
+	+===================+================+=========================+
+	| Remote System Name|      TBD       | STRING                  |
+	+-------------------+----------------+-------------------------+
+	| Telephone number  |      TBD       | STRING                  |
+	+-------------------+----------------+-------------------------+
+	| Link speed        |      TBD       | LOW=0,MEDIUM=1,HIGH=2   |
+	+-------------------+----------------+-------------------------+
+	| Link cost         |      TBD       | LOW=0,MEDIUM=1,HIGH=2   |
+	+-------------------+----------------+-------------------------+
+	| Network link name |      TBD       | STRING                  |
+	+-------------------+----------------+-------------------------+
+	| Card number       |      TBD       | 0-7                     |
+	+-------------------+----------------+-------------------------+
+	| Port number       |      TBD       | 0-3                     |
+	+-------------------+----------------+-------------------------+
+	| Station number    |      TBD       | 0-7                     |
+	+-------------------+----------------+-------------------------+
+	| Protocol type     |      TBD       | GRiDLink Primary = 0    |
+	|                   |                | GRiDLink Secondary = 1  |
+	|                   |                | Phonelink Originate = 2 |
+	|                   |                | Phonelink Answer = 3    |
+	|                   |                | Phonelink = 4           |
+	|                   |                | Leased = 5              |
+	|                   |                | Other = 6               |
+	+-------------------+----------------+-------------------------+
+
+
+^bo2.6 Application Interface Protocol^bo
+
+The application interface protocol adheres to the guidelines for server application message passing. All messages have a common header:
+^ep
+	+--------------------+--------------------+
+	|    functionCode    |      toBeFreed     |
+	+--------------------+--------------------+
+	|                                         |
+	+---             Reserved (0)          ---+
+	|                                         |
+	+-----------------------------------------+
+	|                 SourcePID               |
+	+-----------------------------------------+
+	|                  DestPID                |
+	+-----------------------------------------+
+	|          Network Management Class       |
+	+-----------------------------------------+
+	|             Note = Command Code         |
+	+-----------------------------------------+
+	|                  Length                 |
+	+-----------------------------------------+
+	|   Control Byte     |   New Credits      |
+	+--------------------+--------------------+
+	|                  Status                 |
+	+-----------------------------------------+
+	|                                         |
+	+---            Parameter Field        ---+
+	|                                         |
+
+
+The Network Management Class is TBD. Every command has a response, and the response has the same header format as the request. The command code field in the response message is the same as the command code field in the request, except that the highest order bit will be set to 1. The fields Control Byte, New Credits, and Status are part of the credit management layer. Function code is always zero.
+
+^boAllocate Link command^bo
+
+The Allocate Link command code is 0. The parameter field has the following format:
+
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+Property length	is the total length of all the properties that follow. See 2.5.1 for allowed properties.
+
+The Allocate Link response format is:
+^ep
+	+-----------------------------------------+
+	|                 Error                   |
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+See 2.5.1 for returned properties.
+
+^boFree Link command^bo
+
+The command code is 1. The command format is:
+
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+The only property is the network link name.
+
+The Free Link response has the following format:
+
+	+-----------------------------------------+
+	|                 Error                   |
+	+-----------------------------------------+
+
+See 2.5.2.
+
+^boGet Remote System Names command^bo
+
+The command code is 2. There is no parameter field.
+
+The Get Remote System Names response format is:
+
+	+-----------------------------------------+
+	|                 Error                   |
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+The properties field has only remote system name properties. See 2.5.3.
+^ep
+^boGet Access Link Set command^bo
+
+The command code for this command is 3. The command format is:
+
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+There should be one remote system name property in the properties field.
+
+The Get Access Link Set response format is:
+
+	+-----------------------------------------+
+	|                 Error                   |
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+The properties field has only network link name properties. See 2.5.4.
+
+^boGet Link Properties command^bo
+
+The command code is 4. The command format is:
+
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+The only property should be a network link (or connection) name.
+
+The Get Link Properties response has the following format:
+
+	+-----------------------------------------+
+	|                 Error                   |
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+See 2.5.5 for returned properties.
+^ep
+^boGet Card Status command^bo
+
+The command code is 5. The command format is:
+
+	+-----------------------------------------+
+	|              Property Length            |
+	+-----------------------------------------+
+	|                                         |
+	+---             Properties            ---+
+	|                                         |
+
+The only property in the request is card number. The response format is:
+
+	+-----------------------------------------+
+	|                 Error                   |
+	+--------------------+--------------------+
+	|     Line0Used      |    Line1Used       |
+	+--------------------+--------------------+
+	|     Line2Used      |    Line3Used       |
+	+--------------------+--------------------+
+
+Line0Used, Line1Used, Line2Used, and Line3Used are booleans that indicate whether lines 0, 1, 2, and 3, respectively, are used for networking or not. A value of 'TRUE' indicates that the line is used by GRiD Network. See 2.5.6.
+
+^bo2.7 Application Interface Usage^bo
+
+Normal applications needing network services don't need to invoke the application interface at all. The procedures VfsSignOn, NetSignOn, VfsSignOff, and NetSignOff (described in the VIPC specification) that are supplied to the user allocate and free network links as necessary. Mail applications may wish to query Network Manager for GRiD Server names. Other special applications may need to know about network links and their properties, card status, etc.
+
+A connection to Network Manager is not necessary in order to make queries. The application looks up Network Manager's process id in the name device, and sends in the request. Network Manager sends the response to the process identified by the 'SourcePid' field in the request.
+
+^bo2.8 System Manager Interface (*)^bo
+
+The system manager interface is not supported in the first release.
+^ep
+^he "Network Manager ERS - Preliminary""""Feature Availability"
+^bo^un3.0 Feature Availability^un^bo
+
+All features described in this specification except those flagged with an asterisk (*) will be available in the first release.
+
+^he "Network Manager ERS - Preliminary""""Publications"
+^bo^un4.0 Publications^un^bo
+
+A section on GRiD Network installation needs to be added to the GRiD Server Administrator's Guide. This section would describe the forms and menus the administrator sees during GRiD Network configuration. Since only developers need know the application interface, a separate manual for this is not required.

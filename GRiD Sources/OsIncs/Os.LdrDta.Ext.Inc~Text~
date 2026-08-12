@@ -1,0 +1,35 @@
+
+/* this is os.ldrdta.ext.inc */
+
+ExpandData: PROCEDURE EXTERNAL;
+  END;
+
+EData: PROCEDURE EXTERNAL;
+  END;
+
+IDATA: PROCEDURE EXTERNAL;
+  END;
+
+processREDATA: PROCEDURE EXTERNAL;
+  END;
+
+processPEDATA: PROCEDURE EXTERNAL;
+  END;
+
+processRIDATA: PROCEDURE EXTERNAL;
+  END;
+
+processPIDATA: PROCEDURE EXTERNAL;
+  END;
+
+processFIXUPP: PROCEDURE (fixupPtr) EXTERNAL;
+  DCL fixupPtr PTR;
+  END;
+
+ComputeFrame: PROCEDURE (DAT) PTR EXTERNAL;
+  DCL DAT BYTE;
+  END;
+
+ComputeTarget: PROCEDURE (DAT) PTR EXTERNAL;
+  DCL DAT BYTE;
+  END;

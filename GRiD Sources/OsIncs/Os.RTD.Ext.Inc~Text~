@@ -1,0 +1,48 @@
+
+/*       This file is Os.RTD.PLM       */
+
+
+InitJumpTable: PROCEDURE (pStart,numEntries) EXTERNAL;
+  DCL numEntries         WORD;
+  DCL pStart             PTR;
+  END;
+
+DeleteJTEntries: PROCEDURE (pName) EXTERNAL;
+  DCL pName           PTR;
+  END;
+
+InitRTD: PROCEDURE EXTERNAL;
+  END;
+
+AddModuleEntry: PROCEDURE (pSymName, pidToUse) WORD EXTERNAL;
+  DCL pidToUse       PidType;
+  DCL pSymName       PTR;
+  END;
+
+AddDictEntry: PROCEDURE (modID,addr,pSymName) WORD EXTERNAL;
+  DCL modID          WORD;
+  DCL addr           PTR;
+  DCL pSymName       PTR;
+  END;
+
+OsUnLoad : PROCEDURE (pName, pError) EXTERNAL;
+  DCL (pName, pError) PTR;
+  END;
+
+SearchDictName: PROCEDURE (pSymName) PTR EXTERNAL;
+  DCL pSymName       PTR;
+  END;
+
+AddResolvedExt: PROCEDURE (addr) EXTERNAL;
+  DCL addr           PTR;
+  END; 
+
+UnresolvedMessage : PROCEDURE EXTERNAL;
+  END;
+
+GetResolvedExt: PROCEDURE (extAddrNum) PTR EXTERNAL;
+  DCL extAddrNum     WORD;
+  END; 
+
+RemoveRslvdExtsBlks: PROCEDURE EXTERNAL;
+  END; 

@@ -1,0 +1,166 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	CONSTANTS & TYPES for data forms
+&
+&	Author:		Rajendra Shah
+&	 6/07/85 by m boyer: add ffmode constants
+&	 2/13/86 by m boyer: add zoomKind, passwordKind, multi-line kinds,
+&					sFontKind, serialKind, modemKind, parallelKind, 
+&					protocolKind, libraryKind, applicationsKind, kindKind, 
+&					serverDevicesKind, required KindChars 
+&					and requiredFieldMask.
+&	 6/12/86 by m boyer: add PartialDataFormType
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+
+DECLARE	/* ffmode types */
+	FFGet				LIT	'0',
+	FFPut				LIT	'1';
+
+DCL maxItemLabelOrValueLen	LIT	'80';
+DCL maxChoiceLen			LIT	'50';
+DCL maxMenuItemLen			LIT	'50';
+DCL requiredFieldMask		LIT	'080h';
+
+
+/* NOTE: the data kind type values must match the order of items in 
+the DataKindType Pascal enumerated set defined by Common Code */
+
+DECLARE	/* data kind types */
+	stringKind			LIT	'0',
+	numberKind			LIT	'1',
+	choiceOnlyKind		LIT	'2',
+	fontKind			LIT	'3',
+	realNumberkind		LIT	'4',
+	printerKind			LIT	'5',
+	plotterKind			LIT	'6',
+	sFontKind			LIT	'7',
+	serialKind			LIT	'8',
+	modemKind			LIT	'9',
+	parallelKind		LIT	'10',
+	protocolKind		LIT	'11',
+	libraryKind			LIT	'12',
+	applicationsKind	LIT	'13',
+	kindKind			LIT	'14',
+	serverDevicesKind	LIT	'15',
+	dummyKind			LIT	'16',		/* can be reused */
+	passwordKind		LIT	'17',
+	zoomKind			LIT	'18',
+	oneLineKind			LIT	'19',
+	twoLineKind			LIT	'20',
+	threeLineKind		LIT	'21',
+	fourLineKind		LIT	'22',
+	fiveLineKind		LIT	'23',
+	sixLineKind			LIT	'24',
+	sevenLineKind		LIT	'25',
+	eightLineKind		LIT	'26',
+	nineLineKind		LIT	'27';
+
+$EJECT
+/* NOTE: these values must match those defined by Common Code */
+
+DECLARE
+	stringKindChar			LIT	'024h',	/* $ */
+	numberKindChar			LIT	'023h',	/* # */
+	choiceOnlyKindChar		LIT	'03Fh',	/* ? */
+	fontKindChar			LIT	'026h',	/* & */
+	realKindChar			LIT	'02Eh',	/* . */
+	printerKindChar			LIT	'02Bh',	/* + */
+	plotterKindChar			LIT	'03Dh',	/* = */
+	sFontKindChar			LIT	'040h',	/* @ */
+	serialKindChar			LIT	'053h',	/* S */
+	modemKindChar			LIT	'04Dh',	/* M */
+	parallelKindChar		LIT	'050h',	/* P */
+	protocolKindChar		LIT	'058h',	/* X */
+	libraryKindChar			LIT	'04Ch',	/* L */
+	applicationsKindChar	LIT	'041h',	/* A */
+	kindKindChar			LIT	'04Bh',	/* K */
+	serverDevicesKindChar	LIT	'044h',	/* D */
+	passwordKindChar		LIT	'025h',	/* % */
+	zoomKindChar			LIT	'05Ah',	/* Z */
+	oneLineKindChar			LIT	'031h',	/* 1 */
+	twoLineKindChar			LIT	'032h',	/* 2 */
+	threeLineKindChar		LIT	'033h',	/* 3 */
+	fourLineKindChar		LIT	'034h',	/* 4 */
+	fiveLineKindChar		LIT	'035h',	/* 5 */
+	sixLineKindChar			LIT	'036h',	/* 6 */
+	sevenLineKindChar		LIT	'037h',	/* 7 */
+	eightLineKindChar		LIT	'038h',	/* 8 */
+	nineLineKindChar		LIT	'039h';	/* 9 */
+
+
+DECLARE
+	requiredStringKindChar			LIT	'requiredFieldMask + stringKindChar',
+	requiredNumberKindChar			LIT	'requiredFieldMask + numberKindChar',
+	requiredChoiceOnlyKindChar		LIT	'requiredFieldMask + 
+											choiceOnlyKindChar',
+	requiredFontKindChar			LIT	'requiredFieldMask + fontKindChar',
+	requiredRealKindChar			LIT	'requiredFieldMask + realKindChar',
+	requiredPrinterKindChar			LIT	'requiredFieldMask + printerKindChar',
+	requiredPlotterKindChar			LIT	'requiredFieldMask + plotterKindChar',
+	requiredSFontKindChar			LIT	'requiredFieldMask + sFontKindChar',
+	requiredSerialKindChar			LIT	'requiredFieldMask + serialKindChar',
+	requiredModemKindChar			LIT	'requiredFieldMask + modemKindChar',
+	requiredParallelKindChar		LIT	'requiredFieldMask + parallelKindChar',
+	requiredProtocolKindChar		LIT	'requiredFieldMask + protocolKindChar',
+	requiredLibraryKindChar			LIT	'requiredFieldMask + libraryKindChar',
+	requiredApplicationsKindChar	LIT	'requiredFieldMask + 
+											applicationsKindChar',
+	requiredKindKindChar			LIT	'requiredFieldMask + kindKindChar',
+	requiredServerDevicesKindChar	LIT	'requiredFieldMask + 
+											serverDevicesKindChar',
+	requiredPasswordKindChar		LIT	'requiredFieldMask + passwordKindChar',
+	requiredZoomKindChar			LIT	'requiredFieldMask + zoomKindChar',
+	requiredOneLineKindChar			LIT	'requiredFieldMask + oneLineKindChar',
+	requiredTwoLineKindChar			LIT	'requiredFieldMask + twoLineKindChar',
+	requiredThreeLineKindChar		LIT	'requiredFieldMask + threeLineKindChar',
+	requiredFourLineKindChar		LIT	'requiredFieldMask + fourLineKindChar',
+	requiredFiveLineKindChar		LIT	'requiredFieldMask + fiveLineKindChar',
+	requiredSixLineKindChar			LIT	'requiredFieldMask + sixLineKindChar',
+	requiredSevenLineKindChar		LIT	'requiredFieldMask + sevenLineKindChar',
+	requiredEightLineKindChar		LIT	'requiredFieldMask + eightLineKindChar',
+	requiredNineLineKindChar		LIT	'requiredFieldMask + nineLineKindChar';
+
+$EJECT
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	TYPES
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL sizeOfRowDescriptor	LIT	'14';
+
+DCL DataRowType			LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				DWORD,
+		tempData			DWORD)';
+
+DCL DataRowStringType	LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				PTR,
+		tempData			PTR)';
+
+DCL DataRowRealType		LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				REAL,
+		tempData			REAL)';
+
+DCL DataFormType		LIT	'STRUCTURE (
+		form				PTR,
+		numItems			WORD,		
+		pLabelsAndChoices	PTR,
+		ChoiceLines			WORD,	
+		Rows				(1)	BYTE)';
+
+DCL PartialDataFormType	LIT	'STRUCTURE (
+		form				PTR,
+		numItems			WORD,		
+		pLabelsAndChoices	PTR,
+		ChoiceLines			WORD,	
+		Rows				';

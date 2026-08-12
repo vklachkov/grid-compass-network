@@ -1,0 +1,18 @@
+
+/* this is os.fscommand.ext.inc */
+
+FsSeek: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsRead: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsTruncate: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;
+
+FsWrite: PROCEDURE (pPl) WORD EXTERNAL;
+  DCL pPl PTR;
+  END;

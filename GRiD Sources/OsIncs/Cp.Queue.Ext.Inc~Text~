@@ -1,0 +1,48 @@
+/* this contains the externals for os.queue.plm */
+
+OsInitQCB : PROCEDURE (pQCB, usesCheckSum, length) EXTERNAL;
+    DCL pQCB PTR;
+    DCL usesCheckSum BOOLEAN;
+    DCL length WORD;
+    END;
+
+OsInsertIntoQ : PROCEDURE (pQCB, curEID, newEID) EXTERNAL;
+     DCL pQCB PTR;
+     DCL (curEID, newEID) EIDType;
+     END;
+
+OsRemoveFromQ : PROCEDURE (pQCB, curEID) EXTERNAL;
+     DCL pQCB PTR;
+     DCL curEID EIDType;
+     END;
+
+OsReplaceInQ : PROCEDURE (pQCB, oldEID, newEID) EXTERNAL;
+    DCL pQCB PTR;
+    DCL (oldEID, newEID) EIDType;
+    END;
+
+OsVerifyCheckSum : PROCEDURE (pQCB, curEID) BOOLEAN EXTERNAL;
+    DCL pQCB PTR;
+    DCL curEID EIDType;
+    END;
+
+OsElementCheckSum : PROCEDURE (pQCB, curEID) WORD EXTERNAL;
+    DCL pQCB PTR;
+    DCL curEID EIDType;
+    END;
+
+OsNewQElement : PROCEDURE (pQCB) EIDType EXTERNAL;
+    DCL pQCB PTR;
+    END;
+
+OsSearchInQ : PROCEDURE (pQCB, offset, pKey, keyLength, mode) EIDType EXTERNAL;
+    DCL (pQCB, pKey) PTR;
+    DCL (offset, keyLength) WORD;
+    DCL mode BYTE;
+    END;
+
+OsElementInQ : PROCEDURE (pQCB, EID) BOOLEAN EXTERNAL;
+    DCL pQCB PTR;
+    DCL EID EIDType;
+    END;
+        

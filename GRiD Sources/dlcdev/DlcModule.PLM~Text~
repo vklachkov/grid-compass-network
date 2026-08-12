@@ -1,0 +1,796 @@
+$IF PhoneLink AND Primary
+$COMPACT (EXPORTS DlcProcess, ccPdlProcess, PrimaryDlcProcess)
+$ELSEIF PhoneLink AND Secondary
+$COMPACT (EXPORTS DlcProcess, ccPdlProcess, SecondaryDlcProcess)
+$ELSEIF PhoneLink
+$COMPACT (EXPORTS DlcProcess, ccPdlProcess)
+$ELSEIF Primary
+$COMPACT (EXPORTS DlcProcess, PrimaryDlcProcess)
+$ELSE
+$COMPACT (EXPORTS DlcProcess, SecondaryDlcProcess)
+$ENDIF
+$OPTIMIZE(3)
+$TITLE ('CCDLC - DLC FATHER PROCESS')
+
+/* for memory allocation routine usage */
+$SET (Creator)
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*               COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    DlcModule                 1/28/83
+*
+*    contains:  Procedures: HandleDlcInit, HandleDlcShut.
+*               Processes: DlcDadProcess.
+*         
+*    note:    No external procedures provided.
+$IF document
+*
+*    Purpose:   This module will act as the master creator and
+*         destroyer of dlc protocol processes. It will
+*         validate the initialize request and, if ok, will
+*         create the appropriate data structures and fork
+*         a process to handle the particular protocol
+*         requested. It will also create global data
+*         structures and support processes master startup
+*         time.
+*
+$ENDIF
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+DlcModule: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`CommonDefines.inc~text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~text~)
+$INCLUDE (``ccIncs`MachineDefines.inc~text~)
+$INCLUDE (``ccIncs`MacDefines.inc~text~)
+$INCLUDE (``ccIncs`MemoryDefines.inc~text~)
+$INCLUDE (``ccIncs`TimerModule.inc~text~)
+$INCLUDE (``ccIncs`GlobalDataModule.inc~text~)
+$INCLUDE (``ccIncs`UtlModule.inc~text~)
+$INCLUDE (``ccIncs`GeneralModule3.inc~text~)
+$INCLUDE (``ccIncs`MacModule.inc~text~)
+$INCLUDE (``ccIncs`MemoryModule.inc~text~)
+$IF primary
+$INCLUDE (``ccIncs`PriMachineModule.inc~text~)
+$INCLUDE (``ccIncs`PrimaryModule.inc~text~)
+$ENDIF
+$IF secondary
+$INCLUDE (``ccIncs`SecMachineModule.inc~text~)
+$INCLUDE (``ccIncs`SecondaryModule.inc~text~)
+$ENDIF
+$INCLUDE (``incs`OsPlmProcs.inc~text~)
+$INCLUDE (``incs`ConPlmProcs.inc~text~)
+$INCLUDE (``incs`OsExtra.PLM.inc~text~)
+$INCLUDE (``incs`MovRtns.PLM.inc~text~)
+
+CcPdlProcess: PROCEDURE EXTERNAL; END;
+$RESTORE
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+ DCL dlcdadName (*) BYTE INITIAL (17, '`n`system`dlcdad ');
+ DCL dlcMgrName (*) BYTE INITIAL (17, '`n`system`dlcMgr ');
+ DCL macMgrName (*) BYTE INITIAL (17, '`n`system`MacMgr ');
+ DCL commExecName (*) BYTE INITIAL (14, '`n`system`Ipc ');
+
+/* Dlc Dad process variables */
+ DCL (note, class, logError, error, error2) WORD;
+ DCL shutdown BYTE;
+ DCL pDlCB SELECTOR;
+ DCL dlCB BASED pDLCB STRUCTURE (DlCBGenDescriptor);
+ 
+$IF phoneLink
+/* PhoneLink uses only one process for up to four links */
+ DCL phoneLinkStarted BYTE INITIAL (FALSE);
+ DCL phoneLinkProcess WORD INITIAL (null);
+$ENDIF
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+HandleDlcConfigure: PROCEDURE (pConfigureDlCB, pError);
+ DCL pConfigureDlCB SELECTOR;
+ DCL ConfigureDlCB BASED pConfigureDlCB
+      STRUCTURE (DlCBgenDescriptor, DlCBConfigureParams);
+ DCL pdlConfDlCB BASED pConfigureDlCB
+      STRUCTURE (DlCBgenDescriptor, DlCBPdlConfParams);
+ DCL pError POINTER;
+
+$IF document
+/*-------------------------------------------------------------------------
+
+ Purpose: This procedure will initialize the data link layer, 
+      including: check to see if link is already active, 
+      create new data link process, pass initialization 
+      parameters to the data link process. Once the data
+      link process has been created, all subsequent message
+      will go directly to/come from that process.
+
+ Inputs:  selector of init data link control block msg. This message
+          will include the following parameters:
+       link Number - local identifier specifying hardware I/O
+          port.
+       link speed - specifies the data rate for the physical 
+          link.
+       station count - specifies maximum number of stations to
+          be supported on this wire.
+       protocol Type - specifies type of data link protocol to
+          to be loaded. 
+          Currently, only SDLC Primary is available.
+
+ Outputs: error - specifies completion status, one of: 
+        Ok, out of memory, 
+        dlcInvalidLinkNumber, dlcAlreadyActive.
+
+ Algorithm: o  Check to see if valid link number value.
+      o  Check to see if data link already exists.
+      o  Create data link, including necessary machine variables
+       and the I/O semaphore used to signal inputs to MAC
+       I/O completion process (done only if one MAC per link).
+      o  enable the Media access control for the link.
+      o  Pass the initialization message to the new data link
+       process. 
+      o  Wait for reply from dlc son.
+      o  Return reply to user, with appropriate error code.
+
+-------------------------------------------------------------------------*/
+$ENDIF
+ DCL error BASED pError WORD;
+ DCL linkNumber BYTE;
+ DCL (note, error2) WORD;
+ DCL x BYTE;
+ DCL (tempPID, tempMsgFormat) WORD;
+ DCL tempFreeDisp BYTE;
+ DCL pRecvDlCB POINTER;
+ DCL recvDlCB BASED pRecvDlCB STRUCTURE (DlCBgenDescriptor,
+                 DlCBioDataParams);
+ DCL commExecPid WORD;
+ DCL pInitDlCB SELECTOR;
+ DCL initDlCB BASED pInitDlCB STRUCTURE (DlCBgenDescriptor,
+                DlCBinitParams);
+ DCL ConfigOption WORD;
+ DCL phonelinkType BYTE;
+ DO;
+  error = 0;
+  /* configOption control whether configure is reported to commexec */
+  configOption = configureDlCB.reqError;
+
+ /* check link number validity */
+  linkNumber = ConfigureDlCB.linkNumber;
+  IF (linkNumber >= maxNumberOfLinks) THEN 
+    error = eDlcInvalidLinkNumber;
+  ELSE IF dlcProcessId(linkNumber) <> null THEN 
+    error = eDlcAlreadyExists;
+  
+  IF error <> 0 THEN RETURN;
+ /* check protocol type validity and create dlc process */
+$IF primary
+  ELSE IF ConfigureDlCB.protocolType = dlcPrimaryProtocol THEN
+   DO;
+    dlcProcessId(linkNumber) = 
+      OsForkProcess(@PrimaryDlcProcess, dlcPriority,
+            FALSE, dlcStackSize, @error);
+   END;
+$ENDIF
+$IF secondary
+  ELSE IF ConfigureDlCB.protocolType = dlcSecondaryProtocol THEN
+   DO;
+    dlcProcessId(linkNumber) = 
+      OsForkProcess(@SecondaryDlcProcess, dlcPriority,
+            FALSE, dlcStackSize, @error);
+   END;
+$ENDIF
+$IF phoneLink
+  ELSE IF (ConfigureDlCB.protocolType = dlcPhoneLinkProtocol) OR
+  					(ConfigureDlCB.protocolType = dlcOriginateProtocol) OR
+					(ConfigureDlCB.protocolType = dlcAnswerProtocol) OR
+					(ConfigureDlCB.protocolType = dlcOrigAndAnsProtocol) THEN
+   DO; /* one process fits all */
+    IF NOT phoneLinkStarted THEN
+     DO;
+      phoneLinkProcess = 
+        OsForkProcess(@CcPdlProcess, dlcPriority,
+						FALSE, pdlStackSize, @error);
+      phoneLinkStarted = TRUE;
+     END;
+    dlcProcessId(linkNumber) = phoneLinkProcess;
+   END;
+$ENDIF
+  ELSE error = eDlcInvalidProtocolType;
+
+  IF error = ok THEN 
+   DO;
+    CALL MacEnable(linkNumber, ConfigureDlCB.linkSpeed, 
+         ConfigureDlCB.ioType, ConfigureDlCB.duplexType,
+         @error);
+$IF phonelink
+	phonelinkType = nullByte;
+	IF ConfigureDlCB.protocolType = dlcPhoneLinkProtocol THEN
+		phonelinkType = originateAndAnswer;
+	ELSE
+		IF ConfigureDlCB.protocolType = dlcOriginateProtocol THEN
+			phonelinkType = originateOnly;
+	ELSE
+		IF ConfigureDlCB.protocolType = dlcAnswerProtocol THEN
+			phonelinkType = answerOnly;
+	ELSE
+		IF ConfigureDlCB.protocolType = dlcOrigAndAnsProtocol THEN
+			phonelinkType = originateAndAnswer;
+
+	IF phonelinkType <> nullByte THEN
+	DO;
+		IF ConfigureDlCB.protocolType <> dlcPhoneLinkProtocol THEN
+			CALL MacSetLineParms(linkNumber, phonelinkType,
+					pdlConfDlCB.modemType, pdlConfDlCB.dialingMode, 1, 30);
+		ELSE
+			CALL MacSetLineParms(linkNumber, originateAndAnswer, noModem,
+													touchToneType, 1, 30);
+	END;
+$ENDIF
+   END;
+  IF error = ok THEN 
+   DO;
+    CALL TmrConfigureTimer(pConfigureDlCB, @error);
+   END;
+
+  IF error = ok THEN 
+   DO;
+    tempPID = ConfigureDlCB.sourcePID;
+    tempMsgFormat = ConfigureDlCB.msgFormat;
+    tempFreeDisp = ConfigureDlCB.freeDisp;
+    ConfigureDlCB.freeDisp = returnMsg;
+    CALL GenGiveToDlc(linkNumber, (dlcConfigure OR msgRequest),
+          pConfigureDlCB, @error);
+
+/* wait for dlc Configure response */
+    pConfigureDlCB = 
+        SELECTOR$OF(OsReceive(dlcProcessId(linkNumber),
+            (dlcConfigure OR msgResponse),
+            10000, @note, @error));
+    IF error = ok THEN
+     DO;
+      IF ConfigureDlCB.reqError = ok THEN
+       DO;
+$IF debugging
+        IF (globalDebug AND debugInit) <> 0 THEN
+         DO;
+          CALL ConLineOut(
+                @('Dlc New link Configured: '),
+                24);
+          CALL ConHexOut(DOUBLE(linkNumber));
+          CALL ConLineOut(@(0Dh, 0Ah), 2);
+         END;
+$ENDIF
+       END;
+      ELSE
+       DO;
+        /* set up error word */
+        error = ConfigureDlCB.reqError;
+       END;
+
+      IF error = 0 THEN
+       DO;
+        error2 = 0;
+        x = 0;
+        DO WHILE (x < ConfigureDlCB.numberOfBuffers) AND
+                      (error2 = 0);
+         pRecvDlCB = OsAllocate(
+           (ConfigureDlCB.bufferSize + SIZE(recvDlCB)),
+           @error2);
+         IF error2 = 0 THEN 
+          DO;
+           recvDlCB.linkNumber =
+                  configureDlCB.linkNumber;
+           recvDlCB.stationNumber = noStationAddress;
+           recvDlCB.dataLength = msgNoBufferPtr OR 0;
+           recvDlCB.bufferLength = 
+                  configureDlCB.bufferSize;
+           recvDlCB.ipcCode = msgNetworkIo;
+           recvDlCB.freeDisp = returnMsg;
+           x = x + 1;
+           CALL GenGiveToDlc(linkNumber, 
+              (dlcReceive OR msgRequest),
+              SELECTOR$OF(pRecvDlCB), @error2);
+          END;
+         ELSE 
+          DO;
+           CALL OsLogError(3, osOutOfMem, SHL(DOUBLE(linkNumber), 8) OR 0FFh, @(6, 'dlcbuf'));
+$IF debugging
+           IF (globalDebug AND debugErrors) <> 0 THEN
+            DO;
+             CALL ConLineOut(@('dlc out of buffer space', 0Ah, 0Dh), 25);
+            END;
+$ENDIF
+          END;
+        END;
+       END;
+     END;
+    ConfigureDlCB.sourcePID = tempPID;
+    ConfigureDlCB.msgFormat = tempMsgFormat;
+    ConfigureDlCB.freeDisp = tempFreeDisp;
+   END;
+
+  /* if configured ok and not specified to not report init to commexec,
+      then send initialized message to commexec */
+  IF error = ok THEN
+   DO;
+    IF configOption <> noteConfigOnly THEN
+     DO;
+	  commExecName(commExecName(0)) = numberArray(OsCardNumber);
+      commexecPid = OsLookUpName(@commExecName, @error2);
+      IF error2 = ok THEN
+       DO;
+        pInitDlCB = UtlBuildCB;
+        initDlCB.ipcCode = msgNetworkIo;
+        initDlCB.freeDisp = freeMsg;
+        initDlCB.linkNumber = linkNumber;
+        initDlCB.stationNumber = noStationAddress;
+        initDlCB.protocolPid = dlcProcessId(linkNumber);
+        initDlCB.pDlCBfreeQueue = pCbFreeQueue;
+        initDlCB.protocolType = ConfigureDlCB.protocolType;
+        CALL OsSend(commExecPid, 
+             (dlcInitialize OR msgResponse), 0,
+             BUILD$PTR(pInitDlCB, 0), @error2);
+        IF error2 <> ok THEN pInitDlCB = UtlFreeCB(pInitDlCB);
+       END;
+$IF debugging
+      IF (globalDebug AND debugErrors) <> 0 THEN
+       DO;
+        CALL ConLineOut(@('Dlc Init Reported: '), 19);
+        CALL ConHexOut(error);
+        CALL ConLineOut(@(0Dh, 0Ah), 2);
+       END;
+$ENDIF
+     END;
+   END;
+  ELSE
+   DO;
+$IF debugging
+    IF (globalDebug AND debugErrors) <> 0 THEN
+     DO;
+      CALL ConLineOut(@('New link Configure Failed: '), 27);
+      CALL ConHexOut(error);
+      CALL ConLineOut(@(0Dh, 0Ah), 2);
+     END;
+$ENDIF
+    CALL OsLogError(2, error, SHL(DOUBLE(linkNumber), 8) OR 0FFh, @(6,'dlcCon'));
+    CALL MacDisable(linkNumber);
+    CALL OsDeleteProcess(dlcProcessId(linkNumber), @error2);
+    dlcProcessId(linkNumber) = null;
+   END;
+ END;
+END HandleDlcConfigure;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+HandleDlcInit: PROCEDURE (pInitDlCB, pError);
+ DCL pInitDlCB SELECTOR;
+ DCL initDlCB BASED pInitDlCB STRUCTURE (DlCBgenDescriptor,
+                DlCBinitParams);
+ DCL pError POINTER;
+ DCL error BASED pError WORD;
+ DCL linkNumber BYTE;
+ DO;
+  error = ok;
+  linkNumber = initDlCB.linkNumber;
+  IF (linkNumber >= maxNumberOfLinks) THEN 
+    error = eDlcInvalidLinkNumber;
+  ELSE IF dlcProcessId(linkNumber) = null THEN
+    error = eDlcNotInitialized;
+  ELSE 
+   DO;
+    initDlCB.protocolPid = dlcProcessId(linkNumber);
+    initDlCB.pDlCBfreeQueue = pCbFreeQueue;
+   END;
+  IF error <> 0 THEN
+    CALL OsLogError(2, error, SHL(DOUBLE(linkNumber), 8) OR 0FFh, @(6,'dlcIni'));
+ END;
+
+END HandleDlcInit;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+HandleDlcShut: PROCEDURE (pShutDlCB, pError);
+ DCL pShutDlCB SELECTOR;
+ DCL pError POINTER;
+ DCL linkNumber BYTE; 
+ DCL error BASED pError WORD;
+
+$IF document
+/*-------------------------------------------------------------------------
+
+ Purpose: This procedure allows the caller to shut the data link
+      process completely down. 
+
+ Inputs:  Selector of the shut control block msg. This message will
+      include the following parameters:
+       linkNumber - port to which shut down shoulf be issed).
+       clean up - boolean flag specifying whether protocol 
+          should gracefully shut down or not.
+
+ Algorithm: o Send a message to the data link process notifying it of
+      the impending shutdown.
+      o wait for response.
+      o delete process and any resources associated with it.
+      o return message to original caller.
+
+-------------------------------------------------------------------------*/
+$ENDIF
+ DCL shutDlCB BASED pShutDlCB STRUCTURE (DlCBGenDescriptor);
+ DCL (tempPID, note, tempMsgFormat) WORD;
+ DCL tempFreeDisp BYTE;
+ DCL x BYTE;
+
+ DO;
+  linkNumber = shutDlCB.linkNumber;
+  IF (linkNumber >= maxNumberOfLinks) THEN 
+    error = eDlcInvalidLinkNumber;
+  ELSE IF dlcProcessId(dlCB.linkNumber) <> null THEN
+   DO;
+    tempPID = shutDlCB.sourcePID;
+    tempmsgFormat = shutDlCB.msgFormat;
+    tempFreeDisp = shutDlCB.freeDisp;
+    shutDlCB.freeDisp = returnMsg;
+    CALL GenGiveToDlc(linkNumber, (dlcDie OR msgRequest),
+          pShutDlCB, @error);
+    pShutDlCB = SELECTOR$OF(OsReceive(dlcProcessId(linkNumber),
+            anyClass, 10000, @note, @error));
+$IF phoneLink
+    IF dlcProcessId(linkNumber) <> phoneLinkProcess THEN
+$ENDIF
+     CALL OsDeleteProcess(dlcProcessId(linkNumber), @error);
+    dlcProcessId(linkNumber) = null;
+    CALL MacDisable(linkNumber);
+    shutDlCB.sourcePID = tempPID;
+    shutDlCB.msgFormat = tempMsgFormat;
+    shutDlCB.freeDisp = tempFreeDisp;
+  IF error <> 0 THEN
+    CALL OsLogError(2, error, SHL(DOUBLE(linkNumber), 8) OR 0FFh, @(6,'dlcSht'));
+   END;
+ END;
+END HandleDlcShut;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+HandleNmRequest: PROCEDURE (pNmDlCB, pError);
+ DCL pNmDlCB SELECTOR;
+ DCL pError POINTER;
+ DCL error BASED pError WORD;
+ DCL dlCB BASED pNmDlCB STRUCTURE (dlCBGenDescriptor,
+               buffer (1) BYTE);
+ DCL (linkNumber, stationNumber) BYTE;
+ DCL (msgType, layer, nmLength) WORD;
+ DCL pNmData POINTER;
+ DCL nmData BASED pNmData (1) BYTE;
+ DCL pDlcStats POINTER;
+ DCL dlcStats BASED pDlcStats (1) STRUCTURE (DlCBStatsParams);
+ DCL pDlcMachineArray POINTER;
+ DCL dlcMachineArray BASED pDlcMachineArray (1) SELECTOR;
+ DCL pDlcMachine SELECTOR;
+ DCL dlcMachine BASED pDlcMachine generalMachineType;
+ DCL x WORD;
+ DO;
+  IF (dlCB.msgFormat AND msgFormatReqRspMask) = msgResponse THEN
+   DO;
+    error = eDlcInvalidRequest;
+    RETURN;
+   END;
+  layer = dlCB.msgFormat AND msgNmLayerMask;
+  msgType = dlCB.msgFormat AND msgNmFormatMask;
+
+  IF (msgType = msgNmReadCtrs) OR (msgType = msgNmReadResetCtrs) THEN
+   DO;
+    IF (layer = nmMacLayer) THEN
+     DO;
+      IF dlCB.linkNumber = anyLinkNumber THEN
+       DO;
+        nmLength = SIZE(macStatistics);
+        pNmData = @macStatistics;
+       END;
+      ELSE
+       DO;
+        nmLength = SIZE(macStatistics(0));
+        pNmData = @macStatistics(dlCB.linkNumber);
+       END;
+      IF nmLength > dlCB.bufferLength THEN 
+         nmLength = (dlCB.bufferLength MOD
+         SIZE(macStatistics(0))) *  SIZE(macStatistics(0));
+      CALL MOVB(pNmData, @dlCB.buffer, nmLength);
+      dlCB.bufferLength = nmLength;
+     END;
+    ELSE IF (layer = nmDlcLayer) THEN
+     DO;
+      pDlcMachineArray = globalStateMachinePtr(dlCB.linkNumber);
+      pDlcStats = @dlCB.buffer;
+      IF dlCB.linkNumber = anyLinkNumber THEN
+       DO;
+        error = eDlcInvalidRequest;
+       END;
+      ELSE IF (pDlcMachineArray = NIL) OR
+        (dlCB.linkNumber > (maxNumberOfLinks - 1)) THEN
+       DO;
+        error = eDlcNotInitialized;
+       END;
+      ELSE
+       /* do max number of stations, minus station for
+        handling too many stations condition */
+       DO x = 0 TO (maxNumberOfStations - 2);
+        IF (pDlcMachine := dlcMachineArray(x)) <> null THEN
+         DO;
+          dlcStats(x).state = dlcMachine.state;
+          dlcStats(x).linkAddress = dlcMachine.linkAddress;
+          dlcStats(x).connected = dlcMachine.connected;
+          CALL MOVW(@dlcMachine.sendCounter, @dlcStats(x).counters, 16);
+         END;
+        ELSE
+         DO;
+          dlcStats(x).state = 0;
+          dlcStats(x).linkAddress = 0;
+          dlcStats(x).connected = FALSE;
+          CALL SETW(0, @dlcStats(x).counters, 16);
+         END;
+       END;
+     END;
+   END;
+
+  IF (msgType = msgNmResetCtrs) OR (msgType = msgNmReadResetCtrs) THEN
+   DO;
+    IF (layer = nmMacLayer) THEN
+     DO;
+      IF dlCB.linkNumber = anyLinkNumber THEN
+       DO;
+        nmLength = SIZE(macStatistics);
+        pNmData = @macStatistics;
+       END;
+      ELSE
+       DO;
+        nmLength = SIZE(macStatistics(0));
+        pNmData = @macStatistics(dlCB.linkNumber);
+       END;
+      DISABLE;
+       CALL SETB(0, pNmData, nmLength);
+      ENABLE;
+     END;
+    ELSE IF (layer = nmDlcLayer) THEN
+     DO;
+      pDlcMachineArray = globalStateMachinePtr(dlCB.linkNumber);
+      IF dlCB.linkNumber = anyLinkNumber THEN
+       DO;
+        error = eDlcInvalidRequest;
+       END;
+      ELSE IF pDlcMachineArray <> NIL THEN
+       DO x = 0 TO (maxNumberOfStations - 2);
+        IF (pDlcMachine := dlcMachineArray(x)) <> null THEN
+         DO;
+          DISABLE;
+           CALL SETW(0, @dlcMachine.sendCounter, 16);
+          ENABLE;
+         END;
+       END;
+     END;
+   END;
+ END;
+END HandleNmRequest;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcProcess: PROCEDURE CLEAN;
+ DO;
+$IF document
+/*-------------------------------------------------------------------------
+
+ Initialization Algorithm
+ ------------------------
+
+ 1) add name of master dlc to name table ('dlc').
+ 2) create timer process for dlc timer management.
+ 3) allocate data link message control block pool
+ 4) do global initialization of the data link hardware and
+  control structures.
+ 5) While shutdown message not received do:
+  1) wait for new message
+  2) if initialization request then process init.
+  3) if shutdown message then exit loop.
+  4) if status message the process status.
+ 6) perform dlc shut down and clean up.
+
+-------------------------------------------------------------------------*/
+$ENDIF
+
+ /* print version string */
+$IF debugging2
+  DO;
+   DCL pSeg POINTER;
+   DCL pSegDW DWORD AT (@pSeg);
+   CALL ConLineOut(@('Dlc Version '), 12);
+   CALL ConLineOut(@dlcVersionStr(1), dlcVersionStr(0));
+   CALL ConLineOut(@(0Ah, 0Dh), 2);
+   CALL ConLineOut(@('Mac Version '), 12);
+   CALL ConLineOut(@MacVersionStr(1), macVersionStr(0));
+   CALL ConLineOut(@(0Ah, 0Dh), 2);
+
+   pSeg = @DlcProcess;
+   CALL ConLineOut(@('dlc segment is: '), 16);
+   CALL ConHexOut(HIGH(pSegDW));
+   CALL ConCharOut(':');
+   CALL ConHexOut(LOW(pSegDW));   
+   CALL ConLineOut(@(', debug mask: '), 14);
+   CALL ConHexOut(globalDebug);
+   CALL ConLineOut(@(0Dh, 0Ah), 2);
+  END;
+$ENDIF
+$IF debugging
+  CALL ConLineOut(@('dlc Pid: '), 9);
+  CALL ConHexOut(OsWhoAmI);
+  CALL ConLineOut(@(0Dh, 0Ah), 2);
+$ENDIF
+
+  CALL OsHandleCancel(FALSE);
+  dlcMgrName(dlcMgrName(0)) = numberArray(OsCardNumber);
+
+$IF debugging
+  CALL ConLineOut(@('dlc registering: '), 17);
+  CALL ConLineOut(@dlcMgrName(1), dlcMgrName(0));
+  CALL ConLineOut(@(0Dh, 0Ah), 2);
+$ENDIF
+  CALL OsRegisterName(@dlcMgrName, NIL, 2, @error);
+  CALL OsRegisterName(@dlcMgrName, DOUBLE(OsWhoAmI), 1, @error);
+
+
+  macMgrName(macMgrName(0)) = numberArray(OsCardNumber);
+
+$IF debugging
+  CALL ConLineOut(@('dlc registering: '), 17);
+  CALL ConLineOut(@MacMgrName(1), MacMgrName(0));
+  CALL ConLineOut(@(0Dh, 0Ah), 2);
+$ENDIF
+  CALL OsRegisterName(@MacMgrName, NIL, 2, @error);
+  CALL OsRegisterName(@macMgrName, DOUBLE(OsWhoAmI), 1, @error);
+
+
+  CALL MacGlobalEnable(@error);
+  IF error <> ok THEN 
+   DO;
+$IF debugging
+    IF (globalDebug AND debugErrors) <> 0 THEN 
+     DO;
+      CALL ConLineOut(@('dlc cant initialize Mac: '), 26);
+      CALL ConHexOut(error);
+      CALL ConLineOut(@(0Dh, 0Ah), 2);
+     END;
+$ENDIF
+    GOTO errorExit;
+   END;
+$IF debugging
+  CALL ConLineOut(@('Mac Enabled', 0Ah, 0Dh), 13);
+$ENDIF
+
+  pCbFreeQueue = MemAllocateMemory(80, 48, @error);
+  IF error <> ok THEN
+   DO;
+$IF debugging
+    IF (globalDebug AND debugErrors) <> 0 THEN 
+     DO;
+      CALL ConLineOut(@('dlc cant initialize cbQ: '), 26);
+      CALL ConHexOut(error);
+      CALL ConLineOut(@(0Dh, 0Ah), 2);
+     END;
+$ENDIF
+    GOTO errorExit;
+   END;
+$IF debugging2
+  DO;
+   DCL wMemArea WORD AT (@pCbFreeQueue);
+   CALL ConLineOut(@('Control Block Area at: '), 23);
+   CALL ConHexOut(wMemArea);
+   CALL ConLineOut(@(0Dh, 0Ah), 2);
+  END;
+$ENDIF
+  
+  CALL TmrEnableTimer(@error);
+  IF error <> ok THEN 
+   DO;
+$IF debugging
+    IF (globalDebug AND debugErrors) <> 0 THEN 
+     DO;
+      CALL ConLineOut(@('dlc cant initialize Tmr: '), 26);
+      CALL ConHexOut(error);
+      CALL ConLineOut(@(0Dh, 0Ah), 2);
+     END;
+$ENDIF
+    GOTO errorExit;
+   END;
+$IF debugging
+  CALL ConLineOut(@('Timer Enabled', 0Ah, 0Dh), 15);
+$ENDIF
+
+  /* ensure dlc dad processing of important requests */
+  CALL OsSetPriority(OsWhoAmI, 20, @error);
+  
+  shutDown = FALSE;
+  DO WHILE NOT shutdown;
+   pDlCB = SELECTOR$OF(OsReceive(anyProcess, anyClass,
+           waitforever, @note, @error));
+   IF error = ok THEN
+    DO;
+     logError = FALSE;
+     IF (dlCB.msgFormat = dlcInitialize) THEN
+       CALL HandleDlcInit(pDlCB, @error);
+     ELSE IF (dlCB.msgFormat = dlcShutdown) THEN
+       CALL HandleDlcShut(pDlCB, @error);
+     ELSE IF dlCB.msgFormat = dlcDie THEN
+       shutDown = TRUE;
+     ELSE IF dlCB.msgFormat = (msgNmConfig OR msgRequest) THEN
+       CALL HandleDlcConfigure(pDlCB, @error);
+     ELSE IF dlCB.msgFormat = (msgNmDebug OR msgRequest) THEN
+      DO;
+       /* print version string */
+       CALL ConLineOut(@('Dlc Version '), 12);
+       CALL ConLineOut(@dlcVersionStr(1), dlcVersionStr(0));
+       CALL ConLineOut(@(0Ah, 0Dh), 2);
+       CALL ConLineOut(@('Mac Version '), 12);
+       CALL ConLineOut(@MacVersionStr(1), macVersionStr(0));
+       CALL ConLineOut(@(0Ah, 0Dh), 2);
+       error = globalDebug;
+       globalDebug = note;
+      END;
+        /* handle all other network mgmt request types */
+     ELSE IF (dlCB.msgFormat AND msgClassMask) = classNM THEN
+       CALL HandleNmRequest(pDlCB, @error);
+     ELSE /* nothing else supported right now */
+      DO;
+       error = eDlcInvalidRequest;
+       logError = TRUE;
+$IF debugging
+       IF (globalDebug AND debugErrors) <> 0 THEN
+        DO;
+         DCL wDlCB WORD AT(@pDlCB);
+         CALL ConLineOut(
+              @('dlcdad Invalid Class: '), 22);
+         CALL ConHexOut(dlCB.msgFormat);
+         CALL ConLineOut(@(', ptr = '), 8);
+         CALL ConHexOut(wDlCB);
+         CALL ConLineOut(@(0Dh, 0Ah), 2);
+        END;
+$ENDIF
+      END;
+     IF (error <> 0) AND logError THEN
+      CALL OsLogError(2, error, note, @(6,'dlcMsg'));
+
+     IF dlCB.sourcePid <> OsWhoAmI THEN
+      CALL OsSend(dlCB.sourcePid,
+           (dlCB.msgFormat OR msgResponse),
+           error, BUILD$PTR(pDlCB, 0), @error);
+     ELSE CALL OsFree(BUILD$PTR(pDlCB, 0), @error);
+    END;
+  END;
+
+normalExit:
+  CALL MacGlobalDisable;
+  RETURN;
+
+errorExit:
+  CALL OsLogError(2, error, 0, @(6,'dlcDad'));
+$IF debugging
+  IF (globalDebug AND debugErrors) <> 0 THEN 
+   DO;
+    CALL ConLineOut(@('dlc Error Condition: '), 21);
+    CALL ConHexOut(error);
+    CALL ConLineOut(@(0Dh, 0Ah), 2);
+   END;
+$ENDIF
+  GOTO normalExit;
+
+ END;
+END DlcProcess;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+$IF CompassCentral
+ CALL DlcProcess;
+ CALL OsExit(0);
+$ENDIF
+
+END DlcModule;

@@ -1,0 +1,41 @@
+
+/*           This is Os.Device.Ext.Inc            */
+
+/* It contains the routines that deal with device */
+/* drivers                                        */
+
+
+
+LoadDevice: PROCEDURE (pName, pid, pError) PTR EXTERNAL;
+  DCL pid         PidType;
+  DCL pName       PTR;
+  DCL pError      PTR;
+  END;
+
+OsAddDevice: PROCEDURE (pPathName, pName, entryPoint, intAddr, mass, 
+                        mode, pError) EIDType EXTERNAL;
+  DCL mass        BOOLEAN;
+  DCL intAddr     BYTE;
+  DCL mode        WORD;
+  DCL pPathName   PTR;
+  DCL pName       PTR;
+  DCL entryPoint  PTR;
+  DCL pError      PTR;
+  END;
+
+OsRemoveDevice: PROCEDURE (pPathName, pError) EXTERNAL;
+    DCL pPathName PTR;
+    DCL pError    PTR;
+    END;
+
+DeviceActive: PROCEDURE (pPathName) EIDType EXTERNAL;
+  DCL pPathName PTR;
+  END;
+
+RemoveDevice: PROCEDURE (curID) EXTERNAL;
+  DCL curID        EIDType;
+  END;
+
+InitDevices: PROCEDURE (setPrefix) EXTERNAL;
+  DCL setPrefix BOOLEAN;
+  END;

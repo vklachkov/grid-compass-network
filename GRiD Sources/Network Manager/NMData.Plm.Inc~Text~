@@ -1,0 +1,87 @@
+/* External data declarations. */
+
+DCL	accessSema				WORD EXT;
+
+DCL	configInProgress		BOOLEAN EXT,	/* Configuration is in progress. */
+	needsToReboot			BOOLEAN EXT,	/* Rebooting needed for config. */
+	changed					BOOLEAN EXT,	/* Config. has changed. */
+	modConnWarning			BOOLEAN EXT,	/* Allocated conn modified. */
+	eraseConnWarning		BOOLEAN EXT,	/* Allocated conn erased. */
+	consistent				BOOLEAN EXT;	/* Connections are consistent. */
+
+DCL	remConn					WORD EXT;		/* Remote connection id. */
+
+DCL	userClass				WORD EXT;		/* User class. */
+
+DCL	userIdBuffer			(256) BYTE EXT;	/* User properties. */
+
+DCL	userIdBufferLen			WORD EXT;		/* User properties length. */
+
+/* Local server name. */
+
+DCL	myServerNameStr			(serverNameStrLength) BYTE EXT,
+	myServerName			stringType EXT;
+
+DCL	nmPassword		(passwordLength) BYTE EXT,	/* Administrator password. */
+	defaultPassword	(*) BYTE EXT; 				/* Default pswd. */
+
+DCL	myAreaCode						(phoneNumberLength) BYTE EXT,
+											  /* Local area code. */
+	myLongDistCode					(phoneNumberLength) BYTE EXT,
+											  /* Long dist code. */
+	logFileSize						WORD EXT, /* Log file size. */
+	highSpeedThreshold				WORD EXT, /* Speeds >= this are high. */
+	mediumSpeedThreshold			WORD EXT; /* Speeds >= this and < above
+														are medium, else low. */
+
+DCL	cardInfo		(8) cardInfoType EXT;		/* Card config info. */
+
+DCL	portInfo		(32) portInfoType EXT,		/* Port config info. */
+	portInfoSave	(4) portInfoType EXT;		/* Save area. */
+
+DCL	pServerInfo		POINTER EXT,	/* Server config info. pointer. */
+	pLastServer		POINTER EXT;	/* Last server. */
+
+DCL	nServers			WORD EXT,	/* Number of servers configured. */
+	nConnections		WORD EXT,	/* Number of connections configured. */
+	nCommCards			BYTE EXT;	/* Number of comm cards. */
+
+/* Program/file names. */
+
+DCL	nmConfigName	(*) BYTE EXT,
+	nmInterfaceName	(*) BYTE EXT,
+	ipcName			(*) BYTE EXT,
+	dlcMgrName		(*) BYTE EXT,
+	publicDirFile	(*) BYTE EXT,
+	privateDirFile	(*) BYTE EXT,
+	oldConfigFile	(*) BYTE EXT,
+	oldRealFile		(*) BYTE EXT,
+	configFile		(*) BYTE EXT,
+	logFile			(*) BYTE EXT;
+
+/* Logging */
+
+DCL	pLogStr		POINTER EXT,
+	logConn		WORD EXT;
+
+/* Program start commands. */
+
+DCL	GRiDlinkProc			(*) BYTE EXT,
+	PhonelinkProc			(*) BYTE EXT,
+	GRiDAndPhonelinkProc	(*) BYTE EXT,
+	GRiDlinkSecondaryProc	(*) BYTE EXT,
+	VipcProc				(*) BYTE EXT,
+	Vipc128kProc			(*) BYTE EXT;
+
+/* Version string. */
+
+DCL	nmVersion				(80) BYTE EXT;
+
+/* Port search order. */
+
+DCL	searchOrder				(32) WORD EXT;
+
+/* Port usage by other programs. */
+
+DCL	portProtocol			(32) BYTE EXT;
+DCL	portUsed				(32) BOOLEAN EXT;

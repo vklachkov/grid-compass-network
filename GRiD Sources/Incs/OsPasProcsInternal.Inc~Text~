@@ -1,0 +1,32 @@
+
+{ This is OsPasProcsInternal.Inc~Text~ }
+{ Updated for the 3.1 release 2/24/84 }
+{ This include file is NEVER to go outside of GRiD! }
+
+PUBLIC OSInternal;
+
+FUNCTION OsWhereAmI: WORD;
+
+PROCEDURE OsReadDescriptor (conn: WORD; VAR desc: FileDescriptor; 
+                            VAR error: WORD);
+
+PROCEDURE OsWriteDescriptor (conn: WORD; VAR desc: FileDescriptor; 
+                             VAR error: WORD);
+
+PROCEDURE OsAddKbChar (ch: WORD);
+
+PROCEDURE OsAddAlias (VAR aliasName: BYTES; VAR deviceName: BYTES;
+                      pid: WORD; mode: WORD; VAR error: WORD);
+
+PROCEDURE OsDeleteAlias (VAR aliasName: BYTES; VAR error: WORD);
+
+PROCEDURE OsUnload (VAR name: BYTES; VAR error: WORD);
+
+PROCEDURE OsVersionNumber (pid: WORD; VAR version: VersionType; 
+                           VAR error: WORD);
+
+PROCEDURE IntSend (sourcePid: WORD; destPid: WORD; msgClass: WORD;
+                   note: WORD; VAR msg: BYTES; VAR error: WORD);
+
+PROCEDURE OsOuroBouro (VAR routine: BYTES; length: WORD; VAR error: WORD);
+

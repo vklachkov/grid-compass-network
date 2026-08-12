@@ -1,0 +1,16 @@
+{ ByteProcs.Inc  Updated 10/23/84 }
+
+PUBLIC Common;
+
+PROCEDURE MoveBytes (VAR source: Bytes; VAR dest: Bytes; length: Word);
+PROCEDURE MoveReverseBytes (VAR source: Bytes; VAR dest: Bytes; 
+                            length: Word);
+FUNCTION FindByte (VAR source: Bytes; byteToFind: Char; count: Word; 
+                   VAR index: Word): Boolean;
+FUNCTION CompareBytes (VAR source1, source2: Bytes; count: Word; 
+                   VAR index: Word): Boolean;
+PROCEDURE SetBytes (value: Char; VAR dest: Bytes; count: Word);
+PROCEDURE InsertBytes (VAR source, dest: Bytes; len, pos, byteCount: Word);
+PROCEDURE DeleteBytes (VAR source, dest: Bytes; sourceLen, pos, 
+                       byteCount: Word);
+

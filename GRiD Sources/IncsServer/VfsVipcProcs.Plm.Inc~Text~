@@ -1,0 +1,125 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	EXTERNAL FOR VFS & VIPC LAYER PROCEDURES
+&
+&	Sept 3rd 1985	Raj Shah	Created
+&	Jan 19th 1986	Raj Shah	combined Vfs & VIPC calls
+&	June 5th 1986   Raj Shah    mode & access in VipcConnect changed to Word
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+SignOn: PROCEDURE (pUserParams,  userParamsLen,  pAccessParams,
+				accessParamsLen, pServerName, pError) EXTERNAL;
+
+	DECLARE	(pUserParams, pAccessParams, pServerName, pError)	POINTER;
+	DECLARE	(userParamsLen, accessParamsLen) 					WORD;
+
+/*	DECLARE	userParams		BASED pUserParams 		AdminPropertyListType;
+	DECLARE accessParams	BASED pAccessParams 	CommonPropertyListType;
+	DECLARE	serverName		BASED pServerName		ShortStringType;   */
+	END;
+
+SignOff: PROCEDURE (pServerName, pError) EXTERNAL;
+	DECLARE	(pServerName, 	pError)			POINTER;
+
+/* 	DECLARE	serverName		BASED pServerName		ShortStringType; */
+	END;
+
+$IF NOT GRiDVfsModule
+VfsChangeUserContext: PROCEDURE (pServerNameStr, pBuffer, length, 
+								pError) EXTERNAL;
+	DECLARE (pServerNameStr, pBuffer, pError)	POINTER;
+	DECLARE length								WORD;
+
+/*	DECLARE serverNameStr	BASED pServerNameStr 	ShortStringType;
+	DECLARE	buffer			BASED pBuffer			AdminPropertyListType;	*/
+	END;
+
+VfsDeleteUserContext: PROCEDURE (pServerNameStr, pBuffer, length, 
+									pError) EXTERNAL;
+	DECLARE (pServerNameStr, pBuffer, pError)	POINTER;
+	DECLARE length								WORD;
+
+/*	DECLARE serverNameStr	BASED pServerNameStr 	ShortStringType;
+	DECLARE	buffer			BASED pBuffer			AdminPropertyListType;	*/
+	END;
+
+VfsAddResource:PROCEDURE (pServerName, pPropList, length, pError) WORD EXTERNAL;
+  	DECLARE pServerName PTR;
+	DECLARE pPropList   PTR;
+	DECLARE length      WORD;
+	DECLARE pError      PTR;
+	END;
+
+VfsDeleteResource:PROCEDURE (pServerName, pResourceName, length, pError) 
+			EXTERNAL;
+  	DECLARE pServerName 	PTR;
+	DECLARE pResourceName   PTR;
+	DECLARE length      	WORD;
+	DECLARE pError      	PTR;
+
+/*  DECLARE serverName  	BASED pServerName  	ShortStringType;
+	DECLARE resourcename	BASED pResourceName	ShortStringType;	*/
+	END;
+
+VfsGetResourceAttributes:PROCEDURE (pServerName, pResourceName, 
+				pResponseBuffer, ResponseLength, pError) WORD EXTERNAL;
+  	DECLARE pServerName 	PTR;
+	DECLARE pResourceName   PTR;
+	DECLARE pResponseBuffer	PTR;
+	DECLARE responseLength  WORD;
+	DECLARE pError      	PTR;
+
+/*  DECLARE serverName  	BASED pServerName  	ShortStringType;
+	DECLARE resourcename	BASED pResourceName	ShortStringType;	*/
+	END;
+
+VfsGenericLayerRequest:PROCEDURE (request, pServerName, 
+				pRequestBuffer, requestLength, 
+				pResponseBuffer, responseLength, 
+				pError) WORD EXTERNAL;
+	DECLARE request			WORD;
+  	DECLARE pServerName 	PTR;
+	DECLARE pRequestBuffer	PTR;
+	DECLARE requestLength  WORD;
+	DECLARE pResponseBuffer	PTR;
+	DECLARE responseLength  WORD;
+	DECLARE pError      	PTR;
+
+/*  DECLARE serverName  	BASED pServerName  	ShortStringType;
+	DECLARE resourcename	BASED pResourceName	ShortStringType;	*/
+	END;
+
+$ENDIF
+VipcConnect: PROCEDURE (pPathName, mode, timeout, access, pError) WORD EXTERNAL;
+
+   DECLARE	(pPathName,	pError) POINTER;
+   DECLARE	(mode, access)		WORD;
+   DECLARE timeOut				DWORD;
+
+/* DECLARE	pathName			BASED 	pPathName	ShortStringType;	*/
+   END;
+
+VipcDisconnect: PROCEDURE (connID, reason, pError) EXTERNAL;
+
+   DECLARE (connID, reason)	WORD;
+   DECLARE pError			POINTER;
+   END;
+
+VipcSetConnStatus: PROCEDURE (connID, pStatus, statusLen, pError) EXTERNAL;
+	
+	DECLARE (connID, statusLen)	WORD;
+	DECLARE	(pStatus, pError)	POINTER;
+
+/*	DECLARE	status		BASED 	pStatus	CommonPropertyListType;	*/
+	END;
+
+VipcGetRemoteSystemNames: PROCEDURE (OnlyServersWithConns, pBufferPtr, pError)
+									 WORD EXTERNAL;
+	DCL OnlyServersWithConns		BOOLEAN;
+	DCL (pBufferPtr, pError)		POINTER;
+	END;
+
+VipcGetCardStatus: PROCEDURE (card, pStatus, length, pError) EXTERNAL;
+	DCL card				BYTE;
+	DCL length				WORD;
+	DCL (pStatus, pError)	POINTER;
+	END;

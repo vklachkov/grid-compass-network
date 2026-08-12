@@ -1,0 +1,129 @@
+$COMPACT
+$TITLE('Network manager')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Data Structures								*/
+/*						1/2/86												*/
+/*																			*/
+/****************************************************************************/
+
+NMData: DO;
+
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(NMConstants.PLM.Inc~Text~)
+$RESTORE
+
+/* Every transaction (i.e., data structure update) is guarded by the semaphore
+	accessSema. This is because there are two processes - the configuration
+	process and the interface process - that modify data structures.
+*/
+
+DCL	accessSema				WORD PUB;
+
+DCL	configInProgress		BOOLEAN PUB,	/* Configuration is in progress. */
+	needsToReboot			BOOLEAN PUB,	/* Rebooting needed for config. */
+	changed					BOOLEAN PUB,	/* Config. has changed. */
+	modConnWarning			BOOLEAN PUB,	/* Allocated conn modified. */
+	eraseConnWarning		BOOLEAN PUB,	/* Allocated conn erased. */
+	consistent				BOOLEAN PUB;	/* Connections are consistent. */
+
+DCL	remConn					WORD PUB;		/* Remote connection id. */
+
+DCL	userClass				WORD PUB;		/* User class. */
+
+DCL	userIdBuffer			(256) BYTE PUB;	/* User properties. */
+
+DCL	userIdBufferLen			WORD PUB;		/* User properties length. */
+
+/* Local server name. */
+
+DCL	myServerNameStr			(serverNameStrLength) BYTE PUB,
+	myServerName			stringType PUB AT (@myServerNameStr);
+
+DCL	nmPassword		(passwordLength) BYTE PUB, /* Administrator password. */
+	defaultPassword	(*) BYTE PUB INITIAL (8, 'password'); /* Default pswd. */
+
+DCL	myAreaCode						(phoneNumberLength) BYTE PUB,
+											  /* Local area code. */
+	myLongDistCode					(phoneNumberLength) BYTE PUB,
+											  /* Long dist code. */
+	logFileSize						WORD PUB, /* Log file size. */
+	highSpeedThreshold				WORD PUB, /* Speeds >= this are high. */
+	mediumSpeedThreshold			WORD PUB; /* Speeds >= this and < above
+														are medium, else low. */
+
+DCL	cardInfo		(8) cardInfoType PUB;			/* Card config info. */
+
+DCL	portInfo		(32) portInfoType PUB,			/* Port config info. */
+	portInfoSave	(4) portInfoType PUB;			/* Save area. */
+
+DCL	pServerInfo		POINTER PUB,	/* Server config info. pointer. */
+	pLastServer		POINTER PUB;	/* Last server. */
+
+DCL	nServers			WORD PUB,	/* Number of servers configured. */
+	nConnections		WORD PUB,	/* Number of connections configured. */
+	nCommCards			BYTE PUB;	/* Number of comm cards. */
+
+/* Program/file names. */
+
+DCL	nmConfigName	(*) BYTE PUB INITIAL
+							(42, '`n`Resources`GRiDNetwork Manager~Standard~'),
+	nmInterfaceName	(*) BYTE PUB INITIAL (24, '`n`System`NetworkManager'),
+	ipcName			(*) BYTE PUB INITIAL (14, '`n`System`Ipc '),
+	dlcMgrName		(*) BYTE PUB INITIAL (17, '`n`System`dlcMgr '),
+$IF NOT compassMode
+	publicDirFile	(*) BYTE PUB INITIAL
+						(39, '`b`Programs`Public Telephone~Directory~'),
+	privateDirFile	(*) BYTE PUB INITIAL
+						(40, '`b`Programs`Private Telephone~Directory~'),
+	oldConfigFile	(*) BYTE PUB INITIAL (28, '`b`Programs`CommConfig~Text~'),
+	oldRealFile		(*) BYTE PUB INITIAL
+						(32, '`b`Programs`RealCommConfig~Text~'),
+	configFile		(*) BYTE PUB INITIAL
+					(51, '`b`ConfigurationFiles`NetworkManager~Configuration~'),
+	logFile			(*) BYTE PUB INITIAL
+							(42, '`b`Programs` GRiDNetwork Manager Log~Text~');
+$ELSE
+	publicDirFile	(*) BYTE PUB INITIAL
+						(35, '`w`work`Public Telephone~Directory~'),
+	privateDirFile	(*) BYTE PUB INITIAL
+						(36, '`w`work`Private Telephone~Directory~'),
+	oldConfigFile	(*) BYTE PUB INITIAL (24, '`w`Work`CommConfig~Text~'),
+	oldRealFile		(*) BYTE PUB INITIAL (28, '`w`Work`RealCommConfig~Text~'),
+	configFile		(*) BYTE PUB INITIAL
+							(37, '`w`Work`NetworkManager~Configuration~'),
+	logFile			(*) BYTE PUB INITIAL
+								(38, '`w`work` GRiDNetwork Manager Log~Text~');
+$ENDIF
+
+/* Logging */
+
+DCL	pLogStr		POINTER PUB,
+	logConn		WORD PUB;
+
+/* Program start commands. */
+
+DCL	GRiDlinkProc			(*) BYTE PUB INITIAL ('CommGRiDlink', cr),
+	PhonelinkProc			(*) BYTE PUB INITIAL ('CommPhonelink', cr),
+	GRiDAndPhonelinkProc	(*) BYTE PUB INITIAL ('CommGRiDAndPhoneLink', cr),
+	GRiDlinkSecondaryProc	(*) BYTE PUB INITIAL ('CommGRiDlinkSecondary', cr),
+	VipcProc				(*) BYTE PUB INITIAL ('Vipc', cr),
+	Vipc128kProc			(*) BYTE PUB INITIAL ('Vipc128k', cr);
+
+/* Version string. */
+
+DCL	nmVersion	(80) BYTE PUB;
+
+/* Port search order. */
+
+DCL	searchOrder	(32) WORD PUB;
+
+/* Port usage by other programs */
+
+DCL	portProtocol	(32) BYTE PUB;
+DCL	portUsed		(32) BOOLEAN PUB;
+
+END NMData;

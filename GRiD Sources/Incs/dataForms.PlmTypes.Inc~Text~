@@ -1,0 +1,63 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	CONSTANTS
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DECLARE	/* data kind types */
+	stringKind		LIT 	'0',
+	numberKind		LIT		'1',
+	choiceOnlyKind	LIT		'2',
+	fontKind		LIT		'3',
+	realNumberkind	LIT		'4',
+	printerKind		LIT		'5',
+	plotterKind		LIT		'6';
+
+DECLARE
+	numberKindChar 		LIT '''#''',
+	choiceOnlyKindChar 	LIT '''?''',
+	stringKindChar 		LIT '''$''',
+	realKindChar		LIT '''.''',
+	fontChar 			LIT '''&''',
+	printerChar			LIT '''+''',
+	plotterChar			LIT '''=''';
+
+DCL maxItemLabelOrValueLen	LIT	'80';
+DCL maxChoiceLen			LIT '50';
+DCL maxMenuItemLen			LIT '50';
+
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	TYPES
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL sizeOfRowDescriptor LIT '14';
+
+DCL DataRowType		LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				DWORD,
+		tempData			DWORD)';
+
+DCL DataRowStringType	LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				PTR,
+		tempData			PTR)';
+
+DCL DataRowRealType		LIT	'STRUCTURE (
+		changed				BOOLEAN,
+		rowKind				BYTE,
+		currentChoice		WORD,
+		tempChoice			WORD,
+		theData				REAL,
+		tempData			REAL)';
+
+DCL DataFormType	LIT	'STRUCTURE (
+		form				PTR,
+		numItems			WORD,		
+		pLabelsAndChoices 	PTR,
+		ChoiceLines			WORD,	
+		Rows				(1)	BYTE)';
+

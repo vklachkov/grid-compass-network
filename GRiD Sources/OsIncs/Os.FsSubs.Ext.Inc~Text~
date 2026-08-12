@@ -1,0 +1,48 @@
+/* Os.FsSubs.Ext.Inc */
+
+GetNextFileName: PROCEDURE (pPath, index, pFile) BOOLEAN EXTERNAL;
+  DCL (pPath, pFile) PTR;
+  DCL index BYTE;
+  END;
+
+GetLastFileName: PROCEDURE (pPath, pDest) EXTERNAL;
+  DCL (pPath, pDest) PTR;
+  END;
+
+GetEntryPoint: PROCEDURE (pPath, mode, pDrive) PTR EXTERNAL;
+  DCL (pPath, pDrive) PTR;
+  DCL mode BYTE;
+  END;
+    
+DriveNumber: PROCEDURE (char) BYTE EXTERNAL;
+  DCL char BYTE;
+  END;
+    
+PageOf: PROCEDURE (a) WORD EXTERNAL;
+  DCL a DWORD;
+  END;
+
+OffsetOf: PROCEDURE (a) WORD EXTERNAL;
+  DCL a DWORD;
+  END;
+
+DeleteNotOpenFile: PROCEDURE WORD EXTERNAL;
+  END;
+
+GetDirFID: PROCEDURE WORD EXTERNAL;
+  END;
+    
+OsProgramDevice: PROCEDURE (pPathName) WORD EXTERNAL;
+  DCL pPathName  PTR;
+  END;
+
+DoGetStatus: PROCEDURE (entryPoint, intAddr, drive, pMsStatus) WORD EXTERNAL;
+  DCL drive       BYTE;
+  DCL intAddr     BYTE;
+  DCL entryPoint  PTR;
+  DCL pMsStatus   PTR;
+  END;
+
+MakeLegalName: PROCEDURE (pName) BOOLEAN EXTERNAL;
+  DCL pName     PTR;
+  END;

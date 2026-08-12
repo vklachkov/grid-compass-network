@@ -1,0 +1,7 @@
+OsCardNumber: PROCEDURE BYTE EXTERNAL;
+   END;
+
+OsDecodeCardNumber: PROCEDURE (pid) BYTE EXTERNAL;
+   DECLARE pid WORD;
+   END;
+

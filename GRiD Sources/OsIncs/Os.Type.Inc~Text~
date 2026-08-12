@@ -1,0 +1,587 @@
+/* this is os.type.inc */
+
+DCL PIDType        LIT 'SELECTOR';  /* process ID   */
+DCL SIDType        LIT 'SELECTOR';  /* semaphore ID */
+DCL MIDType        LIT 'SELECTOR';  /* message ID   */
+DCL EIDType        LIT 'SELECTOR';  /* element ID   */
+DCL FIDType        LIT 'WORD';      /* file ID      */
+DCL ConnectionType LIT 'SELECTOR';
+DCL charType       LIT 'WORD';
+DCL WindowType     LIT 'SELECTOR';  /* window area */
+
+DCL FontTableType     LIT 'STRUCTURE
+  (numChars       BYTE,
+   charWidth      BYTE,
+   charHeight     BYTE)';
+
+
+DCL PromVariablesType LIT 'STRUCTURE
+ (promVarPart1,
+  promVarPart2)';
+
+DCL PromVarPart1 LIT
+ 'osProcessQ (9)  BYTE,
+  osSemaQ    (9)  BYTE,
+  osCurrentPid    PidType,
+  promLoopingPid  PidType,
+  bootTraceChar   BYTE,
+  pBusyStack      PTR,
+  sysCounter      DWORD';
+
+DCL PromVarPart2 LIT
+ 'timedProcesses  WORD,
+  GPIBCall        BYTE,
+  pGPIBDriver     PTR,
+  pFontTable      DWORD,
+  nextPidToRun    PidType,
+  bubbleSema      SidType';
+
+DCL QCBType LIT 'STRUCTURE
+    (headOfQ SELECTOR,
+    tailOfQ SELECTOR,
+    useCheckSum BOOLEAN,
+    count WORD,
+    length WORD)';
+
+DCL QCBOutline LIT
+    'headOfQ SELECTOR, tailOfQ SELECTOR,
+     usesCheckSum BOOLEAN, count WORD, length WORD';
+
+DCL QElementType LIT 'STRUCTURE
+    (checkSum WORD,
+    next SELECTOR,
+    prev SELECTOR)';
+
+DCL QElementPrefix LIT
+'checkSum WORD,
+next SELECTOR,
+prev SELECTOR';        
+
+DCL taBufferSize  LIT '40';
+
+DCL AltWindowInfo LIT 
+ 'pWindow        PTR,
+  bytesPerLine   WORD,
+  windowHeight   WORD,
+  screenTopLeftX WORD,
+  screenTopLeftY WORD,
+  screenExtentX  WORD,
+  screenExtentY  WORD';
+
+DCL ExtraWindowInfo LIT 
+ 'unused (7)     BYTE';  /* 160 bytes total */
+
+DCL TypeAheadInfo LIT 
+ 'keyboardSema            SidType,
+  taCurrent               WORD,
+  taCount                 WORD,
+  taBuffer (taBufferSize) CharType,
+  GotCodeEscape           BYTE,
+  handlePhone             BYTE';
+
+DCL RestOfWindowState LIT 
+ 'theWindowTopLeftX WORD,
+  theWindowTopLeftY WORD,
+  theWindowExtentX WORD,
+  theWindowExtentY WORD,
+  clipRectTopLeftX WORD,
+  clipRectTopLeftY WORD,
+  clipRectExtentX WORD,
+  clipRectExtentY WORD';
+
+DCL RestOfWindowState1 LIT 
+ 'charWidth WORD,
+  charHeight WORD,
+  currentFont WORD,
+  pOsPrefix PTR,
+  pOsWorkFileName PTR';
+
+
+DCL WindowStateType LIT 'STRUCTURE
+ (QElementPrefix,
+  xLoc WORD,
+  yLoc WORD,
+  cState BYTE,
+  scroll BYTE,
+  curChar BYTE,
+  upperFlag BYTE,
+  NMIFlag BYTE,
+  pFontTable DWORD,
+  RestOfWindowState,
+  RestOfWindowState1,
+  TypeAheadInfo,
+  AltWindowInfo,
+  ExtraWindowInfo)';
+
+DCL ConsoleStateType LIT 'STRUCTURE
+   (xLoc            WORD,
+    yLoc            WORD,
+    cState          BYTE,
+    scroll          BYTE,
+    curChar         BYTE,
+    upperFlag       BYTE,
+    NMIFlag         BYTE,
+    pFontTable      DWORD,
+    spare           BYTE)';
+
+DCL MemCBType LIT 'STRUCTURE
+    (QElementPrefix,
+    numBlk WORD,
+    remainder WORD,
+    PID PIDType)';
+
+DCL MemStatusType LIT 'STRUCTURE
+    (freeBytes DWORD,
+    freeBlocks WORD,
+    largestFree WORD,
+    allocBytes DWORD,
+    allocBlocks WORD,
+    largestAlloc WORD)';
+
+DCL GBufferType LIT '(sizeOfGBuffer) BYTE';
+
+DCL FileNameType LIT 'STRUCTURE
+    (length BYTE,
+    chars (maxFileNameLen) BYTE)';
+
+DCL PathNameType LIT 'STRUCTURE
+    (length BYTE,
+    chars (maxPathNameLen) BYTE)';
+
+$EJ
+
+DCL DirEntryType LIT 'STRUCTURE
+    (type BYTE,
+    FID FIDType,
+    length BYTE,
+    chars (maxFileNameLen) BYTE)';
+
+DCL sizeOfDirectoryEntryPreamble LIT '9';
+
+DCL DirectoryEntryType  LIT 'STRUCTURE
+  (spare (8)      BYTE,
+   length         BYTE,
+   name (1)       BYTE)';
+
+DCL restOfCompleteDirEntry LIT 
+  'unused2 (16) BYTE,
+   dirCount     WORD,
+   unused5 (7)  BYTE,
+   uses8087     BOOLEAN, 
+   version1     BYTE, 
+   version2     BYTE, 
+   unused3 (15) BYTE,
+   version3     BYTE, 
+   propLength   DWORD, 
+   unused4 (28) BYTE';
+
+    
+DCL CompleteDirEntryType LIT 'STRUCTURE
+ (spare (4)      BYTE,
+  fileLength     DWORD,
+  fNameLen       BYTE,
+  fName (maxFileNameLen) BYTE,
+  creationDate (tSz)     BYTE,
+  unused1        WORD,
+  lastModDate (tSz)      BYTE,
+  expireDate (tSz)       BYTE,
+  restOfCompleteDirEntry)';
+
+DCL ShortStringType LIT 'STRUCTURE
+    (length BYTE,
+    chars (1) BYTE)';
+
+DCL TimeType LIT 'STRUCTURE
+    (year WORD, month BYTE, day BYTE,
+    hour BYTE, minute BYTE, second BYTE,
+    tenthOfSec BYTE, dayOfWeek BYTE, 
+    dayOfYear WORD)';
+
+DCL tSz LIT '11';
+
+DCL PasswordType LIT 'STRUCTURE
+    (length BYTE,
+    chars (maxPasswordLen) BYTE)';
+
+DCL passSpace LIT '17';
+    
+DCL MachineIDType LIT 'DWORD';
+
+DCL RestOfGetStatusInfo LIT 
+ 'bytesPerPage   WORD,
+  GPIBAddr       BYTE,
+  objectMode     BYTE,
+  curEntry       WORD,
+  numEntries     WORD,
+  mode           WORD,
+  unused         BYTE,
+  direction      BYTE,
+  pWildCardName  PTR,
+  note           DWORD';
+
+DCL StatusType LIT 'STRUCTURE
+ (open BOOLEAN,
+  access BYTE,
+  seek BYTE,
+  filePosition DWORD,
+  fileLength DWORD,
+  numPages WORD,
+  numPagesAlloc WORD,
+  RestOfGetStatusInfo)';
+
+DCL SetStatusEntryType LIT 'STRUCTURE
+    (entryID           BYTE,
+     length            WORD,
+     statusData (1)    BYTE)';
+
+DCL LoadTableType LIT 'STRUCTURE
+    (ip WORD, cs SELECTOR,
+    sp WORD, ss SELECTOR,
+    ds SELECTOR, es SELECTOR,
+    fileConn SELECTOR, segCount WORD,
+    grpCount WORD, ovlCount WORD,
+    firstOvlLow WORD, firstOvlHigh WORD)';
+
+$EJ
+
+DCL BT LIT 'BYTE';
+DCL BL LIT 'BYTE';
+
+DCL moreDesc LIT 
+  'dirLength DWORD, dirCount WORD, wp (6) BYTE,
+  asc BOOLEAN, uses8087 BOOLEAN, version1 BYTE, 
+  version2 BYTE, system DWORD, wp1 (11) BYTE';
+
+DCL restOfDesc LIT 
+ 'version3 BYTE, propLength DWORD, rom BYTE, romId WORD, RDB (5) BYTE, 
+  UDB (20) BYTE, GRiDCentralUse WORD, checkSum WORD';
+    
+DCL DescriptorType LIT 'STRUCTURE
+(FID WORD, FSN WORD,fileLength DWORD,
+fNameLen BYTE,fName (maxFileNameLen) BYTE,creDt (tSz) BYTE,
+dirFID WORD,lmDt (tSz) BYTE,expDt (tSz) BYTE,
+machID DWORD,comp BYTE,encry BYTE,protec BYTE,pswd (5) BYTE, moreDesc, restOfDesc)';
+
+DCL maxDescLen LIT '200'; /* not including FID, FSN */
+
+DCL BitMapType LIT 'STRUCTURE
+    (FID WORD,
+    FSN WORD,
+    checkSum WORD,
+    allocated WORD,
+    chars (1) BYTE)';
+
+DCL sizeOfBmPreamble LIT '8';
+DCL sizeOfBmOverhead LIT '4';
+    
+DCL PageType LIT 'STRUCTURE
+    (FID WORD,
+    FSN WORD,
+    chars (1) BYTE)';
+
+DCL StampType LIT 'STRUCTURE
+    (FID WORD,
+    FSN WORD)';
+
+DCL ActiveAliasCBType LIT 'STRUCTURE
+    (QElementPrefix,
+    length BYTE,
+    chars (maxDevNameLen) BYTE,
+    lowSelector SELECTOR,
+    highSelector SELECTOR,
+    intAddr BYTE,
+    PID PIDType,
+    mode WORD,
+    remote  WORD,
+    unused (3) WORD)';
+
+DCL ActiveDeviceCBType LIT 'STRUCTURE
+    (QElementPrefix,
+    length BYTE,
+    chars (maxDevNameLen) BYTE,
+    entryPoint PTR,
+    intAddr BYTE,
+    PID PIDType,
+    mode WORD,
+    remote  WORD,
+    unused (3) WORD)';
+
+DCL adNameOff LIT '6';
+
+$EJ
+
+DCL sizeOfACCBSpace LIT '40';
+
+DCL ConnCBPrefix LIT 
+    'QElementPrefix,
+    PID PIDType,
+    entryPoint PTR,
+    pWildCardName PTR,
+    objectMode BYTE,
+    connID WORD,
+    spare (3) BYTE,
+    intAddr BYTE';
+
+DCL ActiveConnCBType LIT 'STRUCTURE
+    (ConnCBPrefix,
+    workSpace (sizeOfACCBSpace) BYTE)';
+
+DCL restOfMassInfoType LIT
+ 'pBm        PTR,
+  bmDirty    BOOLEAN,
+  bmDrive    BYTE,
+  bmStart    WORD,
+  bmFID      WORD,
+  alloc      WORD,
+  dirConn    ConnectionType, 
+  minDirPage WORD,
+  drive      BYTE,
+  rootDirFID WORD,
+  volOffset  DWORD';
+
+DCL massInfoType LIT 'STRUCTURE
+ (QElementPrefix,
+  length      BYTE,
+  chars (maxDevNameLen) BT,
+  entryPoint  PTR,
+  intAddr     BYTE,
+  pageSize    WORD,
+  logPageSize WORD,
+  numPages    WORD,
+  driveReady  BOOLEAN,
+  restOfMassInfoType)';
+
+DCL massNameOff LIT '6';
+
+DCL directoryStuff LIT 
+  'direction    BOOLEAN,
+   logDirEntry  WORD,
+   PhysDirEntry WORD,
+   lastDirEntry WORD';
+
+DCL msEntrySelOff  LIT '31';
+
+DCL massConnType LIT 'STRUCTURE
+(intAddr BYTE,attach BYTE,work BOOLEAN,drive BYTE,
+FID WORD,locked BOOLEAN,pMsEntry PTR,
+open BOOLEAN,numBuf BYTE,anyChange BOOLEAN,
+cur DWORD,last DWORD,
+pPage PTR,pageDirty BOOLEAN,
+pFar PTR,farDirty BOOLEAN,
+directoryStuff)';
+
+DCL ADQConnType LIT 'STRUCTURE
+  (attach     BYTE,
+   open       BOOLEAN,
+   direction  BOOLEAN,
+   devEntry   SELECTOR,
+   mask       WORD,
+   value      WORD,
+   queue      BYTE)';
+
+DCL CommonConnPart LIT 
+  'QElementPrefix,
+   PID PIDType,
+   entryPoint PTR,
+   pWildCardName PTR,
+   objectMode BYTE,
+   spare (5) BYTE,
+   intAddr BYTE';
+   
+DCL ADQConnCBType LIT 'STRUCTURE
+  (CommonConnPart,
+   attach    BYTE,
+   open      BOOLEAN,
+   direction BOOLEAN,
+   devEntry  SELECTOR,
+   mask      BYTE,
+   value     BYTE,
+   queue     BYTE)';
+
+DCL FarType LIT 'STRUCTURE
+    (FID WORD, FSN WORD, checkSum WORD,
+    next WORD, curr WORD, prev WORD, page (1) WORD)';
+DCL sizeOfFarPreamble LIT '12';
+
+$EJ
+
+DCL parentPidInPcb LIT '69';
+
+DCL restOfPCB LIT
+'source PidType,
+pLoadTable PTR,
+pCLIBuffer PTR,
+cliOffset WORD,
+pAbortRoutine PTR,
+pError PTR,
+trapCancel BOOLEAN,
+parentPid PIdType,
+idCode WORD,
+uses8087 BOOLEAN,
+pThe8087Regs PTR,
+pWindowInfo PTR,
+version (3) BYTE';
+
+DCL PCBType LIT 'STRUCTURE
+(QElementPrefix,
+QCBOutLine,
+state BYTE,
+/* 16 */
+priority BYTE,
+debug BYTE,
+pMessage PTR,
+messageType WORD,
+note WORD,
+timeLimit WORD,                                                            
+stack PTR,
+/* 32 */
+heap (16) BYTE,
+restOfPCB)';
+
+/* heap must be on a paragraph boundary for     */
+/* pascal to work.  This can possibly be changed*/
+/* to 6 bytes later when Intel says okay.       */
+
+DCL MsgPrefix     LIT
+ 'ipcFunctionCode  BYTE,
+  deleteSource     BOOLEAN,
+  spare1           WORD,
+  spare2           WORD,
+  uSourceProcID    WORD,
+  uDestProcID      WORD,
+  uMsgClass        WORD,
+  uNote            WORD,
+  msgLength        WORD';
+
+DCL MsgSelPrefix  LIT
+ 'ipcFunctionCode  BYTE,
+  deleteSource     BOOLEAN,
+  spare1           WORD,
+  spare2           WORD,
+  uSourceProcID    PidType,
+  uDestProcID      PidType,
+  uMsgClass        WORD,
+  uNote            WORD,
+  msgLength        WORD';
+
+DCL MsgSelType       LIT 'STRUCTURE
+ (MsgSelPrefix,
+  chars (1)        BYTE)';
+
+DCL MsgType       LIT 'STRUCTURE
+ (MsgPrefix,
+  chars (1)        BYTE)';
+
+DCL RestOfSetStatusType LIT
+ 'name (32)         BYTE,
+  bytesPerPage      WORD,
+  pagesPerTrack     WORD,
+  tracksPerCylinder WORD,
+  interleave        BYTE,
+  secondSideCount   BYTE';
+
+DCL LowLevelSetStatusType LIT 'STRUCTURE
+ (pageSize          WORD,
+  logPageSize       WORD,
+  numPages          WORD,
+  driveReady        BYTE,
+  bitMapFID         WORD,
+  rootDirFID        WORD,
+  minDirPages       WORD,
+  mode              BYTE,
+  restOfSetStatusType)';
+
+DCL PhysDiskPart LIT
+ 'bytesPerPage      WORD,
+  pagesPerTrack     WORD,
+  tracksPerCylinder WORD,
+  numCylinders      WORD,
+  secondSideCount   BYTE';
+
+DCL PhysDiskInfoType LIT 'STRUCTURE
+ (PhysDiskPart)';
+
+DCL LogDiskPart LIT
+ 'bitMapFID         WORD,
+  rootDirFID        WORD,
+  minDirPages       WORD,
+  logPageSize       WORD';
+
+DCL LogDiskInfoType LIT 'STRUCTURE
+ (LogDiskPart)';
+
+DCL PhysPageZeroType LIT 'STRUCTURE
+ (header (14)         BYTE,
+  PhysDiskPart,
+  validInfoFlag       WORD,
+  dummy (5)           BYTE,
+  LogDiskPart,
+  bootCode (406)      BYTE,
+  partitionIndicator  WORD,
+  partitionTable (64) BYTE,
+  lastWordFlag        WORD)';
+
+DCL PartitionTableEntryType LIT 'STRUCTURE
+ (bootIndicator    BYTE,
+  beginHead        BYTE,
+  beginSector      BYTE,
+  beginCylinder    BYTE,
+  systemIndicator  BYTE,
+  endingHead       BYTE,
+  endingSector     BYTE,
+  endingCylinder   BYTE,
+  relativeSector   DWORD,
+  numSectors       DWORD)';
+
+DCL PartitionInfoEntryType LIT 'STRUCTURE
+ (systemIndicator  BYTE,
+  relativeSector   DWORD,
+  numSectors       DWORD)';
+
+DCL PartitionTableType LIT
+ '(maxNumPartitions) PartitionTableEntryType';
+
+DCL PartitionInfoType LIT
+ '(maxNumPartitions) PartitionInfoEntryType';
+
+DCL ScreenInfoType    LIT 'STRUCTURE
+  (xPixels           WORD,
+   yPixels           WORD,
+   pScreen           PTR,
+   bitsPerPixel      BYTE,
+   yAspect           WORD)';   /* Per 100 x Pixels */
+
+DCL TimeOffsetType LIT 'STRUCTURE
+  (year         WORD,
+   dayOffset    WORD,
+   hour         BYTE,
+   minute       BYTE,
+   second       BYTE,
+   dayOfWeek    BYTE)';
+
+DCL WindowRgnType    LIT 'STRUCTURE
+  (format            BYTE,
+   width             WORD,
+   height            WORD,
+   bufLength         WORD,
+   pBuf              PTR,
+   bitsPerPixel      BYTE,
+   bytesPerLine      WORD)';
+
+DCL RegisterType LIT 'STRUCTURE
+  (QElementPrefix,
+   token      DWORD,
+   parentPid  PIDType,
+   length     BYTE,
+   chars (1)  BYTE)';
+
+DCL regLenOff LIT '12';
+
+DCL SDTType LIT  'STRUCTURE
+ (pName       PTR,
+  pAlias      PTR,
+  entryPoint  PTR,
+  intAddr     BYTE,
+  mass        BOOLEAN,
+  mode        WORD,
+  partOffset  DWORD)';

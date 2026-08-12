@@ -1,0 +1,235 @@
+/* External declarations for NMUtils.Plm. */
+
+AllocateMemory: PROCEDURE(memSize, pError) POINTER EXT;
+DCL	memSize	WORD,
+	pError	POINTER;
+END AllocateMemory;
+
+SameStrings: PROCEDURE(pS1, pS2) BOOLEAN EXT;
+DCL	pS1		POINTER,
+	pS2		POINTER;
+END SameStrings;
+
+Identical: PROCEDURE(pS1, pS2, len) BOOLEAN EXT;
+DCL	pS1		POINTER,
+	pS2		POINTER,
+	len		BYTE;
+END Identical;
+
+FindProperty: PROCEDURE(propType, pStr, length, pIndex, pError) BOOLEAN EXT;
+DCL	propType	BYTE,
+	pStr		POINTER,
+	length		WORD,
+	pIndex		POINTER,
+	pError		POINTER;
+END FindProperty;
+
+GetNextProperty: PROCEDURE(propType, pStr, length, pIndex, pError) BOOLEAN EXT;
+DCL	propType	BYTE,
+	pStr		POINTER,
+	length		WORD,
+	pIndex		POINTER,
+	pError		POINTER;
+END GetNextProperty;
+
+PutProperty: PROCEDURE(propType, pProp, propLen, pStr, pIndex) EXT;
+DCL	propType	BYTE,
+	pProp		POINTER,
+	propLen		WORD,
+	pStr		POINTER,
+	pIndex		POINTER;
+END PutProperty;
+
+LogError: PROCEDURE(error, eType, attention) EXT;
+DCL	error		WORD,
+	eType		WORD,
+	attention	BYTE;
+END LogError;
+
+DoSkipProperties: PROCEDURE(conn, pError) EXT;
+DCL	conn		WORD,
+	pError		POINTER;
+END DoSkipProperties;
+
+AttachAndOpen: PROCEDURE(pName, fileMode, accessType, pError) WORD EXT;
+DCL	pName		POINTER,
+	fileMode	BYTE,
+	accessType	BYTE,
+	pError		POINTER;
+END AttachAndOpen;
+
+StartIpc: PROCEDURE(card, memSize) BOOLEAN EXT;
+DCL	card		BYTE,
+	memSize		BYTE;
+END StartIpc;
+
+GetAccess: PROCEDURE(pError) EXT;
+DCL	pError	POINTER;
+END GetAccess;
+
+FreeAccess: PROCEDURE(pError) EXT;
+DCL	pError	POINTER;
+END FreeAccess;
+
+SavePortInfo: PROCEDURE(portIndex) EXT;
+DCL	portIndex	BYTE;
+END SavePortInfo;
+
+RestorePortInfo: PROCEDURE(portIndex) EXT;
+DCL	portIndex	BYTE;
+END RestorePortInfo;
+
+FindChoice:	PROCEDURE(pStr, pLabels, isForm, pCurChoice) BOOLEAN EXT;
+DCL	pStr		POINTER,
+	pLabels		POINTER,
+	isForm		BOOLEAN,
+	pCurChoice	POINTER;
+END FindChoice;
+
+InsertServer: PROCEDURE(pServer) EXT;
+DCL	pServer	POINTER;
+END InsertServer;
+
+DeleteServer: PROCEDURE(pServer) EXT;
+DCL	pServer	POINTER;
+END DeleteServer;
+
+InsertConnection: PROCEDURE(pServer, pConn) EXT;
+DCL	pServer	POINTER,
+	pConn	POINTER;
+END InsertConnection;
+
+ReinsertConnection: PROCEDURE(pConn) EXT;
+DCL	pConn	POINTER;
+END ReinsertConnection;
+
+DeleteConnection: PROCEDURE(pConn) EXT;
+DCL	pConn	POINTER;
+END DeleteConnection;
+
+DeallocateData: PROCEDURE EXT;
+END DeallocateData;
+
+IntToStr2: PROCEDURE(n, pStr) EXT;
+DCL	n		WORD,
+	pStr	POINTER;
+END IntToStr2;
+
+FindConnection: PROCEDURE(len, pName, ppConn) BOOLEAN EXT;
+DCL	len			BYTE,
+	pName		POINTER,
+	ppConn		POINTER;
+END FindConnection;
+
+FindServer: PROCEDURE(len, pName, ppServer) BOOLEAN EXT;
+DCL	len			BYTE,
+	pName		POINTER,
+	ppServer	POINTER;
+END FindServer;
+
+StringToInt: PROCEDURE(pStr) WORD EXT;
+DCL pStr	POINTER;
+END StringToInt;
+
+CheckConsistency: PROCEDURE(onlyThisServer) BOOLEAN EXT;
+DCL	onlyThisServer	POINTER;
+END CheckConsistency;
+
+GetBaudChoice: PROCEDURE(pServer, networkType, pPhoneNumber) WORD EXT;
+DCL	pServer			POINTER,
+	networkType		BYTE,
+	pPhoneNumber	POINTER;
+END GetBaudChoice;
+
+GetNumberChoice: PROCEDURE(pServer, networkType, pPhoneNumber) WORD EXT;
+DCL	pServer			POINTER,
+	networkType		BYTE,
+	pPhoneNumber	POINTER;
+END GetNumberChoice;
+
+FindPhoneNumber: PROCEDURE(pServer, networkType, choice) POINTER EXT;
+DCL	pServer			POINTER,
+	networkType		BYTE,
+	choice			WORD;
+END FindPhoneNumber;
+
+ConnExists: PROCEDURE(isNewConn, pOldConn, pServer, pNumber) BOOLEAN EXT;
+DCL	isNewConn	BOOLEAN,
+	pOldConn	POINTER,
+	pServer		POINTER,
+	pNumber		POINTER;
+END ConnExists;
+
+UpdateBaudRate: PROCEDURE(pServer, networkType) EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END UpdateBaudRate;
+
+IsDefaultConn: PROCEDURE(pConn) BOOLEAN EXT;
+DCL	pConn	POINTER;
+END IsDefaultConn;
+
+AddDefaultConnections: PROCEDURE(pServer, networkType) EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END AddDefaultConnections;
+
+LogString: PROCEDURE(pStr) EXT;
+DCL	pStr POINTER;
+END LogString;
+
+AddLogStr: PROCEDURE(pStr) EXT;
+DCL	pStr	POINTER;
+END AddLogStr;
+
+AddLogInt: PROCEDURE(n) EXT;
+DCL	n	WORD;
+END AddLogInt;
+
+DoLog: PROCEDURE(pError) EXT;
+DCL pError	POINTER;
+END DoLog;
+
+GetMyServerName: PROCEDURE(pError) EXT;
+DCL pError	POINTER;
+END GetMyServerName;
+
+LocalNumber: PROCEDURE(pNumber, pStr) BOOLEAN EXT;
+DCL	pNumber	POINTER,
+	pStr	POINTER;
+END LocalNumber;
+
+MarkCustomConnections: PROCEDURE(pServer, networkType) BOOLEAN EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END MarkCustomConnections;
+
+InNewDirectory: PROCEDURE(pNumber) BOOLEAN EXT;
+DCL	pNumber	POINTER;
+END InNewDirectory;
+
+Greater: PROCEDURE(pStr1, pStr2) BOOLEAN EXT;
+DCL	pStr1	POINTER,
+	pStr2	POINTER;
+END Greater;
+
+GetPropString: PROCEDURE(propType, pProps, length) POINTER EXT;
+DCL	propType	BYTE,
+	pProps		POINTER,
+	length		WORD;
+END GetPropString;
+
+RemoveParentheses: PROCEDURE(pBuffer) EXT;
+DCL	pBuffer	POINTER;
+END RemoveParentheses;
+
+FourOrMoreLeasedConns: PROCEDURE(pServer) BOOLEAN EXT;
+DCL	pServer	POINTER;
+END FourOrMoreLeasedConns;
+
+SetPortSearchOrder: PROCEDURE EXT;
+END SetPortSearchOrder;
+
+CardNotAvailable: PROCEDURE(n) BOOLEAN EXT;
+DCL	n	BYTE;
+END CardNotAvailable;

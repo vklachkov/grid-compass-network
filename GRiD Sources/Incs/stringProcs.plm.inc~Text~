@@ -1,0 +1,88 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	String Procedures
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+NewString: PROCEDURE (maxLength) POINTER EXTERNAL;
+	DCL maxLength	WORD;
+	END;
+
+NewStringLit: PROCEDURE (pLitStr) POINTER EXTERNAL;
+	DCL pLitStr		PTR;
+	END;
+
+FreeString: PROCEDURE (pStrPtr) EXTERNAL;
+	DCL	pStrPtr		PTR;
+	END;
+
+AppendChar: PROCEDURE (dest, ch) EXTERNAL;
+	DCL dest	PTR;
+	DCL ch		BYTE;
+	END;
+
+AppendAnyChar: PROCEDURE (pDestPtr, ch) EXTERNAL;
+	DCL pDestPtr	PTR;
+	DCL ch			BYTE;
+	END;
+
+AppendString: PROCEDURE (dest,source) EXTERNAL;
+	DCL (dest,source) PTR;
+	END;
+
+ConCatStrings: PROCEDURE (str1,str2) POINTER EXTERNAL;
+	DCL (str1, str2) PTR;
+	END;
+
+ConcatLits: PROCEDURE (lit1, lit2) POINTER EXTERNAL;
+	DCL (lit1, lit2) PTR;
+	END;
+
+CopyString: PROCEDURE (source,dest) EXTERNAL;
+	DCL (source,dest) PTR;
+	END;
+
+CopyOfString: PROCEDURE (source) POINTER EXTERNAL;
+	DCL source PTR;
+	END;
+
+ExactCopyOfString: PROCEDURE (source) POINTER EXTERNAL;
+	DCL source PTR;
+	END;
+
+EqualStrings: PROCEDURE (str1,str2) BOOLEAN EXTERNAL;
+	DCL (str1, str2) PTR;
+	END;
+
+SkipProperties: PROCEDURE (conxn,  pError) EXTERNAL;
+	DCL conxn	WORD;
+	DCL pError	PTR;
+	END;
+
+StringToInteger: PROCEDURE (pStr, pConverted) INTEGER EXTERNAL;
+	DCL pStr		PTR;
+	DCL pConverted	PTR;
+	END;
+
+CompareStrings: PROCEDURE (str1,str2) BYTE EXTERNAL;
+	DCL (str1, str2) POINTER;
+	END;
+
+DeleteFromString: PROCEDURE (str, firstPos, lastPos) EXTERNAL;
+	DCL str		POINTER;
+	DCL (firstPos, lastPos)	WORD;
+	END;
+
+InsertCharInString: PROCEDURE (ch, str, pos) BOOLEAN EXTERNAL;
+	DCL	ch		BYTE;
+	DCL str		PTR;
+	DCL pos		WORD;
+	END;
+
+InsertInString: PROCEDURE (piece, str, pos) BOOLEAN EXTERNAL;
+	DCL (piece,str) 	POINTER;
+	DCL pos				WORD;
+	END;
+
+UpperCase: PROCEDURE (ch) BYTE EXTERNAL;
+	DCL ch		BYTE;
+	END;
+

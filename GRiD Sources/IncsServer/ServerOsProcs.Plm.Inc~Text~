@@ -1,0 +1,30 @@
+/* This is ServerOsProcs.plm.inc.
+   It contains external declaration for Os calls that 
+   exist on server but not on workstation Os's.  
+   
+Jan 20th, 1986	Raj Shah	Created	*/
+
+OsCreateRemoteProcess: PROCEDURE (cardID, pCommandLine, pri, uses8087, 
+			pError) WORD EXTERNAL;
+	DCL cardID 			WORD;
+	DCL pCommandLine	PTR;
+	DCL pri				BYTE;
+	DCL uses8087		BOOLEAN;
+	DCL pError			PTR;
+	END;
+
+OsGetCardStatus: PROCEDURE (procID, pCardStatus, length, pError) EXTERNAL;
+	DCL procID			WORD;
+	DCL pCardStatus		PTR;
+	DCL length			WORD;
+	DCL pError			PTR;
+	END;
+
+OsLogError:	PROCEDURE (logMode, errorCode, subError, pErrorMessage) EXTERNAL;
+	DCL logMode			BYTE;
+	DCL errorCode		WORD;
+	DCL subError		WORD;
+	DCL pErrorMessage	PTR;
+	END;
+
+

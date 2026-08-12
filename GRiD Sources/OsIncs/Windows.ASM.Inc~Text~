@@ -1,0 +1,61 @@
+
+; This is windows.asm.inc~text~
+; This file contains the constants and structures
+; used in all the window routines.
+
+; constants
+
+up EQU 0
+down EQU 1
+left EQU 2
+right EQU 3
+
+
+; structures
+
+Point STRUC
+    pointX DW ?
+    pointY DW ?
+Point ENDS
+
+Rectangle STRUC
+    rectTopLeftX DW ?
+    rectTopLeftY DW ?
+    rectExtentX DW ?
+    rectExtentY DW ?
+Rectangle ENDS
+
+WindowState STRUC
+    wsCheckSum DW ?
+    wsNext DW ?
+    wsPrev DW ?
+    wsXLoc DW ?
+    wsYLoc DW ?
+    wsCState DB ?
+    wsScroll DB ?
+    wsCurChar DB ?
+    wsUpperFlag DB ?
+    wsNMIFlag DB ?
+    wsPFontTable DD ?
+    wsTheWindowTopLeftX DW ?
+    wsTheWindowTopLeftY DW ?
+    wsTheWindowExtentX DW ?
+    wsTheWindowExtentY DW ?
+    wsClipRectTopLeftX DW ?
+    wsClipRectTopLeftY DW ?
+    wsClipRectExtentX DW ?
+    wsClipRectExtentY DW ?
+    wsCharWt DW ?
+    wsLineHt DW ?
+    wsCurrentFont DW ?
+    wsWhoCares DB 96 DUP (?)
+    wsPWindowOff DW ?
+    wsPWindowSeg DW ?
+    wsBytesPerLine DW ?
+    wsWindowHeight DW ?
+    wsScreenTopLeftX DW ?
+    wsScreenTopLeftY DW ?
+    wsScreenExtentX DW ?
+    wsScreenExtentY DW ?
+    wsUnused DB 7 DUP (?)
+WindowState ENDS

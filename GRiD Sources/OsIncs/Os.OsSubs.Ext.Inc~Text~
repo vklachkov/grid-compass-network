@@ -1,0 +1,94 @@
+/* Os.OsSubs.Ext.Inc */
+
+Min : PROCEDURE (a, b) WORD EXTERNAL;
+    DCL (a, b) WORD;
+    END;
+
+CrLf : PROCEDURE EXTERNAL;
+    END;
+    
+StringEQ : PROCEDURE (pA, pB) BOOLEAN EXTERNAL;
+    DCL (pA, pB) PTR;
+    END;
+
+StringGT : PROCEDURE (pA, pB) BOOLEAN EXTERNAL;
+    DCL (pA, pB) PTR;
+    END;
+
+SelecToWord : PROCEDURE (a) WORD EXTERNAL;
+  DCL a   SELECTOR;
+  END;
+  
+WordToSelec : PROCEDURE (a) SELECTOR EXTERNAL;
+  DCL a  WORD;
+  END;
+
+PrependString: PROCEDURE (pA, pB, length) EXTERNAL;
+  DCL length       WORD;
+  DCL pA           PTR;
+  DCL pB           PTR;
+  END;
+
+OsMatchWildCard: PROCEDURE 
+   (pStr, strLen, pMatchStr, matchLen, iCase, fullMatch, pLength) EXTERNAL;
+
+  DCL iCase       BOOLEAN;    
+  DCL fullMatch   BOOLEAN;
+  DCL matchLen    WORD;
+  DCL strLen      WORD;
+  DCL pStr        PTR;
+  DCL pMatchStr   PTR;
+  DCL pLength     PTR;
+  END;
+
+InsertString: PROCEDURE (pString, pDest, length, index) EXTERNAL;
+  DCL length  WORD;
+  DCL index   WORD;
+  DCL pString PTR;
+  DCL pDest   PTR;
+  END;
+
+PrependPrograms: PROCEDURE (pDest) EXTERNAL;
+  DCL pDest    PTR;
+  END;
+
+AppendChar: PROCEDURE (char, pErrorName) EXTERNAL;
+  DCL char       BYTE;
+  DCL pErrorName PTR;
+  END;
+
+ConvertNumber: PROCEDURE (number, mode, pString) EXTERNAL;
+  DCL number         WORD;
+  DCL mode           WORD;
+  DCL pString        PTR;
+  END;
+
+DeleteSubString: PROCEDURE (pString, index, length) EXTERNAL;
+  DCL length  WORD;
+  DCL index   WORD;
+  DCL pString PTR;
+  END;
+
+GetRoutineAddress: PROCEDURE (intNum, routineNum) PTR EXTERNAL;
+  DCL intNum       BYTE;
+  DCL routineNum   BYTE;
+  END;
+
+InitSearch: PROCEDURE (initErrors) EXTERNAL;
+  DCL initErrors   BOOLEAN;
+  END;
+
+CleanUpSearch: PROCEDURE EXTERNAL;
+  END;
+
+GetNextDevice: PROCEDURE (pName, pBuf) BOOLEAN EXTERNAL;
+  DCL pName      PTR;
+  DCL pBuf       PTR;
+  END;
+
+OsSearchForTitle: PROCEDURE (pTitle, addQuotes, lookAtAllDevs) PTR EXTERNAL;
+  DCL lookAtAllDevs  BOOLEAN;
+  DCL addQuotes      BOOLEAN;
+  DCL pTitle         PTR;
+  END;
+

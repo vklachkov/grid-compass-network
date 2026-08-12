@@ -1,0 +1,141 @@
+/* FILE: Keys.inc~text~
+				-- names for keyboard commands */
+
+/* constants only; there is no corresponding code module */
+/* created 11/2/81 RAT */
+
+/* window keys commented out to avoid
+   conflict with Os.Constant.Inc */
+
+/*  bb2  9th feb 1982  srh  */
+/* helpKey, insertKey 3/29/82 RAT */
+
+/*  CommonTypes 5/25/82 dsy  */
+
+DECLARE
+	downArrowKey	LITERALLY  '0C4H',
+	upArrowKey		LITERALLY  '0C5H',
+	leftArrowKey	LITERALLY  '0C6H',
+	rightArrowKey	LITERALLY  '0C7H',
+
+	downPageKey		LITERALLY  '0D2H',
+	upPageKey		LITERALLY  '0D3H',
+	leftWordKey		LITERALLY  '0D4H',
+	rightWordKey	LITERALLY  '0D5H',
+
+	downCellKey		LITERALLY  '0CEH',
+	upCellKey		LITERALLY  '0CFH',
+	leftCellKey		LITERALLY  '0D0H',
+	rightCellKey	LITERALLY  '0D1H',
+
+	downMarginKey	LITERALLY  '0D6H',
+	upMarginKey		LITERALLY  '0D7H',
+	leftMarginKey	LITERALLY  '0D8H',
+	rightMarginKey	LITERALLY  '0D9H',
+
+	downChoiceKey	LITERALLY  '84H',
+	upChoiceKey		LITERALLY  '85H',
+	leftChoiceKey	LITERALLY  '86H',
+	rightChoiceKey	LITERALLY  '87H',
+
+/*
+	downWindowKey	LITERALLY  '8EH',
+	upWindowKey		LITERALLY  '8FH',
+	leftWindowKey	LITERALLY  '90H',
+	rightWindowKey	LITERALLY  '91H',
+
+ windowRefreshKey LITERALLY '0CAH',
+ windowEnterKey LITERALLY '0C1H',
+ windowLeaveKey LITERALLY '0C2H',
+ windowUpdateKey LITERALLY '0C3H',
+*/
+
+	cancelKey		LITERALLY  '155';
+
+DECLARE
+
+	EscapeKey		LITERALLY  '27',
+	EotKey			LITERALLY  '4',
+	TabKey			LITERALLY  '9',
+	returnKey		LITERALLY  '13',
+	bsKey			LITERALLY  '8',
+	bwKey			LITERALLY  '136',
+	bellKey			LITERALLY  '7',
+	spaceKey		LITERALLY  '020h',
+	lastAsciiKey	LITERALLY  '07Fh',
+/*	DELKey			LITERALLY  '07Fh',
+	CR				LITERALLY  '0Dh',
+	LF				LITERALLY  '0Ah',  */
+
+	
+	CntrlAKey			LITERALLY  '01',
+	CntrlBKey			LITERALLY  '02',
+	CntrlCKey			LITERALLY  '03',
+	CntrlDKey			LITERALLY  '04',
+	CntrlEKey			LITERALLY  '05',
+	CntrlFKey			LITERALLY  '06',
+	CntrlGKey			LITERALLY  '07',
+	CntrlHKey			LITERALLY  '08',
+	CntrlIKey			LITERALLY  '09',
+	CntrlJKey			LITERALLY  '0Ah',
+	CntrlKKey			LITERALLY  '0Bh',
+	CntrlLKey			LITERALLY  '0Ch',
+	CntrlMKey			LITERALLY  '0Dh',
+	CntrlNKey			LITERALLY  '0Eh',
+	CntrlOKey			LITERALLY  '0Fh',
+	CntrlPKey			LITERALLY  '10h',
+	CntrlQKey			LITERALLY  '11h',
+	CntrlRKey			LITERALLY  '12h',
+	CntrlSKey			LITERALLY  '13h',
+	CntrlTKey			LITERALLY  '14h',
+	CntrlUKey			LITERALLY  '15h',
+	CntrlVKey			LITERALLY  '16h',
+	CntrlWKey			LITERALLY  '17h',
+	CntrlXKey			LITERALLY  '18h',
+	CntrlYKey			LITERALLY  '19h',
+	CntrlZKey			LITERALLY  '1Ah',
+	CntrlLSquareKey		LITERALLY  '1Bh',
+	CntrlBackSlashKey	LITERALLY  '1Ch',
+	CntrlRSquareKey		LITERALLY  '1Dh',
+	CntrlUpArrowKey		LITERALLY  '1Eh',
+	CntrlUnderScoreKey	LITERALLY  '1Fh',
+
+	Code1Key			LITERALLY  '0B1h',
+	Code2Key			LITERALLY  '0B2h',
+	Code3Key			LITERALLY  '0B3h',
+	Code4Key			LITERALLY  '0B4h',
+	Code5Key			LITERALLY  '0B5h',
+	Code6Key			LITERALLY  '0B6h',
+	Code7Key			LITERALLY  '0B7h',
+	Code8Key			LITERALLY  '0B8h',
+	Code9Key			LITERALLY  '0B9h',
+	Code0Key			LITERALLY  '0B0h',
+
+	CodeShift1Key		LITERALLY  '0A1h',
+	CodeShift2Key		LITERALLY  '0C0h',
+	CodeShift3Key		LITERALLY  '0A3h',
+	CodeShift4Key		LITERALLY  '0A4h',
+	CodeShift5Key		LITERALLY  '0A5h',
+	CodeShift6Key		LITERALLY  '0DEh',
+	CodeShift7Key		LITERALLY  '0A6h',
+	CodeShift8Key		LITERALLY  '0AAh',
+	CodeShift9Key		LITERALLY  '0A8h',
+	CodeShift0Key		LITERALLY  '0A9h',
+
+	AccessKey			LITERALLY  '225',
+	eraseKey			LITERALLY  '229',
+	InsertKey			LITERALLY  '233',
+	CodeKKey			LITERALLY  '235',
+	optionsKey			LITERALLY  '239',
+	propertiesKey		LITERALLY  '240',
+	quitKey				LITERALLY  '241',
+	transferKey			LITERALLY  '244',
+	utilizationKey		LITERALLY  '245',
+	versionKey			LITERALLY  '246',
+	CODEZKey			LITERALLY  '250',
+
+	helpKey				LITERALLY  '0BFH',
+	confirmKey			LITERALLY  '08Dh',
+	shiftTabKey			LITERALLY  '0C9h',
+
+	breakKey			LITERALLY  '156';

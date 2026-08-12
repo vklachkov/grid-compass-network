@@ -1,0 +1,9 @@
+/* External declarations for NMCreateConfig.Plm */
+
+CreateConfig: PROCEDURE(pError) EXT;
+DCL pError	POINTER;
+END CreateConfig;
+
+ReadOldConfigFile: PROCEDURE(pError) BOOLEAN EXT;
+DCL pError	POINTER;
+END ReadOldConfigFile;

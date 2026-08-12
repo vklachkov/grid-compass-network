@@ -1,0 +1,6 @@
+/* Includes for NMTransfer */
+
+DoTransfer: PROCEDURE(pCh, pError) EXT;
+DCL	pCh			POINTER,
+	pError		POINTER;
+END Dotransfer;

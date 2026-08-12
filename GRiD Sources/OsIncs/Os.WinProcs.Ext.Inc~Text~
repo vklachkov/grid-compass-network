@@ -1,0 +1,29 @@
+/*            Os.WinProcs.Ext.Inc              */
+
+GetMyWindowState: PROCEDURE SELECTOR EXTERNAL;
+  END;
+
+GetConsoleState: PROCEDURE PTR EXTERNAL;
+  END;
+
+WinGetCurrentWindowState: PROCEDURE SELECTOR EXTERNAL;
+  END;
+
+WinMoveWindow: PROCEDURE (char) EXTERNAL;
+  DCL char   BYTE;
+  END;
+
+xWinFrameWindow: PROCEDURE EXTERNAL;
+  END;
+
+WinSetFont: PROCEDURE (pFontTable, pStatusBuf, count) PTR EXTERNAL;
+  DCL count         WORD;
+  DCL pFontTable    PTR;
+  DCL pStatusBuf    PTR;
+  END;
+
+WinHandlePhone: PROCEDURE (newValue, pOldValue, pError) EXTERNAL;
+  DCL newValue     BYTE;
+  DCL pOldValue    PTR;
+  DCL pError       PTR;
+  END;

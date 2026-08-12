@@ -1,0 +1,41 @@
+
+/*           This is Os.Loader.Ext.Inc            */
+
+LoadRoot: PROCEDURE (pName, loadType, pid, pError) PTR EXTERNAL;
+  DCL loadType BYTE;
+  DCL pid      PidType;
+  DCL pName    PTR;
+  DCL pError   PTR;
+  END;
+
+LoadOverlay: PROCEDURE (pName, pLoadTable, pError) EXTERNAL;
+  DCL pName      PTR;
+  DCL pLoadTable PTR;
+  DCL pError     PTR;
+  END;
+
+Loader: PROCEDURE (pid, pError) PTR EXTERNAL;
+  DCL pid    PidType;
+  DCL pError PTR;
+  END;
+
+OsOverlay: PROCEDURE (pName, pid, pError) EXTERNAL;
+  DCL pName  PTR;
+  DCL pError PTR;
+  DCL pid    PidType;
+  END;
+
+ProcessRegInt: PROCEDURE EXTERNAL;
+  END;
+
+ProcessEndRec: PROCEDURE EXTERNAL;
+  END;
+
+ProcessModEnd: PROCEDURE EXTERNAL;
+  END;
+
+OsUnLoad : PROCEDURE (pName, pError) EXTERNAL;
+  DCL (pName, pError) PTR;
+  END;
+
+

@@ -1,0 +1,207 @@
+/* This file is oscalls.ext.inc    */
+
+OsAllocate : PROCEDURE (size, pExcep) PTR EXTERNAL;
+    DCL size WORD;
+    DCL pExcep PTR;
+    END;
+
+OsFree : PROCEDURE (segment, pExcep) EXTERNAL;
+    DCL segment PTR;
+    DCL pExcep PTR;
+    END;
+
+OsGetSize : PROCEDURE (segment, pExcep) WORD EXTERNAL;
+    DCL segment PTR;
+    DCL pExcep PTR;
+    END;
+
+OsDecodeException : PROCEDURE (code, pName) EXTERNAL;
+    DCL code WORD;
+    DCL pName PTR;
+    END;
+
+OsTrapAbort : PROCEDURE (pRoutine) EXTERNAL;
+    DCL pRoutine PTR;
+    END;
+
+OsExit : PROCEDURE (code) EXTERNAL;
+    DCL code WORD;
+    END;
+
+OsGetTime : PROCEDURE (mode, pDt) EXTERNAL;
+    DCL mode BYTE;
+    DCL pDt PTR;
+    END;
+
+OsGetSystemID : PROCEDURE (pID) EXTERNAL;
+    DCL pID PTR;
+    END;
+
+OsDelete : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL pExcep PTR;
+    END;
+
+OsRename : PROCEDURE (conn, pNew, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL (pNew, pExcep) PTR;
+    END;
+
+OsAttach : PROCEDURE (pPath, mode, pPass, access, pExcep) SELECTOR EXTERNAL;
+    DCL (pPath, pPass, pExcep) PTR;
+    DCL (mode, access) BYTE;
+    END;
+
+OsOpen : PROCEDURE (conn, numbuf, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL numbuf BYTE;
+    DCL pExcep PTR;
+    END;
+
+OsClose : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL pExcep PTR;
+    END;
+
+OsDetach : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL pExcep PTR;
+    END;
+
+OsRead : PROCEDURE (conn, pBuf, count, pExcep) WORD EXTERNAL;
+    DCL conn SELECTOR;
+    DCL count WORD;
+    DCL (pBuf, pExcep) PTR;
+    END;
+
+OsWrite : PROCEDURE (conn, pBuf, count, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL count WORD;
+    DCL (pBuf, pExcep) PTR;
+    END;
+
+OsSeek : PROCEDURE (conn, mode, length, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL length DWORD;
+    DCL mode BYTE;
+    DCL pExcep PTR;
+    END;
+
+OsTruncate : PROCEDURE (conn, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL pExcep PTR;
+    END;
+
+OsGetStatus : PROCEDURE (conn, pInfo, length, pExcep) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL length WORD;
+    DCL (pInfo, pExcep) PTR;
+    END;
+
+OsChangeExtension : PROCEDURE (pPath, extNum, pExtension, pExcep) EXTERNAL;
+    DCL (pPath, pExtension, pExcep) PTR;
+    DCL extNum BYTE;
+    END;
+
+OsOverlay : PROCEDURE (pName, pid, pExcep) EXTERNAL;
+    DCL (pName, pExcep) PTR;
+    DCL pid WORD;
+    END;
+
+OsGetArgument : PROCEDURE (short, pArg) BYTE EXTERNAL;
+    DCL short BOOLEAN;
+    DCL pArg PTR;
+    END;
+
+OsSwitchBuffer : PROCEDURE (pBuffer) WORD EXTERNAL;
+    DCL pBuffer PTR;
+    END;
+
+OsCreateProcess : PROCEDURE (pLine, priority, uses8087, pError) SELECTOR EXTERNAL;
+    DCL (pLine, pError) PTR;
+    DCL (priority, uses8087) BYTE;
+    END;
+
+/*
+    
+OsDeleteProcess : PROCEDURE (PID, pError) EXTERNAL;
+    DCL PID selector;
+    DCL pError PTR;
+    END;
+
+OsSend : PROCEDURE (PID, note, pMsg, pError) EXTERNAL;
+    DCL PID WORD;
+    DCL note WORD;
+    DCL (pMsg, pError) PTR;
+    END;
+
+OsReceive : PROCEDURE (PID, time, pNote, pError) PTR EXTERNAL;
+    DCL PID WORD;
+    DCL time WORD;
+    DCL (pNote, pError) PTR;
+    END;
+
+OsCreateSemaphore : PROCEDURE (pError) WORD EXTERNAL;
+    DCL pError PTR;
+    END;
+
+OsDeleteSemaphore : PROCEDURE (SID, pError) EXTERNAL;
+    DCL SID WORD;
+    DCL pError PTR;
+    END;
+
+OsWait : PROCEDURE (SID, pError) WORD EXTERNAL;
+    DCL SID WORD;
+    DCL pError PTR;
+    END;
+
+OsSignal : PROCEDURE (SID, note, pError) EXTERNAL;
+    DCL SID WORD;
+    DCL note WORD;
+    DCL pError PTR;
+    END;
+
+OsWhoAmI : PROCEDURE WORD EXTERNAL;
+    END;
+    
+OsDelay : PROCEDURE (time) EXTERNAL;
+    DCL time WORD;
+    END;
+
+OsSetPriority : PROCEDURE (PID, priority, pError) EXTERNAL;
+    DCL PID WORD;
+    DCL priority BYTE;
+    DCL pError PTR;
+    END;
+*/
+
+OsGetMemStatus : PROCEDURE (PID, pInfo, pError) EXTERNAL;
+    DCL PID SELECTOR;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsReadDescriptor : PROCEDURE (conn, pInfo, pError) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsWriteDescriptor : PROCEDURE (conn, pInfo, pError) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL (pInfo, pError) PTR;
+    END;
+
+OsFlushAllBuffers : PROCEDURE (conn, pError) EXTERNAL;
+    DCL conn SELECTOR;
+    DCL pError PTR;
+    END;
+
+OsRegisterName : PROCEDURE (pName, token, mode, pError) EXTERNAL;
+    DCL (pName, pError) PTR;
+    DCL token WORD;
+    DCL mode BYTE;
+    END;
+
+OsLookupName : PROCEDURE (pName, pError) WORD EXTERNAL;
+    DCL (pName, pError) PTR;
+    END;
+

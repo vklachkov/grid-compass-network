@@ -1,0 +1,1592 @@
+$COMPACT (EXPORTS InterfaceProc)
+$TITLE('Network Manager Main Program')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Main Program	-	1/3/86					*/
+/*																			*/
+/****************************************************************************/
+
+NMConfigMain: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`ConPlmProcs.Inc~Text~)
+$INCLUDE(``Incs`Keys.Plm.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`Dataforms.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`RemoteFormsProcs.Plm.Inc~Text~)
+$INCLUDE(``Incs`Parse.PlmProcs.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMConfigLits.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMConfigData.Plm.Inc~Text~)
+$INCLUDE(NMConfigForms.Plm.Inc~Text~)
+$INCLUDE(NMTransfer.Plm.Inc~Text~)
+$INCLUDE(NMCreateConfig.Plm.Inc~Text~)
+$INCLUDE(NMInterface.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$INCLUDE(NMMisc.Plm.Inc~Text~)
+$RESTORE
+
+$EJ
+InitForms: PROCEDURE CLEAN;
+
+/* Does static initializations for forms and menus. */
+
+	passwordRow.theData = @password;
+	password.max = passwordLength - 1;
+
+	prefixRow.theData = @prefix;
+	prefix.max = prefixLength - 1;
+
+	remSystemNameRow.theData = @remSystemName;
+	remSystemName.max = serverNameLength - 1;
+
+	commentRow.theData = @comment;
+	comment.max = commentLength - 1;
+
+	phoneNumber1Row.theData = @phoneNumber1;
+	phoneNumber1.max = phoneNumberLength - 1;
+
+	phoneNumber2Row.theData = @phoneNumber2;
+	phoneNumber2.max = phoneNumberLength - 1;
+
+	phoneNumber3Row.theData = @phoneNumber3;
+	phoneNumber3.max = phoneNumberLength - 1;
+
+	phoneNumber4Row.theData = @phoneNumber4;
+	phoneNumber4.max = phoneNumberLength - 1;
+
+	phoneNumberRow.theData = @phoneNumber;
+	phoneNumber.max = phoneNumberLength - 1;
+
+	connNameRow.theData = @connName;
+	connName.max = connectionNameLength - 1;
+
+	leasedConnNameRow.theData = @leasedConnName;
+	leasedConnName.max = connectionNameLength - 1;
+
+	localAreaCodeRow.theData = @localAreaCode;
+	localAreaCode.max = phoneNumberLength - 1;
+
+	longDistCodeRow.theData = @longDistCode;
+	longDistCode.max = phoneNumberLength - 1;
+
+	token.max, subToken.max = maxTokenLength;
+
+END InitForms;
+
+
+InitConfig: PROCEDURE CLEAN;
+
+/* All data structures are initialized to default values. */
+
+DCL	i				BYTE,
+	j				WORD,
+$IF NOT compassMode
+	cardData		(8) STRUCTURE
+	(
+	 spare1			(8) BYTE,
+	 cardType		WORD,
+	 subType		WORD,
+	 PROMVers		BYTE,
+	 num128kBlocks	BYTE,
+	 spare2			(2) BYTE
+	) AT (80000h);
+$ELSE
+	cardData		BYTE;
+$ENDIF
+
+	/* Initialize cardInfo. */
+
+	nCommCards = 0;
+	DO i = 0 TO 7;
+		cardInfo(i).configured = FALSE;
+		cardInfo(i).changed = FALSE;
+$IF NOT compassMode
+		cardInfo(i).memSize = cardData(i).num128kBlocks;
+		IF cardData(i).cardType = 'DP' THEN
+			cardInfo(i).cardType = diagCard;
+		ELSE
+			IF cardData(i).cardType = 'FS' THEN
+				cardInfo(i).cardType = fsCard;
+		ELSE
+			IF cardData(i).cardType = 'CS' THEN
+			DO;
+				cardInfo(i).cardType = csCard;
+				nCommCards = nCommCards + 1;
+			END;
+		ELSE
+			IF cardData(i).cardType = 'AS' THEN
+				cardInfo(i).cardType = asCard;
+		ELSE
+			cardInfo(i).cardType = emptyCard;
+$ELSE
+		cardInfo(i).memSize = (i AND 3) + 1;
+		IF i = 0 THEN
+			cardInfo(i).cardType = diagCard;
+		ELSE
+			IF i = 1 THEN
+				cardInfo(i).cardType = fsCard;
+		ELSE
+			IF i = 2 THEN
+				cardInfo(i).cardType = asCard;
+		ELSE
+			IF i THEN
+			DO;
+				cardInfo(i).cardType = csCard;
+				nCommCards = nCommCards + 1;
+			END;
+		ELSE
+			cardInfo(i).cardType = emptyCard;
+$ENDIF
+	END;
+
+	/* Initialize portInfo. */
+
+	DO i = 0 TO 31;
+		portInfo(i).allocated = FALSE;
+		portInfo(i).activateWait = FALSE;
+		portInfo(i).doSearch = FALSE;
+		portInfo(i).pConnInfo = nullPtr;
+		portProtocol(i) = emptyLink;
+		portUsed(i) = FALSE;
+	END;
+
+	/* Initialize data structures. */
+
+	nServers = 0;
+	pServerInfo = nullPtr;
+	nConnections = 0;
+
+	/* Initialize other variables. */
+
+	consistent = TRUE;
+	configInProgress, needsToReboot = FALSE;
+	CALL MOVB(@defaultPassword, @nmPassword, defaultPassword(0) + 1);
+	myAreaCode(0) = 0;
+	myLongDistCode(0) = 0;
+	highSpeedThreshold = defaultHighSpeed;
+	mediumSpeedThreshold = defaultMediumSpeed;
+	logFileSize = defaultLogFileSize;
+
+END InitConfig;
+
+$EJ
+/* Get the token type. */
+
+GetTokenType: PROCEDURE(pToken) BYTE CLEAN;
+
+DCL pToken	POINTER,
+	token	BASED pToken stringType;
+
+	IF SameStrings(@token.dummy, @passwordToken) THEN
+		RETURN passwordTokenType;
+	IF SameStrings(@token.dummy, @optionsToken) THEN
+		RETURN optionsTokenType;
+	IF SameStrings(@token.dummy, @cardToken) THEN
+		RETURN cardTokenType;
+	IF SameStrings(@token.dummy, @serverToken) THEN
+		RETURN serverTokenType;
+	IF SameStrings(@token.dummy, @networkToken) THEN
+		RETURN networkTokenType;
+	IF SameStrings(@token.dummy, @connectionToken) THEN
+		RETURN connectionTokenType;
+	RETURN unknownTokenType;
+
+END GetTokenType;
+
+/* Read port configuration. */
+
+ReadPortConfig: PROCEDURE(conn, portIndex, pError) CLEAN;
+
+DCL	conn		WORD,
+	portIndex	BYTE,
+	pError		POINTER,
+	error		BASED pError WORD;
+
+	error = ReadNextToken(conn, @token, @subToken);
+	IF error <> eOk THEN RETURN;
+	token.dummy = token.len;
+	subToken.dummy = subToken.len;
+	IF SameStrings(@token.dummy, @phonelinkToken) THEN
+	DO;
+		CALL InitDefaultPortForm(portIndex/4);
+		error = ReadFormValues(conn, @portInfoForm);
+		IF error = eOk THEN
+			CALL CopyPortForm(portIndex);
+	END;
+	ELSE
+		IF SameStrings(@token.dummy, @gridlinkToken) THEN
+			portInfo(portIndex).protocol = gridlinkPrimary;
+	ELSE
+		IF SameStrings(@token.dummy, @fiberlinkToken) THEN
+			portInfo(portIndex).protocol = fiberlinkPrimary;
+	ELSE
+		IF SameStrings(@token.dummy, @emptyToken) THEN
+			portInfo(portIndex).protocol = emptylink;
+	ELSE
+		error = eNMAllPortsNotSpecified;
+
+END ReadPortConfig;
+
+/* Find a free server. */
+
+FindFreeServer: PROCEDURE POINTER CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	i			BYTE;
+
+	pServer = AllocateBytes(SIZE(serverInfo));
+	serverInfo.pNext, serverInfo.pLast, serverInfo.pConnInfo,
+		serverInfo.pLastConn, serverInfo.pName, serverInfo.pComment = nullPtr;
+	DO i = 0 TO 3;
+		serverInfo.pPubNumber(i) = nullPtr;
+		serverInfo.pPvtNumber(i) = nullPtr;
+	END;
+	serverInfo.isPublic, serverInfo.isPrivate = FALSE;
+	serverInfo.nConnections = 0;
+	RETURN pServer;
+
+END FindFreeServer;
+
+/* Find a free connection. */
+
+FindFreeConnection: PROCEDURE POINTER CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType;
+
+	pConn = AllocateBytes(SIZE(connInfo));
+	connInfo.pNext, connInfo.pLast, connInfo.pName, connInfo.pServerInfo,
+												connInfo.pPhoneNumber = nullPtr;
+	connInfo.allocated = FALSE;
+	connInfo.consistent = TRUE;
+	RETURN pConn;
+
+END FindFreeConnection;
+
+/* Read configuration file. */
+
+ReadConfigFile: PROCEDURE(logTheError, pError) BOOLEAN CLEAN;
+
+DCL	logTheError		BOOLEAN,
+	pError			POINTER,
+	error			BASED pError WORD,
+	conn			WORD,
+	dummy			WORD,
+	i				BYTE,
+	cardNum			BYTE,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	pConnForm		POINTER,
+	serverFound		BOOLEAN,
+	done			BOOLEAN,
+	protocol		(4) BYTE,
+	fileType		BYTE,
+	cardFound		BOOLEAN,
+	atLeastOneCard	BOOLEAN;
+
+	conn = AttachAndOpen(@configFile, oldFile, updateAccess, @error);
+	IF error <> eOk THEN
+	DO;
+		IF ((error <> eFileNotFound) AND (error <> eDirNotFound))
+														OR logTheError THEN
+			CALL LogError(error, 1600, attentionOn);
+		RETURN FALSE;
+	END;
+	serverFound, cardFound, atLeastOneCard, done = FALSE;
+	DO WHILE NOT done;
+		error = ReadNextToken(conn, @token, @subToken);
+		IF error <> eOk THEN
+		DO;
+			CALL LogError(error, 1601, attentionOn);
+			GOTO procExit;
+		END;
+		token.dummy = token.len;
+		subToken.dummy = subToken.len;
+
+		IF (done := (token.len = 0)) THEN
+		DO;
+			IF NOT atLeastOneCard THEN
+			DO;
+				error = eNMCardsNotSpecified;
+				CALL LogError(error, 1602, attentionOn);
+				done = FALSE;
+			END;
+			GOTO procExit;
+		END;
+
+		DO CASE GetTokenType(@token);
+
+			DO;								/* password token */
+				password.len, password.dummy = defaultPassword(0);
+				CALL MOVB(@defaultPassword(1), @password.chars,
+															defaultPassword(0));
+				passwordRow.currentChoice = 1;
+				error = ReadFormValues(conn, @passwordForm);
+				IF error <> eOk THEN
+				DO;
+					CALL LogError(error, 1603, attentionOn);
+					GOTO procExit;
+				END;
+				password.dummy = password.len;
+				CALL MOVB(@password.dummy, @nmPassword(0), password.dummy + 1);
+			END;
+
+			DO;								/* options token */
+				CALL InitDefaultOptionsForm;
+				error = ReadFormValues(conn, @optionsForm);
+				IF error <> eOk THEN
+				DO;
+					CALL LogError(error, 1604, attentionOn);
+					GOTO procExit;
+				END;
+				CALL CopyOptionsForm;
+			END;
+
+			DO;									/* card token */
+				cardFound = TRUE;
+				cardNum = StringToInt(@subToken.dummy);
+				IF cardNum > 7 THEN
+				DO;
+					CALL LogError((error := eNMNotACommCard), 1605,attentionOn);
+					GOTO procExit;
+				END;
+				/* There must follow four port tokens. */
+				DO i = 0 TO 3;
+					CALL ReadPortConfig(conn, 4*cardNum + i, @error);
+					IF error <> eOk THEN
+					DO;
+						CALL LogError(error, 1606, attentionOn);
+						GOTO procExit;
+					END;
+					protocol(i) = portInfo(4*cardNum + i).protocol;
+				END;
+				IF NOT ValidCombination(@protocol, @fileType) THEN
+				DO;
+					error = eNMIllegalProtocolCombination;
+					CALL LogError(error, 1607, attentionOn);
+					GOTO procExit;
+				END;
+				cardInfo(cardNum).fileType = fileType;
+				cardInfo(cardNum).configured =
+										(cardInfo(cardNum).cardType = csCard);
+				atLeastOneCard = atLeastOneCard OR cardInfo(cardNum).configured;
+				IF NOT cardInfo(cardNum).configured THEN
+					CALL OsLogError(11, eNMNotACommCard, cardNum,
+										@(27, 'NetworkMgr: Suberror = card'));
+			END;
+
+			DO;									/* server token */
+				IF NOT cardFound THEN
+					error = eNMCardsNotSpecified;
+				ELSE
+					IF (subToken.dummy = 0) OR
+									(subToken.dummy >= serverNameLength) THEN
+						error = eNMIllegalServerName;
+				ELSE
+					pServer = FindFreeServer;
+				IF error = eOk THEN
+				DO;
+					comment.len = 0;
+					error = ReadFormValues(conn, @commentForm);
+				END;
+				IF error <> eOk THEN
+				DO;
+					CALL LogError(error, 1608, attentionOn);
+					GOTO procExit;
+				END;
+				serverFound = TRUE;
+				serverInfo.pName = CopyOfString(@subToken);
+				IF comment.len <> 0 THEN
+					serverInfo.pComment = CopyOfString(@comment);
+				CALL InsertServer(pServer);
+			END;
+
+			DO;									/* network token */
+				IF NOT serverFound THEN
+				DO;
+					error = eNMNoServerSpecified;
+					CALL LogError(error, 1609, attentionOn);
+					GOTO procExit;
+				END;
+				IF SameStrings(@publicToken, @subToken.dummy) THEN
+				DO;
+					CALL InitDefaultNetForm;
+					error = ReadFormValues(conn, @netForm);
+					IF error <> eOk THEN
+					DO;
+						CALL LogError(error, 1610, attentionOn);
+						GOTO procExit;
+					END;
+					CALL CopyNetForm(pServer, publicNetwork);
+				END;
+				IF SameStrings(@privateToken, @subToken.dummy) THEN
+				DO;
+					CALL InitDefaultNetForm;
+					error = ReadFormValues(conn, @netForm);
+					IF error <> eOk THEN
+					DO;
+						CALL LogError(error, 1611, attentionOn);
+						GOTO procExit;
+					END;
+					CALL CopyNetForm(pServer, privateNetwork);
+				END;
+			END;
+
+			DO;									/* connection token */
+				IF NOT cardFound THEN
+					error = eNMCardsNotSpecified;
+				ELSE
+					IF NOT serverFound THEN
+						error = eNMNoServerSpecified;
+				ELSE
+					IF NOT SameStrings(@subToken.dummy, @phonelinkToken) THEN
+						error = eNMProtocolNotSupported;
+				IF error <> eOk THEN
+				DO;
+					CALL LogError(error, 1612, attentionOn);
+					GOTO procExit;
+				END;
+
+				netTypeRow.currentChoice = publicNetwork;
+				error = ReadFormValues(conn, @netTypeForm);
+				IF error = eOk THEN
+				DO;
+					pConnForm = InitDefaultConnForm(pServer,
+													netTypeRow.currentChoice);
+					error = ReadFormValues(conn, pConnForm);
+					IF error = eOk THEN
+					DO;
+						pConn = FindFreeConnection;
+						connInfo.protocol = phoneLink;
+						CALL CopyConnForm(pConn, pServer,
+													netTypeRow.currentChoice);
+						CALL InsertConnection(pServer, pConn);
+						IF (NOT connInfo.useAnyPort) OR
+								(connInfo.networkType = leasedNetwork) THEN
+						DO;
+							CALL InitDefaultSysPortForm(connInfo.baudChoice,
+														connInfo.networkType);
+							error = ReadFormValues(conn, @sysPortForm);
+							IF error = eOk THEN
+								CALL CopySysPortForm(pConn);
+						END;
+						IF (error = eOk) AND
+							EqualStrings(serverInfo.pName, @myServerName) THEN
+						DO;
+							CALL DeleteConnection(pConn);
+						END;
+					END;
+				END;
+				IF error <> eOk THEN
+				DO;
+					CALL LogError(error, 1613, attentionOn);
+					GOTO procExit;
+				END;
+			END;
+
+			;	/* Unknown token - report error. */
+
+		END;
+	END;
+
+procExit:
+	IF error <> eOk THEN
+		CALL DeallocateData;
+	ELSE
+		CALL SetPortSearchOrder;
+	CALL OsDetach(conn, @dummy);
+	RETURN done;
+
+END ReadConfigFile;
+
+$EJ
+/* Create default configuration info. */
+
+CreateDefaultConfigInfo: PROCEDURE CLEAN;
+
+DCL	i		BYTE,
+	j		BYTE,
+	k		BYTE,
+	first	BOOLEAN;
+
+
+	first = TRUE;
+	DO i = 0 TO 7;
+		IF cardInfo(i).cardType = csCard THEN
+		DO;
+			IF first AND (NOT cardInfo(i).configured) THEN
+			DO;
+				cardInfo(i).configured = TRUE;
+				CALL InitDefaultPortForm(i);
+				j = 4*i;
+				DO k = j TO (j + 1);
+					CALL CopyPortForm(k);
+				END;
+				portInfo(j + 2).protocol = gridlinkPrimary;
+				portInfo(j + 3).protocol = gridlinkPrimary;
+				cardInfo(i).fileType = gridAndPhonelinkFile;
+			END;
+			IF NOT first THEN
+				cardInfo(i).configured = FALSE;
+			first = FALSE;
+		END;
+	END;
+
+	/* Initialize data structures. */
+
+	nServers = 0;
+	pServerInfo = nullPtr;
+	nConnections = 0;
+
+	/* Initialize other variables. */
+
+	CALL MOVB(@defaultPassword, @nmPassword, defaultPassword(0) + 1);
+	CALL InitDefaultOptionsForm;
+	CALL CopyOptionsForm;
+	CALL BuildPortChoices(baudUndef, 0);
+
+END CreateDefaultConfigInfo;
+
+$EJ
+/* Initialize tokens and forms to default values. */
+
+/* Initialize default public/private network form. */
+
+InitDefaultNetForm: PROCEDURE CLEAN;
+
+	phoneNumber1.len, phoneNumber2.len, phoneNumber3.len, phoneNumber4.len = 0;
+	phoneNumber1Row.currentChoice = 1;
+	baudRate1Row.currentChoice = baud1200 - 1;
+	phoneNumber2Row.currentChoice = 1;
+	baudRate2Row.currentChoice = baud1200 - 1;
+	phoneNumber3Row.currentChoice = 1;
+	baudRate3Row.currentChoice = baud1200 - 1;
+	phoneNumber4Row.currentChoice = 1;
+	baudRate4Row.currentChoice = baud1200 - 1;
+
+END InitDefaultNetForm;
+
+/* Initialize default system port form. */
+
+InitDefaultSysPortForm: PROCEDURE(baudChoice, networkType) CLEAN;
+
+DCL	baudChoice	BYTE,
+	networkType	BYTE,
+	i			BYTE;
+
+	CALL BuildSysPortLabelsAndChoices(baudChoice, networkType);
+	DO i = 0 TO 3;
+		systemPortRow(i).currentChoice = noPort;
+	END;
+
+END InitDefaultSysPortForm;
+
+/* Initialize default options form. */
+
+InitDefaultOptionsForm: PROCEDURE CLEAN;
+
+	localAreaCodeRow.currentChoice = 1;
+	localAreaCode.len = 0;
+	longDistCodeRow.currentChoice = 1;
+	longDistCode.len = 0;
+	highSpeedRow.currentChoice = 1;
+	highSpeedRow.theData = defaultHighSpeed;
+	mediumSpeedRow.currentChoice = 1;
+	mediumSpeedRow.theData = defaultMediumSpeed;
+	logFileSizeRow.currentChoice = 1;
+	logFileSizeRow.theData = defaultLogFileSize;
+
+END InitDefaultOptionsForm;
+
+/* Initialize default connection form (for phonelink). */
+
+InitDefaultConnForm: PROCEDURE(pServer, networkType) POINTER CLEAN;
+
+DCL	pServer		POINTER,
+	networkType	BYTE;
+
+	IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+	DO;
+		CALL BuildConnLabelsAndChoices(pServer, networkType);
+		phoneNumberRow.currentChoice = 1;
+		phoneNumber.len = 0;
+		waitRow.currentChoice = 1;
+		waitRow.theData = defaultWaitTime;
+		costRow.currentChoice = mediumCost;
+		dedicatedRow.currentChoice = noChoice;
+		anyPortRow.currentChoice = yesChoice;
+		connNameRow.currentChoice = 1;
+		connName.len = 0;
+		RETURN (@connForm);
+	END;
+	ELSE
+		DO;										/* Leased */
+			leasedWaitRow.currentChoice = 1;
+			leasedWaitRow.theData = defaultWaitTime;
+			leasedCostRow.currentChoice = mediumCost;
+			leasedDedicatedRow.currentChoice = noChoice;
+			leasedConnNameRow.currentChoice = 1;
+			leasedConnName.len = 0;
+			RETURN (@leasedConnForm);
+		END;
+
+END InitDefaultConnForm;
+
+/* Initialize default port form (for phonelink). */
+
+InitDefaultPortForm: PROCEDURE(card) CLEAN;
+
+DCL	card	BYTE;
+
+	IF cardInfo(card).memSize > 1 THEN
+		phonelinkTypeRow.currentChoice = originateAndAnswerPdl;
+	ELSE
+		phonelinkTypeRow.currentChoice = answerOnlyPdl;
+	lineTypeRow.currentChoice = switched;
+	baudRateRow.currentChoice = defaultBaudChoice;
+	baudRateRow.theData = baudTable(defaultBaudChoice);
+	modemTypeRow.currentChoice = hayesSmartmodem1200;
+	prefixRow.currentChoice = externalLine;
+	prefix.len, prefix.dummy = 0;
+	dialingModeRow.currentChoice = touchtone;
+	dialTypeRow.currentChoice = automatic;
+
+END InitDefaultPortForm;
+
+$EJ
+/* Initialize forms from data structures. */
+InitPasswordForm: PROCEDURE CLEAN;
+
+	password.len, password.dummy = nmPassword(0);
+	CALL MOVB(@nmPassword(1), @password.chars, nmPassword(0));
+	passwordRow.currentChoice = 1;
+	token.len, token.dummy = passwordToken(0);
+	CALL MOVB(@passwordToken(1), @token.chars, passwordToken(0));
+	subToken.len, subToken.dummy = 0;
+
+END InitPasswordForm;
+
+InitOptionsForm: PROCEDURE CLEAN;
+
+	localAreaCodeRow.currentChoice = 1;
+	localAreaCode.len = myAreaCode(0);
+	CALL MOVB(@myAreaCode(1), @localAreaCode.chars, myAreaCode(0));
+	longDistCodeRow.currentChoice = 1;
+	longDistCode.len = myLongDistCode(0);
+	CALL MOVB(@myLongDistCode(1), @longDistCode.chars, myLongDistCode(0));
+	highSpeedRow.currentChoice = 1;
+	highSpeedRow.theData = highSpeedThreshold;
+	mediumSpeedRow.currentChoice = 1;
+	mediumSpeedRow.theData = mediumSpeedThreshold;
+	logFileSizeRow.currentChoice = 1;
+	logFileSizeRow.theData = logFileSize;
+	token.len, token.dummy = optionsToken(0);
+	CALL MOVB(@optionsToken(1), @token.chars, optionsToken(0));
+	subToken.len, subToken.dummy = 0;
+
+END InitOptionsForm;
+
+InitCardToken: PROCEDURE(cardNum) CLEAN;
+
+DCL	cardNum		BYTE;
+
+	token.len, token.dummy = cardToken(0);
+	CALL MOVB(@cardToken(1), @token.chars, cardToken(0));
+	subToken.len, subToken.dummy = 1;
+	subToken.chars(0) = '0' + cardNum;
+
+END InitCardToken;
+
+InitPortForm: PROCEDURE(cardNum, portNum, pHasForm) CLEAN;
+
+DCL	cardNum		BYTE,
+	portNum		BYTE,
+	i			BYTE,
+	pHasForm	POINTER,
+	hasForm		BASED pHasForm BOOLEAN;
+
+	subToken.len, subToken.dummy = 0;
+	hasForm = FALSE;
+	i = 4*cardNum + portNum;
+	DO CASE (portInfo(i).protocol - 1);
+
+		DO;
+			token.len, token.dummy = emptyToken(0);
+			CALL MOVB(@emptyToken(1), @token.chars, emptyToken(0));
+		END;
+
+		DO;
+			token.len, token.dummy = phonelinkToken(0);
+			CALL MOVB(@phonelinkToken(1), @token.chars, phonelinkToken(0));
+			hasForm = TRUE;
+			phonelinkTypeRow.currentChoice = portInfo(i).phonelinkType;
+			lineTypeRow.currentChoice = portInfo(i).lineType;
+			baudRateRow.currentChoice = portInfo(i).baudChoice;
+			baudRateRow.theData = portInfo(i).baudRate;
+			modemTypeRow.currentChoice = portInfo(i).modemType;
+			prefixRow.currentChoice = portInfo(i).lineKind;
+			prefix.len, prefix.dummy = portInfo(i).prefix(0);
+			CALL MOVB(@portInfo(i).prefix(1), @prefix.chars, prefix.len);
+			dialingModeRow.currentChoice = portInfo(i).dialingMode;
+			dialTypeRow.currentChoice = portInfo(i).dialType;
+		END;
+
+		DO;
+			token.len, token.dummy = gridlinkToken(0);
+			CALL MOVB(@gridlinkToken(1), @token.chars, gridlinkToken(0));
+		END;
+
+		DO;
+			token.len, token.dummy = fiberlinkToken(0);
+			CALL MOVB(@fiberlinkToken(1), @token.chars, fiberlinkToken(0));
+		END;
+	END;
+
+END InitPortForm;
+
+InitServerToken: PROCEDURE(pServer) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType;
+
+
+	token.len, token.dummy = serverToken(0);
+	CALL MOVB(@serverToken(1), @token.chars, serverToken(0));
+	CALL CopyString(serverInfo.pName, @subToken);
+
+END InitServerToken;
+
+InitNetForm: PROCEDURE(pServer, networkType) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	i			BYTE;
+
+	token.len = networkToken(0);
+	CALL MOVB(@networkToken(0), @token.dummy, (networkToken(0) + 1));
+	IF networkType = publicNetwork THEN
+	DO;
+		subToken.len = publicToken(0);
+		CALL MOVB(@publicToken(0), @subToken.dummy, (publicToken(0) + 1));
+	END;
+	ELSE
+		DO;
+			subToken.len = privateToken(0);
+	 		CALL MOVB(@privateToken(0), @subToken.dummy, (privateToken(0) + 1));
+		END;
+
+	CALL InitDefaultNetForm;
+	IF networkType = publicNetwork THEN
+	DO i = 0 TO 3;
+		IF serverInfo.pPubNumber(i) <> nullPtr THEN
+		DO CASE i;
+			DO;
+				CALL CopyString(serverInfo.pPubNumber(i), @phoneNumber1);
+				baudRate1Row.currentChoice = serverInfo.pubBaudChoice(i) - 1;
+			END;
+			DO;
+				CALL CopyString(serverInfo.pPubNumber(i), @phoneNumber2);
+				baudRate2Row.currentChoice = serverInfo.pubBaudChoice(i) - 1;
+			END;
+			DO;
+				CALL CopyString(serverInfo.pPubNumber(i), @phoneNumber3);
+				baudRate3Row.currentChoice = serverInfo.pubBaudChoice(i) - 1;
+			END;
+			DO;
+				CALL CopyString(serverInfo.pPubNumber(i), @phoneNumber4);
+				baudRate4Row.currentChoice = serverInfo.pubBaudChoice(i) - 1;
+			END;
+		END;
+	END;
+	ELSE
+		DO i = 0 TO 3;
+			IF serverInfo.pPvtNumber(i) <> nullPtr THEN
+			DO CASE i;
+				DO;
+					CALL CopyString(serverInfo.pPvtNumber(i), @phoneNumber1);
+					baudRate1Row.currentChoice = serverInfo.pvtBaudChoice(i) -1;
+				END;
+				DO;
+					CALL CopyString(serverInfo.pPvtNumber(i), @phoneNumber2);
+					baudRate2Row.currentChoice = serverInfo.pvtBaudChoice(i) -1;
+				END;
+				DO;
+					CALL CopyString(serverInfo.pPvtNumber(i), @phoneNumber3);
+					baudRate3Row.currentChoice = serverInfo.pvtBaudChoice(i) -1;
+				END;
+				DO;
+					CALL CopyString(serverInfo.pPvtNumber(i), @phoneNumber4);
+					baudRate4Row.currentChoice = serverInfo.pvtBaudChoice(i) -1;
+				END;
+			END;
+		END;
+
+END InitNetForm;
+
+InitSysPortForm: PROCEDURE(pConn, baudChoice) CLEAN;
+
+DCL	pConn		POINTER,
+	conninfo	BASED pConn connInfoType,
+	baudChoice	BYTE,
+	portIndex	WORD,
+	i			BYTE;
+
+	CALL BuildSysPortLabelsAndChoices(baudChoice, connInfo.networkType);
+	DO i = 0 TO 3;
+		IF (portIndex := connInfo.port(i)) <> nullWord THEN
+			systemPortRow(i).currentChoice = portInfo(portIndex).choice;
+		ELSE
+			systemPortRow(i).currentChoice = noPort;
+	END;
+
+END InitSysPortForm;
+
+InitLeasedSysPortForm: PROCEDURE(pServer) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	conninfo	BASED pConn connInfoType,
+	portIndex	WORD,
+	i			BYTE;
+
+	CALL BuildSysPortLabelsAndChoices(baudExternal, leasedNetwork);
+	pConn = serverInfo.pConnInfo;
+	i = 0;
+	DO WHILE (pConn <> nullPtr) AND (i <= 3);
+		IF connInfo.networkType = leasedNetwork THEN
+		DO;
+			systemPortRow(i).currentChoice = portInfo(connInfo.port(0)).choice;
+			i = i + 1;
+		END;
+		pConn = connInfo.pNext;
+	END;
+	DO WHILE i <= 3;
+		systemPortRow(i).currentChoice = noPort;
+		i = i + 1;
+	END;
+
+END InitLeasedSysPortForm;
+
+InitConnectionForm: PROCEDURE(pConn) POINTER CLEAN;
+
+DCL	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	pServer			POINTER,
+	networkType		BYTE,
+	portIndex		WORD,
+	i				BYTE;
+
+	token.len, token.dummy = connectionToken(0);
+	CALL MOVB(@connectionToken(1), @token.chars, connectionToken(0));
+	subToken.len, subToken.dummy = phonelinkToken(0);
+	CALL MOVB(@phonelinkToken(1), @subToken.chars, phonelinkToken(0));
+
+	networkType = connInfo.networkType;
+	pServer = connInfo.pServerInfo;
+
+	IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+	DO;
+		CALL BuildConnLabelsAndChoices(pServer, networkType);
+		CALL CopyString(connInfo.pPhoneNumber, @phoneNumber);
+		phoneNumberRow.currentChoice = GetNumberChoice(pServer, networkType,
+																@phoneNumber);
+		waitRow.currentChoice = 1;
+		waitRow.theData = connInfo.waitForAnswer;
+		costRow.currentChoice = connInfo.cost;
+		IF connInfo.dedicated THEN
+			dedicatedRow.currentChoice = yesChoice;
+		ELSE
+			dedicatedRow.currentChoice = noChoice;
+		IF connInfo.useAnyPort THEN
+			anyPortRow.currentChoice = yesChoice;
+		ELSE
+			anyPortRow.currentChoice = noChoice;
+		connNameRow.currentChoice = 1;
+		CALL CopyString(connInfo.pName, @connName);
+		RETURN @connForm;
+	END;
+	ELSE
+		DO;
+			leasedWaitRow.currentChoice = 1;
+			leasedWaitRow.theData = connInfo.waitForAnswer;
+			leasedCostRow.currentChoice = connInfo.cost;
+			IF connInfo.dedicated THEN
+				leasedDedicatedRow.currentChoice = yesChoice;
+			ELSE
+				leasedDedicatedRow.currentChoice = noChoice;
+			leasedConnNameRow.currentChoice = 1;
+			CALL CopyString(connInfo.pName, @leasedConnName);
+			RETURN @leasedConnForm;
+		END;
+
+END InitConnectionForm;
+
+$EJ
+/* Copy network form. */
+
+CopyNetForm: PROCEDURE(pServer, networkType) CLEAN;
+
+DCL	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networktype	BYTE,
+	i			BYTE;
+
+	DO CASE (networkType - 1);
+
+		DO;											/* Public */
+			serverInfo.isPublic = TRUE;
+			DO i = 0 TO 3;
+				IF serverInfo.pPubNumber(i) <> nullPtr THEN
+				DO;
+					CALL FreeString(@serverInfo.pPubNumber(i));
+					serverInfo.pPubNumber(i) = nullPtr;
+				END;
+			END;
+			i = 0;
+			IF phoneNumber1.len <> 0 THEN
+			DO;
+				serverInfo.pPubNumber(i) = CopyOfString(@phoneNumber1);
+				serverInfo.pubBaudChoice(i) = baudRate1Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber2.len <> 0 THEN
+			DO;
+				serverInfo.pPubNumber(i) = CopyOfString(@phoneNumber2);
+				serverInfo.pubBaudChoice(i) = baudRate2Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber3.len <> 0 THEN
+			DO;
+				serverInfo.pPubNumber(i) = CopyOfString(@phoneNumber3);
+				serverInfo.pubBaudChoice(i) = baudRate3Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber4.len <> 0 THEN
+			DO;
+				serverInfo.pPubNumber(i) = CopyOfString(@phoneNumber4);
+				serverInfo.pubBaudChoice(i) = baudRate4Row.currentChoice + 1;
+			END;
+		END;
+
+		DO;											/* Private */
+			serverInfo.isPrivate = TRUE;
+			DO i = 0 TO 3;
+				IF serverInfo.pPvtNumber(i) <> nullPtr THEN
+				DO;
+					CALL FreeString(@serverInfo.pPvtNumber(i));
+					serverInfo.pPvtNumber(i) = nullPtr;
+				END;
+			END;
+			i = 0;
+			IF phoneNumber1.len <> 0 THEN
+			DO;
+				serverInfo.pPvtNumber(i) = CopyOfString(@phoneNumber1);
+				serverInfo.pvtBaudChoice(i) = baudRate1Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber2.len <> 0 THEN
+			DO;
+				serverInfo.pPvtNumber(i) = CopyOfString(@phoneNumber2);
+				serverInfo.pvtBaudChoice(i) = baudRate2Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber3.len <> 0 THEN
+			DO;
+				serverInfo.pPvtNumber(i) = CopyOfString(@phoneNumber3);
+				serverInfo.pvtBaudChoice(i) = baudRate3Row.currentChoice + 1;
+				i = i + 1;
+			END;
+			IF phoneNumber4.len <> 0 THEN
+			DO;
+				serverInfo.pPvtNumber(i) = CopyOfString(@phoneNumber4);
+				serverInfo.pvtBaudChoice(i) = baudRate4Row.currentChoice + 1;
+			END;
+		END;
+
+		;	/* Not possible */
+	END;
+
+END CopyNetForm;
+
+/* Copy options form. */
+
+CopyOptionsForm: PROCEDURE CLEAN;
+
+	localAreaCode.dummy = localAreaCode.len;
+	CALL MOVB(@localAreaCode.dummy, @myAreaCode, localAreaCode.dummy + 1);
+	CALL RemoveParentheses(@myAreaCode);
+	longDistCode.dummy = longDistCode.len;
+	CALL MOVB(@longDistCode.dummy, @myLongDistCode, longDistCode.dummy + 1);
+	highSpeedThreshold = highSpeedRow.theData;
+	mediumSpeedThreshold = mediumSpeedRow.theData;
+	logFileSize = logFileSizeRow.theData;
+	IF logFileSize > 64 THEN logFileSize = 64;
+	ELSE
+		IF logFileSize < 1 THEN logFileSize = 1;
+
+END CopyOptionsForm;
+
+/* Copy connection form values. */
+
+CopyConnForm: PROCEDURE(pConn, pServer, networkType) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	networkType	BYTE,
+	pNumber		POINTER,
+	i			BYTE;
+
+	IF connInfo.pName <> nullPtr THEN CALL FreeString(@connInfo.pName);
+	IF connInfo.pPhoneNumber <> nullPtr THEN
+	DO;
+		CALL FreeString(@connInfo.pPhoneNumber);
+		connInfo.pPhoneNumber = nullPtr;
+	END;
+	DO i = 0 TO 3;
+		connInfo.port(i) = nullWord;
+	END;
+	connInfo.networkType = networkType;
+
+	IF (networkType = publicNetwork) OR (networkType = privateNetwork) THEN
+	DO;
+		pNumber = FindPhoneNumber(pServer, networkType,
+												phoneNumberRow.currentChoice);
+		IF pNumber <> nullPtr THEN
+			connInfo.pPhoneNumber = CopyOfString(pNumber);
+		ELSE
+			connInfo.pPhoneNumber = NewString(0);
+		connInfo.baudChoice = GetBaudChoice(pServer, networktype, pNumber);
+		connInfo.baudRate = baudTable(connInfo.baudChoice);
+		connInfo.waitForAnswer = waitRow.theData;
+		connInfo.cost = costRow.currentChoice;
+		connInfo.dedicated = (dedicatedRow.currentChoice = yesChoice);
+		connInfo.useAnyPort = (anyPortRow.currentChoice = yesChoice);
+		connInfo.pName = CopyOfString(@connName);
+	END;
+	ELSE
+		DO;										/* Leased */
+			connInfo.baudChoice = baudExternal;
+			connInfo.baudRate = baudTable(connInfo.baudChoice);
+			connInfo.waitForAnswer = leasedWaitRow.theData;
+			connInfo.cost = leasedCostRow.currentChoice;
+			connInfo.dedicated = (leasedDedicatedRow.currentChoice = yesChoice);
+			connInfo.useAnyPort = FALSE;
+			connInfo.pName = CopyOfString(@leasedConnName);
+		END;
+
+END CopyConnForm;
+
+/* Copy system port form. */
+
+CopySysPortForm: PROCEDURE(pConn) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	temp		WORD,
+	i			BYTE,
+	j			BYTE;
+
+	DO i = 0 TO 3;
+		connInfo.port(i) = nullWord;
+	END;
+	j = 0;
+	DO i = 0 TO 3;
+		IF systemPortRow(i).currentChoice <> noPort THEN
+		DO;
+			temp = plMap(systemPortRow(i).currentChoice - 2);
+			plMap(systemPortRow(i).currentChoice - 2) = nullWord;
+			IF temp <> nullWord THEN
+			DO;
+				connInfo.port(j) = temp;
+				j = j + 1;
+			END;
+		END;
+	END;
+
+END CopySysPortForm;
+
+/* Copy port form values. */
+
+CopyPortForm: PROCEDURE(portIndex) CLEAN;
+
+DCL	portIndex	BYTE;
+
+	portInfo(portIndex).protocol = phonelink;
+	IF cardInfo(portIndex/4).memSize > 1 THEN
+		portInfo(portIndex).phonelinkType = phonelinkTypeRow.currentChoice;
+	ELSE
+		portInfo(portIndex).phonelinkType = answerOnlyPdl;
+	portInfo(portIndex).lineType = lineTypeRow.currentChoice;
+	portInfo(portIndex).baudChoice = baudRateRow.currentChoice;
+	IF baudRateRow.currentChoice = baudEdit THEN
+		portInfo(portIndex).baudRate = baudRateRow.theData;
+	ELSE
+		portInfo(portIndex).baudRate = baudTable(baudRateRow.currentChoice);
+	portInfo(portIndex).modemType = modemTypeRow.currentChoice;
+	portInfo(portIndex).dialingMode = dialingModeRow.currentChoice;
+	portInfo(portIndex).dialType = dialTypeRow.currentChoice;
+	portInfo(portIndex).lineKind = prefixRow.currentChoice;
+	IF portInfo(portIndex).lineKind = internalLine THEN
+	DO;
+		prefix.dummy = prefix.len;
+		CALL MOVB(@prefix.dummy, @portInfo(portIndex).prefix(0),
+															prefix.dummy + 1);
+	END;
+	ELSE
+		portInfo(portIndex).prefix(0) = 0;
+
+END CopyPortForm;
+
+/* Copy port form values to save area. */
+
+CopyPortFormToSave: PROCEDURE(portIndex) CLEAN;
+
+DCL	portIndex	BYTE,
+	portNum		BYTE;
+
+	portNum = portIndex MOD 4;
+	portInfoSave(portNum).protocol = phonelink;
+	portInfoSave(portNum).phonelinkType = phonelinkTypeRow.currentChoice;
+	portInfoSave(portNum).lineType = lineTypeRow.currentChoice;
+	portInfoSave(portNum).baudChoice = baudRateRow.currentChoice;
+	IF baudRateRow.currentChoice = baudEdit THEN
+		portInfoSave(portNum).baudRate = baudRateRow.theData;
+	ELSE
+		portInfoSave(portNum).baudRate = baudTable(baudRateRow.currentChoice);
+	portInfoSave(portNum).modemType = modemTypeRow.currentChoice;
+	portInfoSave(portNum).dialingMode = dialingModeRow.currentChoice;
+	portInfoSave(portNum).dialType = dialTypeRow.currentChoice;
+	portInfoSave(portNum).lineKind = prefixRow.currentChoice;
+	IF portInfoSave(portNum).lineKind = internalLine THEN
+	DO;
+		prefix.dummy = prefix.len;
+		CALL MOVB(@prefix.dummy, @portInfoSave(portNum).prefix(0),
+															prefix.dummy + 1);
+	END;
+	ELSE
+		portInfoSave(portNum).prefix(0) = 0;
+
+	portInfoSave(portNum).allocated = portInfo(portIndex).allocated;
+	portInfoSave(portNum).activateWait = portInfo(portIndex).activateWait;
+	portInfoSave(portNum).doSearch = portInfo(portIndex).doSearch;
+	portInfoSave(portNum).portNum = portInfo(portIndex).portNum;
+	portInfoSave(portNum).userPid = portInfo(portIndex).userPid;
+	portInfoSave(portNum).pConnInfo = portInfo(portIndex).pConnInfo;
+
+END CopyPortFormToSave;
+
+$EJ
+/* Create the config file. */
+
+CreateConfigFile: PROCEDURE(pError) CLEAN;
+
+DCL	pError		POINTER,
+	error		BASED pError WORD,
+	dummy		WORD,
+	conn		WORD,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pConnForm	POINTER,
+	i			WORD,
+	j			WORD,
+	hasForm		BOOLEAN;
+
+	conn = AttachAndOpen(@configFile, updateFile, updateAccess, @error);
+	IF error <> eOk THEN
+		RETURN;
+
+	CALL InitPasswordForm;
+	error = WriteToken(conn, @token, nullPtr);
+	IF error = eOk THEN
+		error = WriteFormValues(conn, @passwordForm);
+	IF error <> eOk THEN GOTO procExit;
+
+	CALL InitOptionsForm;
+	error = WriteToken(conn, @token, nullPtr);
+	IF error = eOk THEN
+		error = WriteFormValues(conn, @optionsForm);
+	IF error <> eOk THEN GOTO procExit;
+
+	DO i = 0 TO 7;
+		IF cardInfo(i).configured THEN
+		DO;
+			CALL InitCardToken(i);
+			error = WriteToken(conn, @token, @subToken);
+			IF error = eOk THEN
+			DO;
+				j = 0;
+				DO WHILE (j <= 3) AND (error = eOk);
+					CALL InitPortForm(i, j, @hasForm);
+					error = WriteToken(conn, @token, nullPtr);
+					IF (error = eOk) AND hasForm THEN
+						error = WriteFormValues(conn, @portInfoForm);
+					j = j + 1;
+				END;
+			END;
+		END;
+		IF error <> eOk THEN GOTO procExit;
+	END;
+
+	pServer = pServerInfo;
+	DO WHILE pServer <> nullPtr;
+		CALL InitServerToken(pServer);
+		error = WriteToken(conn, @token, @subToken);
+		IF error = eOk THEN
+		DO;
+			IF serverInfo.pComment = nullPtr THEN comment.len = 0;
+			ELSE
+				CALL CopyString(serverInfo.pComment, @comment);
+			commentRow.currentChoice = 1;
+			error = WriteFormValues(conn, @commentForm);
+			IF (error = eOk) AND serverInfo.isPublic THEN
+			DO;
+				CALL InitNetForm(pServer, publicNetwork);
+				error = WriteToken(conn, @token, @subToken);
+				IF error = eOk THEN
+					error = WriteFormValues(conn, @netForm);
+			END;
+			IF (error = eOk) AND serverInfo.isPrivate THEN
+			DO;
+				CALL InitNetForm(pServer, privateNetwork);
+				error = WriteToken(conn, @token, @subToken);
+				IF error = eOk THEN
+					error = WriteFormValues(conn, @netForm);
+			END;
+			IF error = eOk THEN
+			DO;
+				pConn = serverInfo.pConnInfo;
+				DO WHILE (pConn <> nullPtr) AND (error = eOk);
+					pConnForm = InitConnectionForm(pConn);
+					error = WriteToken(conn, @token, @subToken);
+					netTypeRow.currentChoice = connInfo.networkType;
+					IF error = eOk THEN
+						error = WriteFormValues(conn, @netTypeForm);
+					IF error = eOk THEN
+						error = WriteFormValues(conn, pConnForm);
+					IF (error = eOk) AND
+							((connInfo.networkType = leasedNetwork) OR
+											(NOT connInfo.useAnyPort)) THEN
+					DO;
+						CALL InitSysPortForm(pConn, connInfo.baudChoice);
+						error = WriteFormValues(conn, @sysPortForm);
+					END;
+					pConn = connInfo.pNext;
+				END;
+			END;
+		END;
+		IF error <> eOk THEN GOTO procExit;
+		pServer = serverInfo.pNext;
+	END;
+
+	CALL OsTruncate(conn, @error);
+
+procExit:
+	CALL OsDetach(conn, @dummy);
+
+END CreateConfigFile;
+
+$EJ
+/* Customizing connections. */
+
+CustomizeConnections: PROCEDURE(pCh, pError) CLEAN;
+
+DCL pCh			POINTER,
+	ch			BASED pCh BYTE,
+	pError		POINTER,
+	error		BASED pError WORD,
+	confirmed	BOOLEAN,
+	selection	WORD;
+
+	confirmed = RemoteDataMenuConfirmed(remConn, @connMenu,
+			@('Customize connections: Select item and confirm'),
+													@selection, @ch, @error);
+	CALL RemoteMsgClearMessage(remConn);
+	IF error <> eOk THEN
+		CALL LogError(error, 1614, attentionOff);
+
+	IF (error = eOk) AND (ch = confirmKey) THEN
+	DO CASE (selection - 1);
+		CALL AddConnection(@ch, @error);			/* Add connection. */
+
+		CALL ModifyConnection(FALSE, @ch, @error);	/* Modify connection. */
+
+		CALL ModifyConnection(TRUE, @ch, @error);
+										/* Modify inconsistent connection. */
+
+		CALL EraseConnection(FALSE, @ch, @error);	/* Erase connection. */
+
+		CALL EraseConnection(TRUE, @ch, @error);
+										/* Erase inconsistent connection. */
+	END;
+
+END CustomizeConnections;
+
+$EJ
+/* Main program. */
+
+Main: PROCEDURE CLEAN;
+
+DCL	error		WORD,
+	pid			WORD,
+	dummy		WORD,
+	selection	WORD,
+	ch			BYTE,
+	done		BOOLEAN,
+	confirmed	BOOLEAN,
+	pStr		POINTER,
+	str			BASED pStr stringType,
+	pMsg		POINTER,
+	msg			BASED pMsg stdMessage;
+
+	CALL OsHandleCancel(FALSE);
+$IF NOT compassMode
+	CALL OsGetCardStatus(nullWord, @dummy, SIZE(dummy), @error);
+$ENDIF
+
+	/* Set priority. */
+
+	CALL OsSetPriority(OsWhoAmI, nmMainPriority, @error);
+
+	/* Allocate and initialize access semaphore. */
+
+	accessSema = OsCreateSemaphore(@error);
+	IF error = eOk THEN
+		CALL OsSignal(accessSema, signalNormal, 0, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1615, attentionOn);
+		CALL OsExit(0);
+	END;
+
+	CALL GetMyServerName(@error);
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1616, attentionOn);
+		myServerName.len, myServerName.dummy = 0;
+	END;
+
+	changed = FALSE;
+	CALL InitForms;
+	CALL InitConfig;
+	IF NOT ReadConfigFile(FALSE, @error) THEN	/* don't log eFileNotFound */
+	DO;
+		CALL InitConfig;
+		IF (error = eFileNotFound) OR (error = eDirNotFound) THEN
+		DO;
+			IF NOT ReadOldConfigFile(@error) THEN
+				CALL CreateDefaultConfigInfo;
+			CALL CreateConfigFile(@error);
+			IF error <> eOk THEN
+				CALL LogError(error, 1617, attentionOn);
+		END;
+		ELSE
+			CALL CreateDefaultConfigInfo;
+	END;
+	CALL SetPortSearchOrder;
+	consistent = CheckConsistency(nullPtr);
+
+	/* Initialize log file */
+
+	pLogStr = nullPtr;
+	logConn = LogInitLog(@logFile, logFileSize, TRUE, TRUE, TRUE, @error);
+	IF error <> eOk THEN
+		CALL LogError(error, 1618, attentionOn);
+
+	CALL CreateConfig(@error);	/* Create comm configuration. */
+
+$IF NOT compassMode
+	CALL OsRegisterName(@nmConfigName, OsWhoAmI, unRegisterName,@error);
+	CALL OsRegisterName(@nmConfigName, OsWhoAmI, registerName, @error);
+	IF error <> eOk THEN
+		CALL LogError(error, 1619, attentionOn);
+$ENDIF
+	pid = OsForkProcess(@InterfaceProc, nmIfPriority, FALSE,
+														nmIfStackSize, @error);
+	CALL OsDelay(500);
+	IF error <> eOk THEN
+		CALL LogError(error, 1620, attentionOn);
+
+	/* Initialization complete - print version and go to background. */
+
+	pStr = 	ConcatStrings(GetVersionString(OsWhoAmI),
+								NewStringLit(@(' of GRiDNetwork Manager')));
+	CALL MOVB(@str.chars, @nmVersion, str.len);
+	nmVersion(str.len) = '';
+	CALL GetAccess(@dummy);
+	CALL LogString(pStr);
+	CALL LogRealConfig;			/* Log the actual configuration. */
+	CALL FreeAccess(@dummy);
+
+$IF NOT compassMode
+	CALL TellMessageWaiters(OsWhoAmI, eStayingInBackGround);
+$ENDIF
+
+	DO WHILE TRUE;
+
+		done = FALSE;
+		DO WHILE NOT done;
+			userIdBufferLen = SIZE(userIdBuffer);
+			remConn = RemoteConnectToInterface(@userClass, @userIdBuffer,
+							@userIdBufferLen, nullPtr, 0, @pMsg, @error);
+			IF error = eOk THEN
+			DO;
+				CALL GetAccess(@dummy);
+				CALL LogConnect;
+				CALL FreeAccess(@dummy);
+				ch = confirmKey;
+				IF (error = eOk) AND
+								(userClass <> systemAdministratorClass) THEN
+				DO WHILE (error = eOk) AND (NOT done) AND (ch = confirmKey);
+					done = GoodPassword(@ch, @error);
+					IF (error = eOk) AND (NOT done) AND (ch = confirmKey) THEN
+					DO;
+						CALL GetAccess(@dummy);
+						CALL LogString(NewStringLit(@('Illegal password')));
+						CALL FreeAccess(@dummy);
+						CALL RemoteMsgShowLitError(remconn,
+									@('Password incorrect, please reenter'));
+					END;
+				END;
+				ELSE
+					IF userClass = systemAdministratorClass THEN
+						done = TRUE;
+				IF NOT done THEN
+					CALL RemoteDisconnectInterface(remConn, error, @dummy);
+			END;
+			ELSE
+				IF error = eRmFormsUnknownMsg THEN
+				DO;
+					CALL GetAccess(@dummy);
+					CALL LogBadReq(pMsg);
+					CALL FreeAccess(@dummy);
+					IF msg.toBeFreed THEN
+						CALL OsFree(pMsg, @error);
+				END;
+			IF error <> eOk THEN
+				CALL LogError(error, 1621, attentionOff);
+		END;
+
+		done = FALSE;
+		curSystemChoice, curConnChoice = 1;
+		pCurSystem, pCurConn = nullPtr;
+		modConnWarning, eraseConnWarning = FALSE;
+		CALL RemoteMsgClearMessage(remConn);
+		DO WHILE (NOT done) AND (error = eOk);
+
+			IF modConnWarning THEN
+			DO;
+				modConnWarning = FALSE;
+				CALL RemoteMsgStackLitMessage(remConn,
+							@('WARNING: Active connection was modified'));
+			END;
+			IF eraseConnWarning THEN
+			DO;
+				eraseConnWarning = FALSE;
+				CALL RemoteMsgStackLitMessage(remConn,
+							@('WARNING: Active connection was erased'));
+			END;
+			IF needsToReboot THEN
+				CALL RemoteMsgStackLitMessage(remConn,
+											@('Server needs to be restarted'));
+			IF NOT consistent THEN
+				CALL RemoteMsgStackLitMessage(remConn,
+						@('WARNING: Connection(s) affected by configuration'));
+
+			CALL RemoteMsgStackLitMessage(remConn, @nmVersion);
+			confirmed = RemoteDataMenuConfirmed(remConn, @mainMenu,
+							@('Commands: Select item and confirm'),
+													@selection, @ch, @error);
+			CALL RemoteMsgClearMessage(remConn);
+			IF error <> eOk THEN
+			DO;
+				CALL LogError(error, 1622, attentionOff);
+				GOTO loopExit;
+			END;
+doSelection:
+			IF ch <> confirmKey THEN
+			DO;
+				selection = noSelection;
+				IF ch = eraseKey THEN
+					selection = eraseServerSelection;
+				ELSE
+					IF ch = optionsKey THEN
+						selection = optionsSelection;
+				ELSE
+					IF ch = transferKey THEN
+						selection = transferSelection;
+				ELSE
+					IF ch = quitKey THEN
+						selection = quitSelection;
+				ELSE
+					IF ch = cancelKey THEN
+						selection = cancelSelection;
+				IF selection <> noSelection THEN
+					ch = confirmKey;
+				ELSE
+					GOTO loopExit;
+			END;
+
+			IF ch = confirmKey THEN
+			DO CASE (selection - 1);
+
+				CALL ConfigureCommCard(@ch, @error);	/* Configure card. */
+
+				CALL DefineServer(@ch, @error);			/* Add server. */
+
+				CALL CustomizeConnections(@ch, @error);	/* Change connections.*/
+
+				CALL DoChangePassword(@ch, @error);		/* Change password. */
+
+				CALL EraseServer(@ch, @error);			/* Erase server. */
+
+				CALL EditOptions(@ch, @error);			/* Edit options. */
+
+				CALL DoTransfer(@ch, @error);			/* Transfer commands. */
+
+				done = DoQuit(@ch, @error);				/* Quit. */
+
+				done = DoCancel(@ch, @error);			/* Cancel. */
+			END;
+
+			IF (error = eOk) AND (ch <> confirmKey) THEN
+				GOTO doSelection;
+loopExit:
+		END;
+		CALL RemoteDisconnectInterface(remConn, error, @dummy);
+		CALL GetAccess(@dummy);
+		IF changed THEN
+		DO;
+			CALL LogString(NewStringLit(
+				@('Configuration aborted - changes not saved')));
+			CALL DeallocateData;
+			CALL InitConfig;
+			dummy = ReadConfigFile(TRUE, @error); /* log eFileNotFound */
+			changed, needsToReboot = FALSE;
+		END;
+		ELSE
+			CALL LogString(NewStringLit(@('Configuration ended')));
+		CALL FreeAccess(@dummy);
+	END;
+END Main;
+
+CALL Main;
+CALL OsExit(0);
+
+END NMConfigMain;

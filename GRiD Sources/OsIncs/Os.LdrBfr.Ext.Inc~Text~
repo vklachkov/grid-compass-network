@@ -1,0 +1,48 @@
+
+/* This is Os.LdrBfr.Ext.Inc */
+
+InitBuffer: PROC (namePtr) EXTERNAL;
+  DCL namePtr PTR;
+  END;
+
+Skip: PROC (count) EXTERNAL;
+  DCL count   WORD;
+  END;
+
+Rewind: PROC EXTERNAL;
+  END;
+
+IgnoreRecord: PROC EXTERNAL;
+  END;
+
+SumBytes: PROC (num) EXTERNAL;
+  DCL num WORD;
+  END;
+
+GetByte: PROC BYTE EXTERNAL;
+  END;
+
+GetWord: PROC WORD EXTERNAL;
+  END;
+
+VerifyCheckSum: PROC EXTERNAL;
+  END;
+
+GetIndex: PROC WORD EXTERNAL;
+  END;
+
+GetBase: PROC PTR EXTERNAL;
+  END;
+
+LoaderException: PROCEDURE (code) EXTERNAL;
+  DCL code     WORD;
+  END;
+
+GetName: PROCEDURE (pName) EXTERNAL;
+  DCL pName    PTR;
+  END;
+
+SeekAndRead: PROCEDURE (mode, position) EXTERNAL;
+  DCL mode     BYTE;
+  DCL position DWORD;
+  END;

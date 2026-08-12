@@ -1,0 +1,31 @@
+CpSetInterrupt: PROCEDURE (interruptId, pRoutine) POINTER EXTERNAL;
+   DCL interruptId BYTE;
+   DCL pRoutine POINTER;
+   END;
+
+CpEnableInterrupt: PROCEDURE (interruptId, mode) EXTERNAL;
+   DCL (interruptId, mode) BYTE;
+   END;
+
+CpDisableInterrupt: PROCEDURE (interruptId) EXTERNAL;
+   DCL interruptId BYTE;
+   END;
+
+CpEndOfInterrupt: PROCEDURE (interruptId) EXTERNAL;
+   DCL interruptId BYTE;
+   END;
+
+CpMachineID: PROCEDURE (pBuf) EXTERNAL;
+   DCL pBuf POINTER;
+   END;
+
+CpAddressOf: PROCEDURE POINTER EXTERNAL;
+   END;
+
+CpSystemTick: PROCEDURE (mode) WORD EXTERNAL;
+   DCL mode BYTE;
+   END;
+
+CpFree: PROCEDURE (pMem, pError) EXTERNAL;
+   DCL (pMem, pError) PTR;
+   END;

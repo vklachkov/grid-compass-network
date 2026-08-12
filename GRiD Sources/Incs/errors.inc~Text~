@@ -1,0 +1,543 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+Errors.Inc:
+
+Author: Rajendra Shah
+
+This file contains list of
+
+	o Constants for error numbers used by various pieces of GRiD Server and 
+	  Grid Central related software.  
+
+	o errors used otherwise on compass and usually found in Os.Error.Inc.
+
+    o Errors used in boot up Diagnostics.
+
+
+Only few of the errors listed here have a descriptive message in the 
+'@SystemErrors~text~' file used on Compass and GRiD Server.  Those errors have
+a '$' in front of their comments.   These are the errors which may be seen by 
+applications running on Compass.
+
+Rest of the errors are used internally by server related software packages.  
+This packages use these errors to display their own messages, or log them to 
+the diagnostic display and/or the 'Errorlog~text~' file.
+
+You many find in this file
+
+	- error codes that are never used.
+	- multiple error codes for the same kind of error.
+	- an error code that does not make sense.
+
+As you notice them, please let me know so that it can be cleaned up in future.
+
+
+GRiD Server Developers Please note:
+
+This file is organised in the form of a a plm include file.  If you wish to use
+only the GRiD Server & GRiD central related constants, you can simply include 
+the file if you do not use a compilation variable named 'IncludeOsConstants'.
+If you also want to use the constants for normal compass error (those usually found
+in Os.Error.Inc) include this file after setting a compile time variable named 
+'IncludeOsConstants' as follows:
+
+		$SET (IncludeOsConstants)
+		$INCLUDE (`w`Incs`Errors.Inc)
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+
+$EJECT
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+
+The current block assignments that are relevant to us folks are:
+
+0-299		Os & File System Errors
+300-399		Loader Errors
+400-449		Modem Errors
+450-500		GPIB Errors
+600-649		Grid Central General Errors 
+655-799		Irrecoverable Data Link Errors
+800-899		VIPC Errors
+900-999		VFS Errors
+1000 - 1099   Admin & User Validation.
+1100 - 1149   Spooler errors.
+1150 - 1199   GRiD Server General Errors
+1200 - 1249   Recoverable data link errors
+1250 - 1299	  Interceptor (MsDos GRiDLink, MsDos Phonelink) Errors 
+1300 - 1349   Tape Backup Errors.
+1350 - 1399   Backup and Restore & Sentry.
+1400 - 1499   Remote Backup
+1500 - 1549   Remote forms & menus Errors.
+
+1600 - 1699   ComConfigurator & Network manager
+^BO1700 - 1899	  GRiDServer Terminal Interface.
+1800 - 1899	  Mail Truck Errors.
+1900 - 1999	  Broadcast Manager Errors
+2100 - 2299   Post Office Errors^BO
+
+
+2300 - 8999   reserved for server appliacations
+
+
+Clearing House Function for erorr Codes is Provided by: 
+
+			 Rajendra Shah & Phil Ydens
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+$EJECT
+$IF IncludeOsConstants
+
+DCL eOverFlow 				LIT '8001h';	/* integer overflow		*/
+DCL eZeroDivide 			LIT '8000h';	/* divide by zero		*/
+DCL eArrayBounds 			LIT '8006h';	/* bounds check violation   */
+DCL eNDP 					LIT '8007h';	/* 8087 detected error	*/
+
+/* uts reserves 	1100h to 15ffh			*/
+/* Unavoidable conditions (high bit is off) */
+
+/* system errors */
+
+DCL eOK 					LIT '0';		/* no error					*/
+DCL eVersion				LIT '12';		/* version incompatability 	*/
+DCL ePassword 				LIT '27';		/* password protected		*/
+DCL eCheckSum 				LIT '29';		/* checksum error			*/
+DCL eLocked 				LIT '30';		/* file is locked			*/
+DCL eBadPointer 			LIT '31';		/* bad pointer				*/			
+DCL eNotSupport 			LIT '35';		/* request not supported	*/
+DCL eAccess 				LIT '38';		/* file access denied		*/
+DCL eShare 					LIT '40';		/* file can't be shared		*/
+DCL eInvString 				LIT '129';		/* invalid string			*/
+
+/* memory manager errors */
+
+DCL eOutOfMem 				LIT '2';		/* out of memory			*/
+DCL eInvMemBlock 			LIT '11';		/* invalid memory block	*/
+
+/* file system errors	*/
+
+DCL eFileExists 			LIT '32';		/* file already exists	*/
+DCL eFileNotFound 			LIT '33';		/* file does not exist	*/
+DCL eDeviceFull 			LIT '41';		/* device full			*/
+DCL eProtectError 			LIT '49';		/* software protection error*/
+DCL eInvFileID 				LIT '200';		/* invalid file ID		*/
+DCL eInvFileFSN 			LIT '201';		/* invalid file FSN		*/
+DCL eFileNotOpen 			LIT '205';		/* file not open			*/
+DCL eCrossFS 				LIT '220';		/* cross volume rename	*/
+DCL eBadConn 				LIT '221';		/* bad connection		*/
+DCL eOpen 					LIT '222';		/* file shouldn't be open   */
+DCL eParam 					LIT '225';		/* bad parameter			*/	
+DCL eBadPath 				LIT '227';		/* syntax error			*/
+DCL eTooManyDev 			LIT '229';		/* too many devices		*/
+DCL eDevActive 				LIT '230';		/* device already active	*/
+DCL eDevNotActive 			LIT '231';		/* device not active		*/
+DCL eInvDirectory 			LIT '232';		/* invalid directory format */
+DCL eInvBitMap 				LIT '233';		/* invalid bitmap format	*/
+DCL eDirNotFound 			LIT '234';		/* directory not found	*/
+	
+/* device driver errors		*/
+
+DCL eInvalidDrive 			LIT '101';		/* invalid drive					*/
+DCL eInvalidSector 			LIT '102';		/* invalid sector					*/
+DCL eCRCData 				LIT '103';		/* CRC error in data				*/
+DCL eRecordNotFound 		LIT '104';		/* Authorization record not found	*/
+DCL eCRCID 					LIT '105';		/* CRC error in ID field			*/
+DCL eWriteProtect 			LIT '106';		/* device write protected   		*/
+DCL eDevNotReady 			LIT '107';		/* device not ready					*/
+DCL eOther 					LIT '108';		/* unknown error					*/
+DCL eHardwareMissing		LIT '150';		/* Hardware mising or incorrect switch setting */
+
+/* loader errors			*/
+
+DCL eInvRec 				LIT '300'; 
+DCL eInvFld 				LIT '301'; 
+DCL eInvMod 				LIT '302'; 
+DCL eInvBas 				LIT '303'; 
+DCL eInvFix 				LIT '304'; 
+
+/* multi-tasking errors			*/
+
+DCL eTooManyProc 			LIT '250';		/* too many processes	*/
+DCL eProcNotExist 			LIT '251';		/* process does not exist   */
+DCL eSemaNotExist 			LIT '252';		/* semaphore does not exist */
+DCL eTimeOut 				LIT '253';		/* request timed out		*/
+DCL eSemaBusy 				LIT '254';		/* the semaphore is busy	*/
+DCL eTooManyMsgs			LIT '255';		/* 255 messages currently queued */
+DCL eStayingInBackground	LIT '257';		/* not an error - going in background */
+
+/* modem errors  */
+
+DCL eModNotAnswer 			LIT '400'; 
+DCL eModTimeOut 			LIT '401'; 
+DCL eModLossCarrier 		LIT '402'; 
+DCL eModParity 				LIT '403'; 
+DCL eModCrc 				LIT '404'; 
+DCL eModBadLength 			LIT '405'; 
+DCL	eModBadPhoneNumber		LIT '406';
+DCL	eModNotActive			LIT '407';
+
+/* GPIB errors */
+
+DCL eGPIBBus 				LIT '450'; 
+DCL eGPIBTimeOut 			LIT '451'; 
+DCL eGPIBNotResp 			LIT '452'; 
+
+$ENDIF
+$EJECT
+DECLARE 	/* Peripheral Disk Errors */
+
+eECCData					LIT	'109',		/*   ??? */
+eECCID						LIT	'110',		/*   ??? */
+eNoIndex					LIT	'111',		/*	 ??? */
+eNoSeekComplete				LIT	'112',		/*	 ??? */
+eWriteFault					LIT	'113',		/*	 ??? */
+eNoTrack0					LIT	'114',		/*	 ??? */
+eNoAM						LIT	'115',		/*	 ??? */
+eSeekError					LIT	'116',		/*	 ??? */
+eFormatError				LIT	'117',		/*	 ??? */
+eInvalidState				LIT	'118',		/*	 Peripheral bus transfer failed */
+eCacheAllocated				LIT	'119',		/*	 Tried to allocate twice more than once */
+eInvalidBufferCount			LIT	'120';		/*	 Buffer count request invalid */
+
+DECLARE 	/* 600-649	GRiD Central General Errors */
+
+eGCIntError					LIT '600',		/*   Internal GRiD Central Error */
+eGCRscUnav					LIT	'601',		/*   GRiD Central Resource Unavaiable */
+eGCNotNow					LIT	'602',		/*   System Degraded - cannot add users */
+eNoSubCompany				LIT '603';		/*   Company Does not exist */
+
+DECLARE		/* 650-799	Irrecoverable Data Link Errors */
+
+eDlcProtocolError			LIT '700',		/*   Data Link Protocol Error */
+eDlcServerNotResponding		LIT '701',		/* $ No response or poll from server */
+eDlcPollTimeOut				LIT '701',		/*		same as above */
+eDlcActivityTimeout			LIT '702', 		/* $ Data Link Activity TimeOut */
+eDlcSendTimeOut				LIT '703',		/*   Data Link Send TimeOut */
+eDlcTooManyRetries			LIT '704',		/* $ Data Link Send Failure: Too many retries */
+eDlcFramingError			LIT '705',		/*   Data Link Framing Error */
+eDlcRemoteDisconnect		LIT '706',		/* $ Received Disconnect */
+eDlcLocalDisconnect			LIT '707',		/*   Data Link was locally Disconnected */
+eDlcNotRunning				LIT '708',		/*   Data Link is not running */
+eDlcLostPhysicalConn		LIT '709',		/* $ Data Link had lost physical connection */
+
+eDlcInvalidRequest			LIT '715',		/*   Dlc I/O request unknown or incorrect */
+eDlcAborted					LIT '717',		/*   Dlc I/O req has been aborted */
+eDlcLinkFailure				LIT '718',		/*   Link conn dropped due to system error */
+eDlcRemoteReset				LIT '719',		/*   Link conn dropped and re-connected */
+eDlcRemoteClosed			LIT '720',		/*   Link conn disconnected by remote */
+eDlcNoIoSemaphore			LIT '721',		/*   Data link Internal Error */
+eDlcResponseTimeOut			LIT '722',		/*   Poll response timed out */
+eDlcInvalidRecvdNs			LIT '723',		/*   SDLC send sequence   is bad */
+eDlcInvalidRecvdNr			LIT '724',		/*   SDLC rcv  sequence   is bad */
+eDlcUnproductiveRecv		LIT '725',		/*   frame repeatedly received and acked */
+eDlcUnproductiveSend		LIT '726',		/*   length error in received packet */
+eDlcBadLength				LIT '727',		/*   unknown or invalid control field */
+
+eDlcInvalidLinkNumber		LIT '730',		/*   reference to link   > max */
+eDlcInvalidStationNumber 	LIT '731',		/*   reference to station   > max */
+eDlcStationAlreadyExists 	LIT '732',		/*   link connection already established */
+eDlcTooManyStations			LIT '733',		/* $ too many stations on link */
+eDlcInvalidProtocolType 	LIT '735',		/*   configuration error:  
+												 different protocol loaded then asked for */
+eDlcAlreadyConfigured		LIT '740',		/*   Data link is already configured */
+eDlcAckWithoutSend			LIT '741',		/*   Received Ack without send */
+eDlcInvalidConnection		LIT '742',		/*   Invalid Data Link connection */
+eDlcRcvdInvalidAck			LIT '743',		/*   Received Invalid Ack */
+eDlcLocalClosed				LIT '745',		/*   Data Link was locally closed */
+eDlcLinkNotConfigured		LIT '746',		/*   Data link is not configured */
+eDlcRetriesExhausted 		LIT '750',		/*   Data link too many retries */
+eDlcBufferTooSmall			LIT '751',		/*   Bisync driver: bfr too small for pkt rcvd */
+eDlcRVIReceived				LIT	'752',		/*   Bisync: received reverse interrupt code */
+eDlcConReply				LIT '753';		/*	 Bisync: received conversational reply */
+
+DECLARE		/* 800-899	IPC Errors */
+
+eIpcProtocolError			LIT '800',		/*   IPC Protocol Error */
+eUserNotSignedON			LIT '801',		/* $ User Not signed On */
+eUserAlreadySignedOn		LIT '802',		/* $ User already signed on */
+eMessageTooLong				LIT '803',		/* $ IPC Message too long */
+eTooManyIPCConnections		LIT '804',		/* $ Too many IPC connections */
+eTooManyIPCUsers			LIT '805',		/* $ Too many users of IPC */
+eResourceNotFound			LIT '806',		/* $ Resource not found on Server */
+eProcessDisconnected		LIT '807',		/*   ??? */
+eInvalidUser				LIT '808',		/*   ??? */
+eInvalidPathID				LIT '809',		/*	 no connection exists for dest PID */
+eSignonRequestCancelled		LIT '810',		/* $ Code-ESC hit during signon */
+eBadMsgType					LIT '811',		/*	 Unknown Ipc Msg Code */
+
+eSignoffIncomplete			LIT '813',		/*   ipc connections open, sign off done, but device not removed */
+
+eMsgChecksum				LIT '815';		/*   Checksum error on intercard msg */
+
+DECLARE		/* 900-999  VFS (Disk Manager) Errors */
+
+eVfsProtocolError			LIT '900',		/*   Vfs Protocol Error */
+eInvalidConfigDCL			LIT '901',		/*   Configuration file is incorrect */
+eTooManyAttachedFiles		LIT '902',		/* $ Too many files attached on the server */
+eSetStatusRespError			LIT '903',		/*   error received during setstatus on connect */
+eFSConnNotFound				LIT '904',		/*   File System Connection not found */
+eInvalidAttributes			LIT '905',		/* $ Invalid access for given authorization class */  
+eServerNameNotFound			LIT '906',		/*   Server name not found */
+eInvalidUserClass			LIT '907',		/* $ Invalid User class */
+eInvalidDeviceName			LIT '908',		/*   Invalid device name */
+eDeviceNotFound				LIT '909',		/*   Device not found or not defined */
+eOpenErrorInDir				LIT '910',		/*   Open error in directory processing */
+eRWErrorInDIr				LIT '911',		/*   read/write error in directory processing */
+eInvalidAttachMode			LIT '912',		/*   invalid mode on attach to directory*/
+eInvalidAccessOnLink		LIT '913',		/*   Invalid Access Through Link */
+eInBoxAccess				LIT '914',		/*   Cannot update/create file in InBOX */
+eSharedFileNotFound			LIT '915',		/*   Shared file not found */
+eCannotLinkToDir			LIT '916',		/*   cannot link to a directory */
+eInvalidOpOnSharedFile		LIT '917',		/*   invalid operation on shared file */
+eRenameInvalidLevel			LIT '918',		/*   rename to invalid file level */
+eSubjectNotEmpty			LIT '919',		/* $ cannot erase: subject not empty */
+eFileNotDir					LIT '920',		/*   Invalid access:file not a directory*/
+eBadAccess					LIT '921',		/*   Only read access in object mode */
+eOutOfFsResources			LIT '922',		/*   Insufficient Fs resources */
+eNameTooLong				LIT '923',		/*   Name too long: > 80 characters */
+eVfsBadResponseType			LIT '924',		/*   Vfs Bad Response Type Field */
+eInvalidOpOnArchFiles		LIT '925',		/*   Operation invalid On Archived files*/
+eNotSupportedInByteMode		LIT '926',		/*   Reqeust not supported in byte mode */
+eReadOnlyInObjectMode		LIT '927',		/*   Read only for object mode */
+eFSInternalError			LIT '928',		/*   File System Internal Error */
+eVfsIsStillDoingIt			LIT '929',		/*   File System Request is being processed */
+eWriteToReadOnlyFile		LIT '930',		/*   wr(rd) attempt on rd(wr) only file */
+
+eResourceNameUnique			LIT '932',		/*   Resource names must be unique */
+eQueueAttachesExist			LIT '933',		/*   Cannot Delete context, files attached */
+eQueueElementNotExist		LIT '934',		/*   Control block for alias user not found */
+
+eVfsLinkConsistencyError	LIT	'950',		/*   consistency errorin VfsVipcLink */
+eCannotSignOff				LIT '951',		/* $ file is open, cannot sign-off */
+eCannotDeactivate			LIT '952',		/*   files open, cannot de-activate */
+eTooManyDetaches			LIT '953',		/*   more detaches than attaches on a signon context */
+eVfsUnexpectedEvent			LIT '954',		/*   unexpected message received or other event */
+eOutOfSeqVFsResp			LIT '999';		/*   Out of seq Vfs Response */
+
+DECLARE		/* 1000-1099	Admin (& User Validation) Errors */
+
+eUAFFieldNotFound			LIT '1000',		/*   User Authorization Field not found */
+ePropListValueMissing		LIT '1001',		/*   Required property missing */
+eInvalidPropertyValue		LIT '1002',		/*   Invalid Property Value */
+eInvalidPassword			LIT '1003',		/* $ Signon password Invalid */
+eAuthorizationFile			LIT '1004',		/*   Error accessing authorization file */
+eUnknownUser				LIT '1005',		/* $ unknown user */
+eInvalidAuthority			LIT '1006',		/*   invalid authority */
+eWorkstationLocked			LIT '1007',		/* $ workstation is locked by GRiD */
+eUserLocked					LIT '1008',		/* $ User access is locked by GRiD */
+eWSAlreadyRegistered		LIT '1009',		/*   Machine already Registered */
+eTrackingNoAssigned			LIT '1010',		/*   Tracking Number already assigned */
+eWSNotRegistered			LIT '1011',		/*   workstation not registered */
+eUserIDSignedOn				LIT '1012',		/* $ user has already signed on from some other port */
+eUserNotInAccount			LIT '1013',		/*   user not in account */
+eCannotAddAtThisLevel		LIT '1014',		/*   You cannot add at this level */
+eCompanyNotDefined			LIT '1015',		/*   Company not defined */
+eAccountNotDefined			LIT '1016',		/*   Account not defined */
+eAlreadyDefined				LIT '1017',		/*   Already defined */
+eInvalidExpDate				LIT '1018',		/*   Invalid expiration date */
+eCannotAddToThisAccount		LIT '1019',		/*   Cannot add to this account */
+eNotAuthorized				LIT '1020',		/*   ???? */
+eAdminUserNotFound			LIT '1021',		/*   ???? */
+ePoNotFound					LIT '1022',		/* $ Cannot download SW w/o purchase order */
+eCannotUpdateThisSub		LIT '1023',		/* $ Cannot update this subject */
+eZeroMachineID				LIT '1024',		/* $ Machine ID is 0 */
+eZeroFileSpace				LIT '1025',		/* $ zero file space left, cannot save */
+eAuthRecordNotFound			LIT '1026',		/*   requested record not found */
+eRecordUpdated				LIT '1027',		/*   Update denied, record has changed */
+eAdminFuncNotSupported		LIT '1028',		/*   machine ID is 0 ???? */
+eCompanyUserNotUnique		LIT '1029',		/*   Company, GRoup, User not unique */
+eInsufficientAccessAuthority LIT '1030',	/*   Insufficeint authority to modify this record */
+eUserSignedOn				LIT '1031',		/*   User is signed onto the server */
+eUpdateUAF					LIT '1032',		/* $ UAF needs to be updated - incompatible*/
+eInvalidFileContents		LIT '1033',		/*   UAF is trashed */
+eInvalidName				LIT '1034',		/*   Invalid character in name */
+eDiskAlreadyDefined			LIT '1035',		/*   Adding a user who already exist on disk but not in UAF, 
+												 must run UAFActualDisk soon */
+eHotBackupInProgress		LIT '1036',		/*   This is passive server */
+eUniqueNameExists			LIT '1037',		/*   Unique name is already defined elsewhere */
+eNotAValidUser				LIT '1038';		/*	 argument for ChangeUserContext not a user */
+
+DECLARE		/* 1100-1149	Spooler Errors */
+
+eSplrCmdNotSuccessfull		LIT '1100',		/*   Unsuccessful - previous cmd in progress*/
+eSpoolDevAlreadyAsnd		LIT '1101',		/*   Spool Device Already assiged */
+ePhsclDevAlreadyAsnd		LIT '1102',		/*   Physical Device Already assigned */
+eSpoolDevDoesNotExist		LIT '1103',		/*   Spool does not exist */
+ePhsclDevDoesNotExist		LIT '1104',		/*   Physcial Device does not exist */
+eSpoolDevNotStarted			LIT '1105',		/*   Spool not started */
+eSpoolUserRejected			LIT '1106';		/*   Improper user class */
+
+
+DECLARE		/* 1150-1199	GRiD Server General Errors */
+
+eCCInternalError			LIT '1150',		/*   GRiD Server Internal Error */
+eInvalidConfig				LIT '1151',		/*   invalid data comm configuration */
+eAdminDoesntExist			LIT '1152',		/*   Admin does not exist */
+eConnectionNotAllowed		LIT '1153',		/*   Super user not allowed from remote */
+eClockNotSet				LIT '1160',		/*   Diag Processor: RTC not set */
+eCommonRamTimedOut			LIT '1161',		/*   Diag Processor: failure in common ram access */
+eCommonRamParityError		LIT '1162',		/*   Parity error in common ram */
+eProcessInUse				LIT '1163';		/*	 This process can not be shared */
+
+DECLARE		/* 1200-1249	Recoverable data link and Mac Errors */
+
+recErrorLowRange			LIT '1200',		/*   low end of recoverable Mac Errors */
+recErrorHighRange			LIT '1249',		/*   high end of recoverable Mac Errors */
+recXIDLoopBacktest			LIT '1200',		/*   loop back test successful-not an error*/
+recMacRecvTimeOut			LIT '1201',		/*   loop back test successful
+recMacbadCrc				LIT '1202',		/*   CRC error in received frame */
+recMacBadSize				LIT '1203',		/*   bad size of received frame */
+recMacOverRun				LIT '1204',		/*   over run in receiving frame */
+recMacTooLong				LIT '1205',		/*   received frame too long */
+recMacOverLong				LIT '1206',		/*   ???? */
+recMacOutOfBuffers			LIT '1207',		/*   No buffers available for receiving */
+recMacOutOfSequence			LIT '1208',		/*   received out of sequence frame */
+recMacUnderRun				LIT '1209',		/*   under run in receiving frame */
+recMacSendTimeOut			LIT '1210',		/*   send timeout in frame transmission */
+recMacUnknown				LIT '1211';		/*   received unknown frame */
+
+DECLARE		/* 1250-1299	Interceptor (MsDos GRiDLink, MsDos Phonelink) Errors */
+
+eUnlinkFailed				LIT '1250';		/*	 Failure in unlinking from interrupt chain */
+
+
+DECLARE    /* 1300 - 1349 	Tape Backup Errors */
+
+eCartridgeNotIn    			LIT '1300',		/*   Tape cartridge not in tape device		*/
+eTapeStateChange   			LIT '1301',		/*   Tape device has changed state		*/
+eTapeHWError       			LIT '1302',		/*   Hardware error on tape device		*/
+eTapeMediaError    			LIT '1303',		/*   Tape media error		*/
+eTapeOverflow      			LIT '1304',		/*   Tape overflow			*/
+eTapeFMFound       			LIT '1305',		/*   Tape file mark found	*/
+eTapeEOMFound      			LIT '1306',		/*   End of media on tape	*/
+eTapeCommandAbort  			LIT '1307',		/*   Tape command aborted	*/
+eTapeUnknownError  			LIT '1308',		/*   Unknown tape error		*/
+eTapeIllegalRequest			LIT	'1309',		/*	 Illegal request to tape 	*/
+eTapeEndOfData				LIT	'1310',		/*	 End of data on tape		*/
+
+eInvalidSourceTape	 		LIT '1313',		/*   Invalid source tape	*/
+eInvalidTapeLabel   		LIT '1314',
+eInvalidTapeTrailer 		LIT '1315',
+eTapeDriveVerify    		LIT '1316';
+
+DECLARE		/* 1400-1449	Remote Backup Errors */
+
+eBackupNoMoreJobs			LIT '1400',		/*	 job file is empty - internal response only */
+eBackupJobNoExist			LIT '1401',		/* 	 job entry can not be found - internal response only */
+eBackupNoDiskSpace			LIT '1402',		/*   passive server disk allocation is not enough */
+eBackupTenPercentSpace		LIT '1403',		/*	 warning - less than approx 10% free disk space */
+eBackupCheckSum				LIT '1404',		/*   check sum error in job blocks */
+eBackupMustHaveConnection	LIT '1405',		/*	 must have connection with Vfs */
+eBackupSystemOutOfSync		LIT '1406',		/*   passive server is not in sync with active server */
+eBackupBadJob				LIT '1407',		/*   the job itself is bad */
+eBackupStopSending			LIT '1408';		/*	 this job has been sent 5 times, stop sending */
+
+
+DECLARE		/* 1500-1549	remote menus & forms, parsing rtns, etc. */
+eRmMenuFormProtocolError	LIT	'1500',  	/*	 protocol error in remote forms and menus */
+eRmMenuFormInvalidVersion	LIT '1501',		/*   protocl version does not match,  */
+eRmMenuFormTooLong			LIT	'1502',		/*	 remote menu/form/other request too logn */
+eParseEndOfConfigUnit		LIT '1525';		/*   at end of configuration unit */
+
+DECLARE		/* 1600-1699	CommConfig & Network Manager Errors */
+eCommCfgLineTooLong			LIT '1601',		/*   Input line has more that 256 characters. */
+eCommCfgInvalidConfiguration LIT '1602',	/*   Invalid configuration. */
+eCommCfgIllegalCardNumber	LIT '1603',		/*   Invalid slot number. */
+eCommCfgDuplicateCardNumber LIT	'1604',	   	/*   Duplicate slot configurations.  */
+eCommCfgNotACommCard		LIT '1605',		/*   Comm card was not found in specified slot. */
+eCommCfgIllegalBaudRate		LIT	'1606',		/*   Baud rate is not within the range 100-19200 */
+eCommCfgSyntaxError			LIT	'1607';		/*   Syntax error in input. */
+
+$EJECT
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+
+The following Error number may be displayed on diagnostic display during boot
+up diagnostic testing:
+
+
+00 NoErrs:		No diagnostic errors encountered during the tests.		
+
+01 RamErr:		A missmatch was encountered in writing/reading one of
+				two patterns (00h and 0ffh) to RAM memory.
+
+02 CRamErr:		A missmatch was encountered in writing/reading one
+				of two patterns (00h and 0ffh) to Common Ram memory
+				over the multibus.	May be a Ram or Multi-bus problem.
+
+03 DMAErr:		This error will not occur because the DMA errors were
+				seperated into errors 13 thru 16.
+
+04 MBusIntErr:	The card will interrupt itself.  If the routine times
+				out without receiving the interrupt, the error will
+				occur.
+
+05 TimeErr:		The 80186 internal timers are set up to generate interrupts.  						
+				If the routines timeout, the error will occur.
+				The app server will set up interrupts with the 8254.
+
+06 ComTimeErr:	The 8254 on the com server is set up to generate
+				baud clocks.	The routine looks for high/low tran-
+				sitions.	If none occur, an error is generated with
+				the timer specified.
+
+07 TaskErr8087: The 8087 on the app server is commanded with a task
+				and if the appropriate information is not received,
+				an error is generated.
+
+08 IntErr8087:	An 8087 interrupt is generated (divide by zero) and 
+				if not received, this error is generated.
+
+09 A1XmitErr:	A byte is put into the transmit buffer after the
+				appropriate setup and the status register is checked
+				for transmit buffer underrun.  If bit not set, this
+				error is generated.
+
+10 B1XmitErr:	See error 09.
+
+11 A2XmitErr:	See error 09.
+
+12 B2XmitErr:	See error 09.
+
+13 DMA1RamErr:	A DMA write/read of patterns (00h and 0ffh) are per-
+				formed on two blocks of RAM.  If a mismatch occurs,
+				this error is generated for this channel.
+
+14 DMA2RamErr:	See error 13.
+
+15 DMA1IntErr:	A DMA interrupt write/read of patterns (00h and 0ffh)
+				are performed on two blocks of RAM.  If a mismatch
+				occurs, this error is generated for this channel.
+
+16 DMA2IntErr:	See error 15.
+
+17 GPiB_BusErr:	A byte is written onto the GPiB bus and then read
+				back via the Command Pass Thru register of the 
+				9914.  If it does not match, or if the setup pro-
+				cedure timesout, this error is generated.
+
+18 RTC_notset:	The real time clock on the Diagnostic Processor card
+				is perceived to be not set and this error is gen-
+				erated by the DP card.
+
+19 RTC_notrun:	The real time clock on the Diagnostic Processor
+				card is perceived to be not running and this error
+				is generated by the DP card.
+
+20 DP_not_slot0:The Diagnostic Processor is not in Slot 0 and this
+				error is generated by the DP card
+
+21 RomErr:		A byte checksum is done on the two 64K eproms.  If the
+				checksum does not add up to zero, this error is gen-
+				erated.
+
+22 UnknownCard:	The diagnostics on the servers did not complete
+				though they successfully completed the first few
+				tests.  The error is generated by the DP card.
+
+23 Reset_stuck:	The reset button is enabled on all the time.  The
+				error is generated by the DP card.
+
+50 Dead_card:	No response at all from the server in question.	The
+				error is generated by the DP card.
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/

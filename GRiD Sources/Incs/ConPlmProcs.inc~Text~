@@ -1,0 +1,21 @@
+
+
+ConCharOut: PROCEDURE (char) EXTERNAL;
+   DCL char BYTE;
+   END;
+
+ConHexOut: PROCEDURE (hexByte) EXTERNAL;
+   DCL hexByte WORD;
+   END;
+
+ConCharIn: PROCEDURE WORD EXTERNAL;
+   END;
+
+ConKeyPressed: PROCEDURE BYTE EXTERNAL;
+   END;
+
+ConLineOut: PROCEDURE (pBuffer, length) EXTERNAL;
+   DCL pBuffer PTR;
+   DCL length WORD;
+   END;
+

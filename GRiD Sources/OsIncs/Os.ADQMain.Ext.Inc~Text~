@@ -1,0 +1,9 @@
+
+/* This is Os.ADQMain.Ext.Inc  */
+
+
+OsADQDriver: PROCEDURE (request, pPl, pError) EXTERNAL;
+  DCL request       WORD;
+  DCL pPl           PTR;
+  DCL pError        PTR;
+  END;

@@ -1,0 +1,63 @@
+/* This is OsPlmTypes.Inc~Text~ */
+/* brw - 5/24/82                */
+
+/* constants */
+
+DCL oldFileMode LIT '1';
+DCL updateFileMode LIT '2';
+DCL newFileMode LIT '3';
+
+DCL readAccess LIT '1';
+DCL writeAccess LIT '2';
+DCL updateAccess LIT '3';
+
+DCL changeType LIT '1';
+DCL changeSubtype LIT '2';
+DCL returnType LIT '41h';
+DCL returnSubType LIT '42h';
+DCL changeIfNoType LIT '81h';
+DCL changeIfNoSubtype LIT '82h';
+
+DCL seekBackwards LIT '1';
+DCL seekToHere LIT '2';
+DCL seekForward LIT '3';
+DCL seekFromEnd LIT '4';
+
+DCL GreenwichMeanTime LIT '1';
+DCL CompassRelativeTime LIT '2';
+
+DCL registerName LIT '1';
+DCL unRegisterName LIT '2';
+
+DCL signalNormal LIT '1';
+DCL signalEvent LIT '2';
+DCL signalAllWaiters LIT '3';
+
+/* types */
+
+DCL MemStatusType LIT 'STRUCTURE
+        (freeBytes DWORD,
+        freeBlocks WORD,
+        largestFree WORD,
+        allocBytes DWORD,
+        allocBlocks WORD,
+        largestAlloc WORD)';
+
+DCL StatusType LIT 'STRUCTURE
+        (open BOOLEAN,
+        access BYTE,
+        seek BYTE,
+        filePosition DWORD,
+        fileLength DWORD,
+        numPages WORD,
+        numAllocatedPages WORD)';
+
+DCL TimeType LIT 'STRUCTURE
+        (year WORD, month BYTE, day BYTE,
+        hour BYTE, minute BYTE, second BYTE,
+        tenthOfSec BYTE, dayOfWeek BYTE, dayOfYear WORD)';
+
+DCL ShortString LIT 'STRUCTURE
+        (length BYTE,
+        chars (255) BYTE)';
+

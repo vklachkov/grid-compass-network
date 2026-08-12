@@ -1,0 +1,85 @@
+/*    This is os.device.inc include file     */
+
+/* The entry point of each device must be    */
+/* a procedure of the format:                */
+/*                                           */
+/*   OsDevice : PROCEDURE (req, pCB, pError);*/
+/*                                           */
+/* where pCB points to a control block and   */
+/* pError points to a place to put the error */
+/* and request is a word.                    */
+
+/*    Request codes      */
+
+DCL ddInitialize LIT '0';
+DCL ddGetStatus LIT '1';
+DCL ddOpen LIT '2';
+DCL ddClose LIT '3';
+DCL ddRead LIT '4';
+DCL ddWrite LIT '5';
+DCL ddSeek LIT '6';
+DCL ddTruncate LIT '7';
+DCL ddAttach LIT '8';
+DCL ddDetach LIT '9';
+DCL ddRename LIT '10';
+DCL ddDelete LIT '11';
+DCL ddReadDesc LIT '12';
+DCL ddWriteDesc LIT '13';
+DCL ddFlush LIT '14';
+DCL ddWaitSRQ LIT '15';
+DCL ddSelfTest LIT '16';
+DCL ddFormat LIT '17';
+DCL ddSetStatus LIT '20';
+DCL ddDeactivate LIT '21';
+DCL ddTrackFormat LIT '22';
+DCL ddControllerTest LIT '23';
+DCL ddRamTest LIT '24';
+DCL ddDriveTest LIT '25';
+DCL ddProg LIT '26';
+DCL ddWriteProtect LIT '27';
+DCL ddBufferCommand LIT '28';
+DCL ddReadDirPage LIT '29';
+DCL ddSignOn LIT '30';
+DCL ddSignOff LIT '31';
+DCL ddSend LIT '32';
+DCL ddRemoteCopy LIT '33';
+DCL ddGetMoreStatus LIT '34';
+DCL ddReadRamBuffer LIT '35';
+DCL ddWriteRamBuffer LIT '36';
+
+DCL ddConnect		LIT '100';
+DCL ddDisconnect	LIT '101';
+DCL ddWaitConnect	LIT '102';
+
+
+/*    Structure Types            */
+
+DCL ParamListType LIT 'STRUCTURE
+ (connection SELECTOR,
+  pBuffer PTR,
+  position DWORD,
+  length WORD,
+  mode BYTE,
+  numbuf BYTE,
+  intAddr BYTE,
+  pOverflow PTR)';
+
+DCL GetConnStatusType LIT 'STRUCTURE
+ (open BYTE,
+  access BYTE,
+  seek BYTE,
+  filePosition DWORD)';
+
+DCL MSStatusType LIT 'STRUCTURE
+(pageSize WORD,
+logPageSize WORD,
+numPages WORD,
+driveReady BYTE,
+bitMapFID WORD,
+directoryFID WORD,
+minDirPage WORD,
+mode BYTE,
+name (32) BYTE,
+bytePerSec WORD,
+secPerTrk WORD,
+trkPerCyl WORD)';

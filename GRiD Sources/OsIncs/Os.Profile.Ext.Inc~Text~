@@ -1,0 +1,24 @@
+/* this is os.profile.ext.inc */
+
+ReadUserProfile : PROCEDURE EXTERNAL;
+  END;
+
+OsGetProperty : PROCEDURE (tag, pLength, pData, pError) EXTERNAL;
+  DCL tag           WORD;
+  DCL pLength       PTR;
+  DCL pData         PTR;
+  DCL pError        PTR;
+  END;
+
+OsPutProperty : PROCEDURE (tag, length, pData, pError) EXTERNAL;
+  DCL tag           WORD;
+  DCL length        WORD;
+  DCL pData         PTR;
+  DCL pError        PTR;
+  END;
+
+AttachAndOpen: PROCEDURE (pPath, mode, access) ConnectionType EXTERNAL;
+  DCL mode      BYTE;
+  DCL access    BYTE;
+  DCL pPath     PTR;
+  END;

@@ -1,0 +1,210 @@
+$COMPACT OPTIMIZE(3)
+$TITLE('CCDLC - Utility Module')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*         COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    utility procedures
+*
+*    contains:  Procedures: 
+*          UtlBuildCB, UtlFreeCB, UtlPopQ, UtlPutQ, 
+*          UtlLogError, UtlTraceMachine, 
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+UtilityModule: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`commonDefines.inc~Text~)
+$INCLUDE (``ccIncs`dlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`machineDefines.inc~Text~)
+$INCLUDE (``ccIncs`memoryDefines.inc~Text~)
+$INCLUDE (``ccIncs`MemoryModule.inc~Text~)
+$INCLUDE (``ccIncs`macDefines.inc~Text~)
+$INCLUDE (``ccIncs`globalDataModule.inc~Text~)
+$INCLUDE (``Incs`OsPlmProcs.inc~Text~)
+$INCLUDE (``Incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+DCL traceBufferSize		LIT '120';
+DCL traceBuffer			(traceBufferSize) BYTE INITIAL (0,0,0,0,0,0,0,0);
+DCL traceIndex			INTEGER INITIAL (0);
+DCL CbFreeQueue			BASED pCbFreeQueue memHeaderType;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlBuildCB									 */
+
+UtlBuildCB: PROCEDURE SELECTOR CLEAN;
+DCL error		WORD;
+DCL pCB			SELECTOR;
+DCL CB			BASED pCB STRUCTURE (DlCBGenDescriptor);
+
+	pCB = MemGetBlock(pCbFreeQueue, @error);
+	IF error <> 0 THEN
+	DO;
+		CALL OsLogError(11, eCcInternalError, error, @(6,'utlBld'));
+		pCB = SELECTOR$OF(OsAllocate(CbFreeQueue.entrySize, @error));
+
+		IF error <> 0 THEN
+			CALL OsLogError(11, eCcInternalError, error, @(8,'utlBld  2'));
+	END;
+
+	IF error = 0 THEN
+	DO;
+		CB.bufferlength = CbFreeQueue.entrySize - msgHeaderSize;
+		CB.freeDisp = returnMsg;
+		CB.qLink = null;
+	END;
+	RETURN pCB;
+
+END UtlBuildCB;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlFreeCB									 */
+
+UtlFreeCB: PROCEDURE (pCB) SELECTOR CLEAN;
+DCL pCB					SELECTOR;
+DCL error				WORD;
+
+	CALL MemFreeBlock(pCbFreeQueue, pCB, @error);
+	IF error <> 0 THEN 
+	DO;
+		CALL OsLogError(11, eCcInternalError, error, @(6,'utlFre'));
+		CALL OsFree(BUILD$PTR(pCB, 0), @error);
+		IF error <> 0 THEN 
+			CALL OsLogError(11, error, 0, @(8,'utlFre 2'));
+	END;
+	RETURN null;
+
+END UtlFreeCB;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlPutQ										 */
+/*
+ Queue routines expect single word link as second word in entry.
+ Head of queue marker contains selector to head and tail of queue.
+*/
+
+UtlPutQ: PROCEDURE (pQue, pNewEntry) CLEAN;
+DCL pQue				POINTER;
+DCL que					BASED pQue STRUCTURE (head SELECTOR, tail SELECTOR);
+
+DCL pNewEntry			SELECTOR;
+DCL newEntry			BASED pNewEntry STRUCTURE (spare WORD, qLink SELECTOR);
+DCL pLastEntry			SELECTOR;
+DCL lastEntry			BASED pLastEntry STRUCTURE (spare WORD, qLink SELECTOR);
+
+	newEntry.qLink = null;
+	IF que.head <> null THEN
+	DO;
+		pLastEntry = que.tail;
+		que.tail = pNewEntry;
+		lastEntry.qLink = pNewEntry;
+	END;
+	ELSE
+		DO;
+			que.tail = pNewEntry;
+			que.head = pNewEntry;
+		END;
+
+END UtlPutQ;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlPopQ										 */
+
+UtlPopQ: PROCEDURE (pQue) SELECTOR CLEAN;
+
+DCL pQue				POINTER;
+DCL que					BASED pQue STRUCTURE (head SELECTOR, tail SELECTOR);
+DCL pQueEntry			SELECTOR;
+DCL queEntry			BASED pQueEntry STRUCTURE (spare WORD, qLink SELECTOR);
+
+	IF que.head <> null THEN
+	DO;
+		pQueEntry = que.head;
+		que.head = queEntry.qLink;
+		/* if last entry in queue, then set tail pointer also */
+		IF que.head = null THEN
+		que.tail = null;
+		queEntry.qLink = null;
+	END;
+	ELSE
+		DO;
+			/* nothing on the queue, return empty pointer */
+			pQueEntry = null;
+		END;
+	RETURN pQueEntry;
+
+END UtlPopQ;
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlConCatQues									*/
+
+UtlConCatQues: PROCEDURE (pFrontQue, pRearQue) CLEAN;
+
+DCL (pFrontQue, pRearQue)	POINTER;
+DCL frontQue				BASED pFrontQue
+								STRUCTURE (head SELECTOR, tail SELECTOR);
+DCL rearQue					BASED pRearQue
+								STRUCTURE (head SELECTOR, tail SELECTOR);
+DCL pTempQueEntry 			SELECTOR;
+DCL tempQueEntry			BASED pTempQueEntry
+								STRUCTURE (spare WORD, qLink SELECTOR);
+
+	IF frontQue.head <> null THEN     /* something in both ques */
+	DO;
+		IF rearQue.head <> null THEN 
+		DO;
+			pTempQueEntry = frontQue.tail;
+			tempQueEntry.qLink = rearQue.head;
+			frontQue.tail = rearQue.tail;
+			rearQue.head, rearQue.tail = null;
+		END;          /* else nothing in rear que */
+	END;
+	ELSE
+		DO;
+			IF rearQue.head <> null THEN 
+			DO;          /* something in rear que */
+				frontQue.head = rearQue.head;
+				frontQue.tail = rearQue.tail;
+				rearQue.head, rearQue.tail = null;
+			END;        /* else nothing in either que */
+		END;
+
+END UtlConCatQues;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+/*							UtlLogError									 */
+
+UtlLogError: PROCEDURE(pid, msgType, error) CLEAN;
+DCL (pid, msgType, error)	WORD;
+
+	CALL OsLogError(2, eCcInternalError, error, @(6,'DlcLog'));
+
+END UtlLogError;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+UtlTraceMachine: PROCEDURE(stateMachinePtr) CLEAN;
+DCL stateMachinePtr	SELECTOR;
+DCL stateMachine	BASED stateMachinePtr generalMachineType;
+
+	DISABLE;
+	TraceBuffer(traceIndex) = stateMachine.event;
+	traceIndex = (traceIndex+1) MOD traceBufferSize;
+	TraceBuffer(traceIndex) = stateMachine.action;
+	traceIndex = (traceIndex+1) MOD traceBufferSize;
+	TraceBuffer(traceIndex) = stateMachine.state;
+	traceIndex = (traceIndex+1) MOD traceBufferSize;
+	TraceBuffer(traceIndex) = stateMachine.nextState;
+	traceIndex = (traceIndex+1) MOD traceBufferSize;
+	ENABLE;
+
+END UtlTraceMachine;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END UtilityModule;

@@ -1,0 +1,53 @@
+
+/*         This is Os.Sysdep.Ext.Inc         */
+
+
+DoOsMemInit: PROCEDURE EXTERNAL;
+  END;
+    
+InitSysdep: PROCEDURE (pBusy) EXTERNAL;
+  DCL pBusy      PTR;
+  END;
+
+InitSysdepVars: PROCEDURE EXTERNAL;
+  END;
+
+SetSystemID: PROCEDURE (pID) EXTERNAL;
+  DCL pID       PTR;
+  END;
+
+SetUDISystemID: PROCEDURE (pID) EXTERNAL;
+  DCL pID       PTR;
+  END;
+
+GetDeviceList: PROCEDURE (pNum, pList) EXTERNAL;
+  DCL pNum       PTR;
+  DCL pList      PTR;
+  END;
+
+SetDoClippingRect: PROCEDURE (pRect) EXTERNAL;
+  DCL pRect         PTR;
+  END;
+
+CpScreenInfo: PROCEDURE (pBuf) EXTERNAL;
+  DCL pBuf         PTR;
+  END;
+
+CpPartitionInfo: PROCEDURE (entrypoint, intAddr, drive, 
+                            pPageZero, pInfo) WORD EXTERNAL;
+  DCL entryPoint        PTR;
+  DCL intAddr           BYTE;
+  DCL drive             BYTE;
+  DCL pPageZero         PTR;
+  DCL pInfo             PTR;
+  END;
+
+CpGetTime: PROCEDURE (mode, pTime) EXTERNAL;
+  DCL mode        BYTE;
+  DCL pTime       PTR;
+  END;
+
+CpSetTime: PROCEDURE (pTimeOffsets) BOOLEAN EXTERNAL;
+  DCL pTimeOffsets PTR;
+  END;
+

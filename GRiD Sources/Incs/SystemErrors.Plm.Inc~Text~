@@ -1,0 +1,35 @@
+/* SystemErrors.Plm.Inc created from Os.Error.Inc 3/9/86 
+
+Contains constants for errors which applications use to 
+key on for specific recovery
+*/
+
+DCL eOK LIT 					'0';		/* no error							*/
+DCL eVersion LIT 				'12';		/* version incompatability 			*/
+DCL eNotSupport LIT 			'35';		/* request not supported			*/
+DCL eShare	LIT 				'40';		/* file or device can't be shared 	*/
+DCL eOutOfMem LIT 				'2';		/* out of memory					*/
+
+/* file system errors	*/
+
+DCL eFileNotFound LIT 			'33';		/* file does not exist		*/
+DCL eFileExists LIT 			'32';		/* file already exists		*/
+DCL eDeviceFull LIT 			'41';		/* device full				*/
+DCL eBadConn LIT 				'221';		/* bad connection			*/
+DCL eParam LIT 					'225';		/* bad parameter            */	
+DCL eDevActive LIT 				'230';		/* device already active	*/
+DCL eDevNotActive LIT 			'231';		/* device not active		*/
+		
+/* multi-tasking errors	*/
+
+DCL eProcNotExist LIT 			'251';   	/* process does not exist   */
+DCL eTimeOut LIT 				'253';		/* request timed out		*/
+DCL eStayingInBackground LIT	'257';		/* not really an error 		*/
+
+/* modem errors	*/
+
+DCL eModNotAnswer LIT 			'400'; 
+DCL eModTimeOut LIT 			'401'; 
+DCL eModLossCarrier LIT 		'402'; 
+DCL eModParity LIT 				'403'; 
+DCL eModCrc LIT 				'404'; 

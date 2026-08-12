@@ -1,0 +1,172 @@
+
+/*    This is Os.Windows.ext.inc                 */
+
+DCL PointType LIT 'STRUCTURE
+    (x        WORD,
+     y        WORD)';
+
+DCL RectangleType LIT 'STRUCTURE
+    (topLeftX     WORD,
+     topLeftY     WORD,
+     extentX      WORD,
+     extentY      WORD)';
+
+/* Scrolling direction  */
+
+DCL Up LIT '0';
+DCL Down LIT '1';
+DCL Left LIT '2';
+DCL Right LIT '3';
+
+WinClipLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+WinClipRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+WinSetWindow : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect PTR;
+  END;
+
+WinInitDefaultWindow : PROCEDURE EXTERNAL;
+  END;
+
+WinFrameWindow : PROCEDURE EXTERNAL;
+  END;
+
+WinEraseWindow : PROCEDURE EXTERNAL;
+  END;
+
+WinScrollWindow : PROCEDURE (pRect, direction, distance) EXTERNAL;
+  DCL direction BYTE;
+  DCL distance  WORD;
+  DCL pRect     PTR;
+  END;
+
+WinSetClip : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect   PTR;
+  END;
+
+WinResetClip : PROCEDURE EXTERNAL;
+  END;
+
+WinDrawPixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+WinErasePixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+WinInvertPixel: PROCEDURE (x, y) EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+WinTestPixel: PROCEDURE (x, y) BOOLEAN EXTERNAL;
+  DCL x      WORD;
+  DCL y      WORD;
+  END;
+
+WinDrawLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+WinEraseLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+WinInvertLine : PROCEDURE (x1, y1, x2, y2) EXTERNAL;
+  DCL x1     WORD;
+  DCL y1     WORD;
+  DCL x2     WORD;
+  DCL y2     WORD;
+  END;
+
+WinEraseRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+WinInvertRectangle : PROCEDURE (pRect) EXTERNAL;
+  DCL pRect  PTR;
+  END;
+
+WinCopyRectangle : PROCEDURE (pRect, y, x) EXTERNAL;
+  DCL pRect       PTR;
+  DCL y           WORD;
+  DCL x           WORD;
+  END;
+
+WinScrollRectangle : PROCEDURE (pRect, direction, distance) EXTERNAL;
+  DCL pRect       PTR;
+  DCL direction   BYTE;
+  DCL distance    WORD;
+  END;
+
+WinDrawChar : PROCEDURE (ch, x, y) EXTERNAL;
+  DCL ch          BYTE;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+WinEraseChar : PROCEDURE (x, y) EXTERNAL;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+WinInvertChar : PROCEDURE (x, y) EXTERNAL;
+  DCL x           WORD;
+  DCL y           WORD;
+  END;
+
+WinDrawChars : PROCEDURE (pChar, count, x, y) EXTERNAL;
+  DCL count       WORD;
+  DCL x           WORD;
+  DCL y           WORD;
+  DCL pChar       PTR;
+  END;
+
+WinGetWindowExtent : PROCEDURE (pExtent) EXTERNAL;
+  DCL pExtent PTR;
+  END;
+
+LineHeight: PROCEDURE BYTE EXTERNAL;
+  END;
+
+CharHeight: PROCEDURE BYTE EXTERNAL;
+  END;
+
+BaseLine: PROCEDURE BYTE EXTERNAL;
+  END;
+
+CharWidth: PROCEDURE BYTE EXTERNAL;
+  END;
+
+WinSetAlternateWindow: PROCEDURE (pAlt) EXTERNAL;
+  DCL pAlt    PTR;
+  END;
+
+WinCopyRemoteRectangle: PROCEDURE (pSource, pDest,
+                                   pRect, newTopY,
+                                   newTopX, mode) EXTERNAL;
+  DCL mode        BYTE;
+  DCL newTopY     WORD;
+  DCL newTopX     WORD;
+  DCL pSource     PTR;
+  DCL pDest       PTR;
+  DCL pRect       PTR;
+  END;
+

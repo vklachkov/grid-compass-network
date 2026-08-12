@@ -1,0 +1,23 @@
+MOVB: PROCEDURE (pSource, pDest, length) EXTERNAL;
+  DCL length  WORD;
+  DCL pSource PTR;
+  DCL pDest   PTR;
+  END; /* MOVB */
+
+MOVRB: PROCEDURE (pSource, pDest, length) EXTERNAL;
+  DCL length  WORD;
+  DCL pSource PTR;
+  DCL pDest   PTR;
+  END; /* MOVRB */
+
+MOVW: PROCEDURE (pSource, pDest, length) EXTERNAL;
+  DCL length  WORD;
+  DCL pSource PTR;
+  DCL pDest   PTR;
+  END; /* MOVW */
+
+MOVRW: PROCEDURE (pSource, pDest, length) EXTERNAL;
+  DCL length  WORD;
+  DCL pSource PTR;
+  DCL pDest   PTR;
+  END; /* MOVRW */

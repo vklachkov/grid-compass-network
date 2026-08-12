@@ -1,0 +1,123 @@
+/* External declarations for NMConfigForms.Plm */
+
+BuildCardMenu: PROCEDURE(pCardSelect) EXT;
+DCL	pCardSelect	POINTER;
+END BuildCardMenu;
+
+BuildConnLabelsAndChoices: PROCEDURE(pServer, networkType) EXT;
+DCL	pServer		POINTER,
+	networkType	BYTE;
+END BuildConnLabelsAndChoices;
+
+BuildPortChoices: PROCEDURE(baudChoice, networkType) EXT;
+DCL	baudChoice	BYTE,
+	networkType	BYTE;
+END BuildPortChoices;
+
+BuildSysPortLabelsAndChoices: PROCEDURE(baudChoice, networkType) EXT;
+DCL	baudChoice	BYTE,
+	networkType	BYTE;
+END BuildSysPortLabelsAndChoices;
+
+GoodPassword: PROCEDURE(pCh, pError) BOOLEAN EXT;
+DCL	pCh			POINTER,
+	pError		POINTER;
+END GoodPassword;
+
+ValidCombination: PROCEDURE(pProtocol, pFileType) BOOLEAN EXT;
+DCL	pProtocol	POINTER,
+	pFileType	POINTER;
+END ValidCombination;
+
+ConfigureCommCard: PROCEDURE(pCh, pError) EXT;
+DCL	pCh				POINTER,
+	pError			POINTER;
+END ConfigureCommCard;
+
+BuildRemSystemForm: PROCEDURE(pMap, pError) BOOLEAN EXT;
+DCL pMap				POINTER,
+	pError				POINTER;
+END BuildRemSystemForm;
+
+GetServerInfo: PROCEDURE(pNewSystem, pNetworkType, numItems, pCh, pError)
+																	BOOLEAN EXT;
+DCL	pNewSystem			POINTER,
+	pNetworkType		POINTER,
+	numItems			WORD,
+	pCh		    		POINTER,
+	pError				POINTER;
+END GetServerInfo;
+
+DefineServer: PROCEDURE(pCh, pError) EXT;
+DCL	pCh		    		POINTER,
+	pError				POINTER;
+END DefineServer;
+
+EraseServer: PROCEDURE(pCh, pError) EXT;
+DCL	pCh		    		POINTER,
+	pError				POINTER;
+END EraseServer;
+
+GetDefaultConnName: PROCEDURE(pConnName, pServerName) EXT;
+DCL	pConnName	POINTER,
+	pServerName	POINTER;
+END GetDefaultConnName;
+
+GetConnValues: PROCEDURE(isNewConn, pConn, pServer, networkType,
+														pCh, pError) EXT;
+DCL	isNewConn		BOOLEAN,
+	pConn			POINTER,
+	pServer			POINTER,
+	networkType		BYTE,
+	pCh				POINTER,
+	pError			POINTER;
+END GetConnValues;
+
+AddConnection: PROCEDURE(pCh, pError) EXT;
+DCL	pCh					POINTER,
+	pError				POINTER;
+END AddConnection;
+
+BuildConnForm: PROCEDURE(inconsistentOnly, pMap, pError) BOOLEAN EXT;
+DCL	inconsistentOnly		BOOLEAN,
+	pMap					POINTER,
+	pError					POINTER;
+END BuildConnForm;
+
+ModifyConnection: PROCEDURE(inconsistentOnly, pCh, pError) EXT;
+DCL	inconsistentOnly	BOOLEAN,
+	pCh					POINTER,
+	pError				POINTER;
+END ModifyConnection;
+
+EraseConnection: PROCEDURE(inconsistentOnly, pCh, pError) EXT;
+DCL	inconsistentOnly	BOOLEAN,
+	pCh					POINTER,
+	pError				POINTER;
+END EraseConnection;
+
+DoChangePassword: PROCEDURE(pCh, pError) EXT;
+DCL	pCh				POINTER,
+	pError			POINTER;
+END DoChangePassword;
+
+EditOptions: PROCEDURE(pCh, pError) EXT;
+DCL	pCh				POINTER,
+	pError			POINTER;
+END EditOptions;
+
+ConfirmMsg: PROCEDURE(pMsg, pCh, pError) BOOLEAN EXT;
+DCL	pMsg			POINTER,
+	pCh				POINTER,
+	pError			POINTER;
+END ConfirmMsg;
+
+DoQuit: PROCEDURE(pCh, pError) BOOLEAN EXT;
+DCL	pCh				POINTER,
+	pError			POINTER;
+END DoQuit;
+
+DoCancel: PROCEDURE(pCh, pError) BOOLEAN EXT;
+DCL	pCh				POINTER,
+	pError			POINTER;
+END DoCancel;

@@ -1,0 +1,17 @@
+
+/* this is os.ldrovl.ext.inc */
+
+LoadOverlay: PROCEDURE (namePtr, TablePtr, codePtr) EXTERNAL;
+  DCL namePtr  PTR;
+  DCL TablePtr PTR;
+  DCL codePtr  PTR;
+  END;
+
+ResetFile: PROCEDURE (high, low) EXTERNAL;
+  DCL high WORD;
+  DCL low  WORD;
+  END;
+
+FindName: PROCEDURE (namePtr) WORD EXTERNAL;
+  DCL namePtr PTR;
+  END;

@@ -1,0 +1,582 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Data Link Action Module 3')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*               COMPASS CENTRAL DATA LINK CONTROL
+*
+*    module:    DlcActionModule3.         1/22/83
+*
+*    contains:  PriAcQueueReceive, PriAcQueueSend,
+*               PriAcReportBadRequest, PriAcReportConnected,
+*               PriAcReportDisConnected, PriAcReportConnFailure, 
+*               PriAcReportFlused, PriAcRestartNewDefer,
+*               PriAcRespondTest.
+*
+*               SecAcQueueReceive, SecAcQueueSend,
+*               SecAcReportBadRequest, SecAcReportConnFailure,
+*               SecAcReportDisConnected, SecAcReportFlushed.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+DlcActionModule3: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccIncs`commondefines.inc~text~)
+$INCLUDE(``ccIncs`dlcmsgdefines.inc~text~)
+$INCLUDE(``ccIncs`dlcframedefines.inc~text~)
+$INCLUDE(``ccIncs`machinedefines.inc~text~)
+$INCLUDE(``ccIncs`generalModule.inc~text~)
+$INCLUDE(``ccIncs`memorydefines.inc~text~)
+$INCLUDE(``ccIncs`UtlModule.inc~text~)
+$INCLUDE(``ccIncs`MacModule.inc~text~)
+$INCLUDE(``ccIncs`DlcDataModule.inc~text~)
+$INCLUDE(``ccIncs`DlcActionModule1.inc~text~)
+$INCLUDE(``ccIncs`TimerModule.inc~text~)
+$INCLUDE(``incs`OsPlmProcs.inc~text~)
+$INCLUDE(``incs`MovRtns.Plm.inc~text~)
+$IF primary
+$INCLUDE(``ccIncs`priStandEvdefines.inc~text~)
+$ENDIF
+$IF secondary
+$INCLUDE(``ccIncs`secStandEvdefines.inc~text~)
+$ENDIF
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcQueueReceive, SecAcQueueReceive
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This Action should not be invoked since all 
+*               user receive message control blocks are given
+*               directly to MAC (medium Access Control). Left
+*               here in case of future changes.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Call AcFreeCB to queue receive request at Mac.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcQueueReceive: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	/* Will cause Receive to be queued at Mac */
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END PriAcQueueReceive;
+$ENDIF
+$IF secondary
+
+/*-----------------------------------------------------------------------*/
+
+SecAcQueueReceive: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END SecAcQueueReceive;
+$ENDIF
+
+/*-----------------------------------------------------------------------*/
+
+AcQueueReceive: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcFreeCB(pMachine, pDlCB);
+
+END AcQueueReceive;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcQueueSend, SecAcQueueSend
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Queue the user send request.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Set the request status to waiting.
+*     2) Place request on send queue.
+*     3) Preempt the defer timer, if pending.
+*
+*------------------------------------------------------------------------*/
+
+PriAcQueueSend: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	dlCB.reqError = intCmpStatusWaiting;
+	CALL UtlPutQ(@machine.sendQhead, pDlCB);
+
+	/* preempt current defer timeout to expedite send */
+	CALL TmrPreEmptDeferTimeout(pMachine);
+
+END PriAcQueueSend;
+
+$IF secondary
+/*-----------------------------------------------------------------------*/
+
+SecAcQueueSend: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL PriAcQueueSend(pMachine, pDlCB);
+
+END SecAcQueueSend;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAxReportBadRequest, SecAxReportBadRequest
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Report to client layer that the request is not
+*               valid at this time. 
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Return user request with error of invalid request type.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcReportBadRequest: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL GenReturnUserRequest(pMachine, pDlCB, eDlcInvalidRequest);
+
+END PriAcReportBadRequest;
+
+$ENDIF
+$IF Secondary
+/*-----------------------------------------------------------------------*/
+
+SecAcReportBadRequest: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL GenReturnUserRequest(pMachine, pDlCB, eDlcInvalidRequest);
+
+END SecAcReportBadRequest;
+$ENDIF
+
+$IF primary
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcReportConnected
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Report to client layer that data link connection
+*               has been successfully established. Client may
+*               now begin transferring information frames.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Abort all pending timers.
+*     2) Free received message control block.
+*     3) Cause event of check poll to trigger next protocol action.
+*     4) Init current retry counter.
+*     5) If user request pending then
+*      1) return user request control block.
+*     6) else call machine failure to handle bad situation.
+*
+*------------------------------------------------------------------------*/
+
+PriAcReportConnected: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+  DCL machine BASED pMachine dlcPrimaryMachineType,
+      dlCB BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+	CALL TmrAbortTimeout(pMachine, tmrUserTimer);
+
+	CALL AcFreeCB(pMachine, pDlCB); /* free recvd frame */
+	CALL GenCauseEvent(pMachine, priExCheckPoll, 0);
+	machine.currentRetries = machine.maxRetries;/* init retry count */
+	IF ((pDlCB := machine.userRequestCB) <> null) THEN
+	DO;
+		CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+		machine.userRequestCB = null;
+	END;
+	ELSE
+		CALL GenMachineFailure(pMachine, null, noUserTimer);
+
+END PriAcReportConnected;
+$ENDIF
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAxReportConnFailure, SecAxReportConnFailure
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Report to client layer that the data link connect
+*               attempt has failed.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Abort all pending timers. (user timer expired).
+*     2) If user request pending then
+*      1) return user request control block.
+*     3) else call machine failure to handle bad situation.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcReportConnFailure: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+CALL AcReportConnFailure(pMachine, pDlCB);
+
+END PriAcReportConnFailure;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF Secondary
+
+SecAcReportConnFailure: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcReportConnFailure(pMachine, pDlCB);
+
+END SecAcReportConnFailure;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+AcReportConnFailure: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+	CALL TmrAbortTimeout(pMachine, tmrPollTimer);
+	CALL TmrAbortTimeout(pMachine, tmrDeferTimer);
+	CALL TmrAbortTimeout(pMachine, tmrUserTimer);
+
+	IF (pDlCB := machine.userRequestCB) <> null THEN
+	DO;
+		CALL GenReturnUserRequest(pMachine, pDlCB, eDlcTimeOut);
+		machine.userRequestCB = null;
+	END;
+	ELSE
+		CALL GenMachineFailure(pMachine, null, noUserTimer);
+
+END AcReportConnFailure;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAxReportDisconnected, SecAxReportDisconnected,
+*                 PriAxReturnDisconnected.
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Report to client layer that the data link is
+*               in the disconnected state.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) If returnDisconnected Then
+*      1) Disable poll signal.
+*      2) Clear active and deferring flags.
+*      3) Free received message control block, if any.
+*     2) Abort pending timers.
+*     3) If no message control passed in param then
+*         check pending user request.
+*     4) If user request then return user request with 
+*         error of dlc remote closed connection.
+*     5) else call machine failure to handle bad situation.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcReportDisconnected: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcReportDisconnected(pMachine, pDlCB);
+
+END PriAcReportDisconnected;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF primary
+
+PriAcReturnDisconnected: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL MacDisablePoll(machine.linkNumber);
+	machine.active = FALSE;
+	machine.deferring = FALSE;
+	IF pDlCB <> null THEN   /* free recvd buffer, if any */
+	DO;
+		CALL AcFreeCB(pMachine, pDlCB);
+		pDlCB = null;
+	END;
+	CALL AcReportDisconnected(pMachine, pDlCB);
+
+END PriAcReturnDisconnected;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF Secondary
+
+SecAcReportDisconnected: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcReportDisconnected(pMachine, pDlCB);
+
+END SecAcReportDisconnected;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+AcReportDisconnected: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+	CALL TmrAbortTimeout(pMachine, tmrDeferTimer);
+	CALL TmrAbortTimeout(pMachine, tmrPollTimer);
+	CALL TmrAbortTimeout(pMachine, tmrUserTimer);
+	IF pDlCB = null THEN pDlCB = machine.userRequestCB;
+	IF pDlCB <> null THEN
+	DO;
+		CALL GenReturnUserRequest(pMachine, pDlCB, eDlcRemoteClosed);
+		machine.userRequestCB = null;
+	END;
+	ELSE
+		CALL GenMachineFailure(pMachine, null, noUserTimer);
+
+END AcReportDisconnected;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAxReportFlushed, SecAxReportFlushed
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Report to client layer that the i/o flush
+*               sequence has been completed.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) If user flush request pending then
+*      1) Return user request with error = ok.
+*      2) Clear flushing flag.
+*     2) Else machine failure to check bad condition.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcReportFlushed: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcReportFlushed(pMachine, pDlCB);
+
+END PriAcReportFlushed;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+$IF Secondary
+
+SecAcReportFlushed: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+	CALL AcReportFlushed(pMachine, pDlCB);
+
+END SecAcReportFlushed;
+
+/*-----------------------------------------------------------------------*/
+$ENDIF
+
+AcReportFlushed: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	IF (pDlCB := machine.userFlushCB) = null THEN
+	DO;
+		CALL GenMachineFailure(pMachine, pDlCB, invalidFlushCondition);
+	END;
+	ELSE
+		DO;
+			CALL GenReturnUserRequest(pMachine, pDlCB, ok);
+			machine.userFlushCB = null;
+			machine.flushing = FALSE;
+		END;
+
+END AcReportFlushed;
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcRestartNewDefer
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   This action handles an aborted new station 
+*               attempt. The remote station new station Xid
+*               has been replyed to, but retries on connect
+*               (SNRM) dlc command are exhausted. The new
+*               station Xid poll will be restarted.
+*
+*    Inputs:    SELECTOR to machine control block.
+*
+*    Algorithm:
+*     1) Disable the poll signal, notifying remote of end of poll.
+*     2) start the defer time out.
+*     3) if address has already been set (i.e. is predefined or
+*        well-known address) then 
+*      1) cause event of new station found to avoid xid polling.
+*
+*------------------------------------------------------------------------*/
+$IF primary
+
+PriAcRestartNewDefer: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor);
+
+	CALL MacDisablePoll(machine.linkNumber);
+	IF machine.addressSet THEN
+		CALL GenCauseEvent(pMachine, priExFoundNewStation, 0);
+	ELSE 
+		DO;
+			machine.linkAddress = newStationAddress;
+		END;
+	machine.currentRetries = machine.maxRetries;	/* init retry count */
+	machine.deferTime = 0;
+	CALL TmrStartDeferTimeout(pMachine);
+
+END PriAcRestartNewDefer;
+$ENDIF 
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*    procedure:   PriAcRespondTest
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+/*
+*    purpose:   Loop Back received test message.
+*
+*    Inputs:    SELECTOR to current state machine control block.
+*               Selector to dlc message control block.
+*
+*    Algorithm:
+*     1) Abort response timer.
+*     2) If send buffer can be allocated then
+*      1) Build test response and copy received data into send buffer.
+*     3) Else Build test response with no buffer.
+*     4) Free received message control block.
+*     5) Increment send count.
+*     6) Give send request to Mac.
+*
+*------------------------------------------------------------------------*/
+
+PriAcRespondTest: PROCEDURE(pMachine, pDlCB) CLEAN;
+DCL pMachine	SELECTOR,
+	pDlCB		SELECTOR;
+
+DCL machine		BASED pMachine dlcPrimaryMachineType,
+	dlCB		BASED pDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+
+DCL pSendDlCB	SELECTOR;
+DCL sendDlCB	BASED pSendDlCB STRUCTURE (DlCBgenDescriptor, DlCBioDataParams);
+DCL pRecvBuf	POINTER;
+DCL recvBuf		BASED pRecvBuf STRUCTURE (dlcHeaderFormat, chars (1) BYTE);
+DCL pSendBuf	POINTER;
+DCL sendBuf		BASED pSendBuf STRUCTURE (dlcHeaderFormat, chars (1) BYTE);
+DCL error		WORD;
+
+	CALL TmrAbortTimeout(pMachine, tmrResponseTimer);
+	IF ((dlCB.dataLength AND bufferTypeMask) = msgWithBufferPtr) THEN
+		pRecvBuf = dlCB.pBuffer;
+	ELSE
+		pRecvBuf = @dlCB.pBuffer;
+
+	pSendBuf = OsAllocate(recvBuf.lengthField + dlcHeaderSize, @error);
+	IF error = 0 THEN
+	DO;
+		/* copy recvd data and return to sender */
+		CALL MOVB(@recvBuf.chars, @sendBuf.chars, recvBuf.lengthField);
+		pSendDlCB = GenBuildTransmitRequest(pMachine, recvBuf.addrField,
+					cTest, msgWithBufferPtr, pSendBuf, recvBuf.lengthField);
+	END;
+	ELSE
+		DO;
+			pSendDlCB = GenBuildTransmitRequest(pMachine, recvBuf.addrField,
+												cTest, msgNoBufferPtr, NIL, 0);
+		END;
+	CALL AcFreeCB(pMachine, pDlCB);
+	CALL MacTransmitFrame(pSendDlCB);
+	machine.sendCount = machine.sendCount + 1;
+
+END PriAcRespondTest;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END DlcActionModule3;

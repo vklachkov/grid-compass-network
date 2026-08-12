@@ -1,0 +1,49 @@
+/* this is os.diskbit.ext.inc */
+
+ReadPage : PROCEDURE (page, drive, pBuffer, FID, FSN) WORD EXTERNAL;
+    DCL (page, FID, FSN) WORD;
+    DCL drive BYTE;
+    DCL pBuffer PTR;
+    END;
+
+WritePage : PROCEDURE (page, drive, pBuffer) WORD EXTERNAL;
+    DCL page WORD;
+    DCL drive BYTE;
+    DCL pBuffer PTR;
+    END;
+
+ReadBitMap : PROCEDURE (page) WORD EXTERNAL;
+    DCL page WORD;
+    END;
+
+WriteBitMap : PROCEDURE WORD EXTERNAL;
+    END;
+
+Allocate : PROCEDURE (pError) WORD EXTERNAL;
+    DCL pError  PTR;
+    END;
+
+Deallocate : PROCEDURE (page) WORD EXTERNAL;
+    DCL page WORD;
+    END;
+
+PagesAllocated : PROCEDURE (pError) WORD EXTERNAL;
+    DCL pError   PTR;
+    END;
+
+ReadPhysPage: PROCEDURE (entryPoint, intAddr, pageSize, drive, 
+                         page, pBuffer) WORD EXTERNAL;
+  DCL intAddr       BYTE;
+  DCL drive         BYTE;
+  DCL pageSize      WORD;
+  DCL page          DWORD;
+  DCL entryPoint    PTR;
+  DCL pBuffer       PTR;
+  END;
+
+InitDiskCB: PROCEDURE (page, drive, length, pBuffer) EXTERNAL;
+  DCL drive       BYTE;
+  DCL length      WORD;
+  DCL page        DWORD;
+  DCL pBuffer     PTR;
+  END;

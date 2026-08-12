@@ -1,0 +1,197 @@
+
+; This is cp.constant.asm.inc
+; This file contains the constants,
+; structures, and macros used in the compass proms
+
+
+; constants
+
+TRUE           EQU 0ffh
+FALSE          EQU 0
+nullWord       EQU 0ffffh
+nullByte       EQU 0ffh
+systemPid      EQU 0           ; pid used by O.S.
+asciiMode      EQU 0           ; caseless compare
+binaryMode     EQU 1           ; case sensitive compare
+memException   EQU 2           ; memory exception number
+
+
+; multi-tasking constants
+
+nullProcessPid EQU 0fffeh
+roundRobin     EQU 0ffffh
+goodBye        EQU 0fffeh
+signalled      EQU 0ffffh
+semaphoreIdCode EQU 05a5bh
+processIdCode  EQU 0a5b5h
+initialFlagState EQU 0f246h
+timeSlice      EQU 10         ; this can change
+
+timedMask      EQU 0fh
+snoozeSignalMask EQU 07fh     ; signal, but don't reschedule
+
+readyState     EQU 0
+timedWait      EQU 10h
+messageWait    EQU 2
+timedMessageWait EQU 12h
+semaphoreWait  EQU 3
+timedSemaphoreWait EQU 13h
+loadedPackage  EQU 4
+debugSuspendedState EQU 5
+
+
+; errors
+
+eOk            EQU 0           ; no error
+eBadPointer    EQU 31          ; error if links are bad
+eInvMemBlock   EQU 11          ; invalid memory block (never allocated)
+eCheckSum      EQU 29          ; checksum error
+eOutOfMem      EQU 2           ; out of memory
+eProcNotExist  EQU 251         ; process does not exist
+eSemaNotExist  EQU 252         ; semaphore does not exist
+eTimeOut       EQU 253         ; timed out error
+
+
+; multi-tasking constants
+
+signalNormal   EQU 1           ; do a normal signal
+
+
+; structures
+
+QcbType STRUC
+    headOfQ DW ?
+    tailOfQ DW ?
+    usesChecksum DB ?
+    qcbCount DW ?
+    elementLength DW ?
+QcbType ENDS
+
+
+QElementType STRUC
+    checkSum DW ?
+    next DW ?
+    prev DW ?
+QElementType ENDS
+
+nextOffset EQU 2
+
+MemCbType STRUC
+    mmcbFiller DW 3 DUP (?)
+    mmcbNumBlk DW ?
+    mmcbRemainder DW ?
+    mmcbPid DW ?
+MemcbType ENDS
+
+
+MemStatusType STRUC
+    freeBytes DD ?
+    freeBlocks DW ?
+    largestFree DW ?
+    allocBytes DD ?
+    allocBlocks DW ?
+    largestAlloc DW ?
+MemStatusType ENDS
+
+freeBytesLow EQU 0
+freeBytesHigh EQU 2
+allocBytesOffset EQU 8
+
+ScbType STRUC
+    scbFiller DW 3 DUP (?)
+    scbParentPid DW ?
+    scbBusy DW ?
+    scbNote DW ?
+    scbIdCode DW ?
+    scbCount DW ?
+ScbType ENDS
+
+McbType STRUC
+    mcbFiller DW 3 DUP (?)
+    mcbNote DW ?
+    mcbMessageType DW ?
+    mcbPMessageOff DW ?
+    mcbPMessageSeg DW ?
+    mcbSourceProcID DW ?
+McbType ENDS
+
+BirthMsgType STRUC
+    bootCardID   DW ?
+    bootCardType DW ?
+BirthMsgType ENDS
+
+BootMsgType STRUC
+    msgReqComm   DW ?
+    msgReqParm   DW ?
+    msgRespComm  DW ?
+    msgRespParm  DW ?
+    msgInData    DB ?
+    msgInStatus  DB ?
+    msgOutData   DB ?
+    msgOutStatus DB ?
+    msgErrorType DW ?
+    msgErrorCode DW ?
+BootMsgType ENDS
+
+RegTableType STRUC
+    regBp DW ?
+    regKip DW ?
+    regDs DW ?
+    regEs DW ?
+    regIp DW ?
+    regCs DW ?
+    regFl DW ?
+RegTableType ENDS
+
+PcbType STRUC
+    pcbFiller DW 3 DUP (?)
+    pcbHeadOfQ DW ?
+    pcbTailOfQ DW ?
+    pcbUsesCheckSum DB ?
+    pcbCount DW ?
+    pcbElementLength DW ?
+    pcbState DB ?
+; 16
+    pcbPriority DB ?
+    pcbDebug DB ?
+    pcbPMessageOff DW ?
+    pcbPMessageSeg DW ?
+    pcbMessageType DW ?
+    pcbNote DW ?
+    pcbTimeLimit DW ?
+    pcbStackOff DW ?
+    pcbStackSeg DW ?
+; 32
+    pcbHeap DB 16 DUP (?)
+; 48
+    pcbSource DW ?
+    pcbPLoadTable DD ?
+    pcbPCliBuffer DD ?
+    pcbCliOffset DW ?
+    pcbPAbortRoutine DD ?
+    pcbPErrorOff DW ?
+    pcbPErrorSeg DW ?
+    pcbTrapCancel DB ?
+    pcbParentPid DW ?
+    pcbProcID DW ?
+    pcbUses8087 DB ?
+    pcbP8087Regs DD ?
+    pcbPWindow DD ?
+    pcbVersion DB 3 DUP (?)
+    pcbForLater DB ?
+    pcbPExtra DD ?
+PcbType ENDS
+
+pcbHeadOfQOffset EQU 6
+
+PromVariablesType STRUC
+    pvOsProcessQ DB 9 DUP (?)
+    pvOsSemaQ DB 9 DUP (?)
+    pvCurrentPid DW ?
+    pvLoopPid DW ?
+    pvBootTrace DB ?
+    pvBusyStack DD ?
+    pvSysCounter DD ?
+    pvTimedProcesses DW ?
+PromVariablesType ENDS
+

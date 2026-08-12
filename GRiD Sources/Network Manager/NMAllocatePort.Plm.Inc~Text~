@@ -1,0 +1,15 @@
+/* NMAllocatePort.Plm.Inc */
+
+VipcAllocatePort: PROCEDURE(card, port, protocol, pError) EXTERNAL;
+DECLARE	card		BYTE,
+		port		BYTE,
+		protocol	BYTE,
+		pError		POINTER;
+END VipcAllocatePort;
+
+
+VipcFreePort: PROCEDURE(card, port, pError) EXTERNAL;
+DECLARE	card		BYTE,
+		port		BYTE,
+		pError		POINTER;
+END VipcFreePort;

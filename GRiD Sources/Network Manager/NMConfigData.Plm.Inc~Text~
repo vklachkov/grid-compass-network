@@ -1,0 +1,304 @@
+/* External declarations for config data module. */
+
+/* Tokens. */
+
+DCL	passwordToken		(*) BYTE EXT,
+	optionsToken		(*) BYTE EXT,
+	cardToken			(*) BYTE EXT,
+	portToken			(*) BYTE EXT,
+	serverToken			(*) BYTE EXT,
+	connectionToken		(*) BYTE EXT,
+	phonelinkToken		(*) BYTE EXT,
+	gridlinkToken		(*) BYTE EXT,
+	fiberlinkToken		(*) BYTE EXT,
+	emptyToken			(*) BYTE EXT,
+	otherToken			(*) BYTE EXT,
+	networkToken		(*) BYTE EXT,
+	publicToken			(*) BYTE EXT,
+	privateToken		(*) BYTE EXT,
+	leasedToken			(*) BYTE EXT;
+
+DCL	tokenStr			(maxTokenStrLength) BYTE EXT,
+	token				stringType EXT,
+	subTokenStr			(maxTokenStrLength) BYTE EXT,
+	subToken			stringType EXT;
+
+/* The password form. */
+
+DCL	passwordFormLabels		(*) BYTE EXT,
+	passwordForm			STRUCTURE
+	(
+	 form					POINTER,
+	 numItems				WORD,
+	 labelsAndChoices		POINTER,
+	 choiceLines			WORD,
+	 rows					(passwordFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	passwordRow			dataRowStringType EXT;
+
+DCL	passwordStr			(passwordStrLength) BYTE EXT,
+	password			stringType EXT;
+
+/* The main menu */
+
+DCL	mainMenu		(*) BYTE EXT;
+
+/* The connection menu */
+
+DCL	connMenu		(*) BYTE EXT;
+
+/* Menu for selecting a card to configure. */
+
+DCL	cardMenuItems	(512) BYTE EXT;
+
+DCL	cardCmdMenu		(*) BYTE EXT;
+
+/* Form for entering protocol types for each port on a card. */
+
+DCL	protFormLabels		(*) BYTE EXT;
+
+DCL	protForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(protFormRowSize) BYTE
+	)	EXT;
+
+DCL	protocolRow		(4)	dataRowType EXT;
+
+/* Form for port parameters. */
+
+DCL	portInfoFormLabels		(*) BYTE EXT;
+
+DCL	portInfoForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(portInfoFormRowSize) BYTE
+	)	EXT;
+
+DCL	phonelinkTypeRow	dataRowType EXT,
+	lineTypeRow			dataRowType EXT,
+	baudRateRow			dataRowType EXT,
+	modemTypeRow		dataRowType EXT,
+	prefixRow			dataRowStringType EXT,
+	dialingModeRow		dataRowType EXT,
+	dialTypeRow			dataRowType EXT;
+
+DCL	prefixStr			(prefixStrLength) BYTE EXT,
+	prefix				stringType EXT;
+
+/* Form for entering remote system name and network type. */
+
+DCL	remSystemForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(remSystemFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	remSystemNameRow	dataRowStringType EXT,
+	sysNetworkTypeRow	dataRowType EXT;
+
+DCL	remSystemNameStr	(serverNameStrLength) BYTE EXT,
+	remSystemName		stringType EXT;
+
+DCL	curSystemChoice		WORD EXT,
+	pCurSystem			POINTER EXT;
+
+/* Form for entering server comment */
+
+DCL	commentLabels		(*) BYTE EXT;
+
+DCL	commentForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(commentFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	commentRow			dataRowStringType EXT;
+
+DCL	commentStr			(commentStrLength) BYTE EXT,
+	comment				stringType EXT;
+
+/* Form for entering telephone network parameters. */
+
+DCL	netFormLabels		(*) BYTE EXT;
+
+DCL	netForm				STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(netFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	phoneNumber1Row		dataRowStringType EXT,
+	baudRate1Row		dataRowType Ext,
+	phoneNumber2Row		dataRowStringType EXT,
+	baudRate2Row		dataRowType Ext,
+	phoneNumber3Row		dataRowStringType EXT,
+	baudRate3Row		dataRowType Ext,
+	phoneNumber4Row		dataRowStringType EXT,
+	baudRate4Row		dataRowType Ext;
+
+DCL	phoneNumber1Str		(phoneNumberStrLength) BYTE EXT,
+	phoneNumber1		stringType EXT,
+	phoneNumber2Str		(phoneNumberStrLength) BYTE EXT,
+	phoneNumber2		stringType EXT,
+	phoneNumber3Str		(phoneNumberStrLength) BYTE EXT,
+	phoneNumber3		stringType EXT,
+	phoneNumber4Str		(phoneNumberStrLength) BYTE EXT,
+	phoneNumber4		stringType EXT;
+
+/* Form for entering network type. */
+
+DCL	netTypeFormLabels	(*) BYTE EXT;
+
+DCL	netTypeForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(netTypeFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	netTypeRow			dataRowType EXT;
+
+/* Form for phonelink connection info. */
+
+DCL	connFormLabelsInit		(*) BYTE EXT;
+
+DCL	connFormLabels			(*) BYTE EXT;
+
+DCL	connForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(connFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	phoneNumberRow		dataRowStringType EXT,
+	waitRow				dataRowType EXT,
+	costRow				dataRowType EXT,
+	dedicatedRow		dataRowType EXT,
+	anyPortRow			dataRowType EXT,
+	connNameRow			dataRowStringType EXT;
+
+DCL	phoneNumberStr		(phoneNumberStrLength) BYTE EXT,
+	phoneNumber			stringType EXT;
+
+DCL	connNameStr			(connectionNameStrLength) BYTE EXT,
+	connName			stringType EXT;
+
+/* Form for leased connections. */
+
+DCL	leasedConnFormLabels	(*) BYTE EXT;
+
+DCL	leasedConnForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(leasedConnFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	leasedWaitRow			dataRowType EXT,
+	leasedCostRow			dataRowType EXT,
+	leasedDedicatedRow		dataRowType EXT,
+	leasedConnNameRow		dataRowStringType EXT;
+
+DCL	leasedConnNameStr		(connectionNameStrLength) BYTE EXT,
+	leasedConnName			stringType EXT;
+
+/* Form for assigning system ports. */
+
+DCL	sysPortFormLabels	(1024) BYTE EXT;
+
+DCL	sysPortForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(sysPortFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	systemPortRow	(4) dataRowType EXT;
+
+/* Form for selecting connection to modify/erase. */
+
+DCL	selectConnForm		STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(selectConnFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	selectConnNameRow		dataRowType EXT;
+
+DCL	pCurConn		POINTER EXT,
+	curConnChoice	WORD EXT;
+
+/* Options form. */
+
+DCL	optionsFormLabels		(*) BYTE EXT;
+
+DCL	optionsForm			STRUCTURE
+	(
+	 form				POINTER,
+	 numItems			WORD,
+	 labelsAndChoices	POINTER,
+	 choiceLines		WORD,
+	 rows				(optionsFormRowSize) BYTE
+	)
+		EXT;
+
+DCL	localAreaCodeRow	dataRowStringType EXT,
+	longDistCodeRow		dataRowStringType EXT,
+	highSpeedRow		dataRowType EXT,
+	mediumSpeedRow		dataRowType EXT,
+	logFileSizeRow		dataRowType EXT;
+
+DCL	localAreaCodeStr	(phoneNumberStrLength) BYTE EXT,
+	localAreaCode		stringType EXT;
+
+DCL	longDistCodeStr		(phoneNumberStrLength) BYTE EXT,
+	longDistCode		stringType EXT;
+
+DCL	plMap					(32) WORD EXT,
+	plPortChoices			(512) BYTE EXT;
+
+DCL	sysMap					(250) POINTER EXT;
+
+DCL	baudTable				(*) WORD EXT;
+
+DCL transferMenu			(*) BYTE EXT;
+
+DCL	dirMenu					(*) BYTE EXT;

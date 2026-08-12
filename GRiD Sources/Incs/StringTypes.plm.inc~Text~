@@ -1,0 +1,18 @@
+/*&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	STRING TYPES
+&
+&	current author: Rajendra Shah
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&*/
+
+DCL StringType	LIT 'STRUCTURE (
+		len		WORD,
+		max		WORD,
+		dummy	BYTE,
+		chars	(1)	BYTE)';
+
+DCL PartialStringType LIT 'STRUCTURE
+		(len	WORD,
+		max		WORD,
+		dummy	BYTE,
+		chars';
+

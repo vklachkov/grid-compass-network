@@ -1,0 +1,15 @@
+{ FontProcs.Inc  Updated 10/23/84 }
+
+PUBLIC Common;
+
+FUNCTION FontCount: Integer;
+
+FUNCTION FontNthName(index: Integer): StringPtr;
+
+PROCEDURE FontSetName(name: StringPtr; VAR error: Word);
+
+PROCEDURE FontSetNth(index: Integer; VAR error: Word);
+
+FUNCTION FontCurrentNth: Integer;
+
+FUNCTION FontGetN (name: StringPtr) : INTEGER;

@@ -1,0 +1,10 @@
+/* this is os.except.ext.inc */
+
+SetException : PROCEDURE (num) WORD EXTERNAL;
+    DCL num WORD;
+    END;
+
+Exception : PROCEDURE (num, error) EXTERNAL;
+    DCL (num, error) WORD;
+    END;
+

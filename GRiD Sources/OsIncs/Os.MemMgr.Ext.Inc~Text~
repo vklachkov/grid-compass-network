@@ -1,0 +1,27 @@
+
+/*  This is Os.MemMgr.Ext.Inc                   */
+
+  OsFree: PROCEDURE (pBlock, pError) EXTERNAL;
+    DCL pBlock   PTR;
+    DCL pError   PTR;
+    END;
+
+  OsAllocate: PROCEDURE (length, pError) PTR EXTERNAL;
+    DCL length     WORD;
+    DCL pError     PTR;
+    END;
+
+  OsGetSize: PROCEDURE (pBlock, pError) WORD EXTERNAL;
+    DCL pBlock   PTR;
+    DCL pError   PTR;
+    END;
+
+  OsGetMemStatus: PROCEDURE (procID, pMemStatus, pError) EXTERNAL;
+    DCL procId       WORD;
+    DCL pMemStatus   PTR;
+    DCL pError       PTR;
+    END;
+
+  IntFree: PROCEDURE (pBlock) EXTERNAL;
+    DCL pBlock   PTR;
+    END;

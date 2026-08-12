@@ -1,0 +1,237 @@
+{ This is VfsVipcTypes.Inc.  Has constans and types for use with VFS & VIPC 
+
+Current Author(s): 	Raj Shah or Raj Srinivasan 
+Created:			Jan 28th, 1986 }
+
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Function Codes 
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+PUBLIC VIPC;
+
+CONST
+
+	VIPC_Msg					= 0;	{ these are all the same }
+	VIPC_Message				= 0;
+	VIPC_DataMessage			= 0;
+
+	VIPC_ConnectRequest			= 1;	{ Client Layer to VIPC }
+	VIPC_ConnectConfirm			= 2;	{ response from VIPC }
+
+	VIPC_ConnectArrived			= 3;	{ VIPC to client layer }
+	VIPC_ConnectResponse		= 4;	{ response from Client layer }
+
+	VIPC_DisconnectRequest		= 5;	{ Client Layer to VIPC }
+	VIPC_DisconnectConfirm		= 6;	{ response from VIPC }
+
+	VIPC_DisconnectArrived		= 7;	{ VIPC to client layer }
+	VIPC_DisconnectResponse		= 8;	{ response from Client layer }
+
+	VIPC_SignonRequest			= 9;	{ Client layer  to VIPC }
+	VIPC_SignonResponse			= 10;	{ response from VIPC }
+
+	VIPC_ValidateUser			= 11;	{ VIPC to Admin }
+	VIPC_ValidateResponse		= 12;	{ Response from admin }
+
+	VIPC_UserSignedOff			= 13;	{ VIPC to Admin }
+
+	{ The following should not be used any more 
+
+	VIPC_SetStatusRequest		
+	VIPC_SetStatusResponse						 }
+
+
+	VIPC_GetStatusRequest		= 17;	{ Client layer to VIPC }
+	VIPC_GetStatusResponse		= 18;	{ response from VIPC }
+
+	VIPC_SignOffRequest			= 19;	{ Client layer to VIPC }
+	VIPC_SignOffResponse		= 20;	{ response from VIPC }
+
+	VIPC_TerminateRequest		= 21;	{ Client layer to VIPC }
+	VIPC_TerminateResponse		= 22;	{ response from VIPC }
+
+	VIPC_SetConnStatusRequest 	= 23;	{ Client layer to VIPC }
+	VIPC_SetConnStatusResponse	= 24;	{ response from VIPC }
+
+	VIPC_SystemManagementCode	= 85;
+	VIPC_OsManagementCode		= 86;
+
+	{ Netork management function codes 90 - 95 } 
+
+	VIPC_DiagnosticMsg			= 201;
+$EJ
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	CLASSES
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+	VIPC_FunctionClass				= 5000h;
+	VIPC_FunctionClassBase			= 5000h;
+
+	VIPC_OldCompassFunctionClass	= 50000;
+	VIPC_CompassFunctionClass		= 65000;
+
+	VFS_TapOnDetachClass			= 6002h;
+
+	{ Network mangement classes 5400h - 54FFh }
+
+	OsManagementClass				= 5F00h;
+	SystemManagementClass			= 5F01h;
+
+	{ Os internal classes		65001 - 65534 }
+
+	DontEverUseThisClass			= 0FFFEh;
+
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Access/SetConnStatus property types
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+	VIPC_rcvProcessIdProp			= 1;
+	VIPC_serverNameProp				= 2;
+	VIPC_linkNameProp				= 3;
+	VIPC_cardNumProp				= 4;
+	VIPC_portNumProp				= 5;
+	VIPC_stationNumProp				= 6;
+	VIPC_dialTypeProp				= 7;
+	VIPC_baudRateProp				= 9;
+	VIPC_protocolTypeProp			= 10;
+	VIPC_phoneNumProp				= 101;
+
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	MISCELLANEOUS VIPC CONSTANTS
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+	VIPC_ConnectMode		= 10;
+	IpcHeaderLength			= 16;
+	VIPCcreditHeaderLength	= 4;
+
+	MaxVipcMessageLength	= 504;
+	MaxVipcBufferLength		= 530;		{ has 10 extra because Vfs uses 514 }
+
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	MISCELLANEOUS VIPC CREDIT CONSTANTS
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+	isntLastBit =				1;
+	isControlBit =				128;
+
+	CreditOnlyControlByte =		80h;
+	AbortControlByte =			81h;
+	infiniteCredits =			255;
+
+{ Protocol types }
+
+	emptyPort =			1;
+	PhoneLinkPort =		2;
+	GRiDLinkPort =		3;
+
+$EJECT
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	VIPC Header Types.
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+TYPE
+
+	IpcHeaderType = RECORD
+		ipcFunctionCode:	BYTE;
+		toBeFreed:			BOOLEAN;
+		Reserved:			LONGINT;
+		sourceProcID:		WORD;
+		destProcID:			WORD;
+		class:				WORD;
+		note:				WORD;
+		length:				WORD;
+		END;
+
+
+	VipcMessageType	= RECORD
+		ipcHeader:		IpcHeaderType;
+		msgData:		ARRAY [1..1] OF BYTE;
+		END;
+	VipcMessagePtr	= ^VipcMessageType;
+
+	VipcMessageWithCreditsType = RECORD
+		ipcHeader:		IpcHeaderType;
+		controlByte:	BYTE;
+		newCredits:		BYTE;
+		status:			WORD;
+		msgData:		ARRAY [1..1] OF BYTE;
+		END;
+	VipcMessageWithCreditsPtr = ^VipcMessageWithCreditsType;
+
+	VipcConnectArrivedType = RECORD
+		ipcHeader:		IpcHeaderType;
+		userClass:		WORD;
+		propertyList: 	ARRAY [1..1] OF BYTE;
+		END;
+	VipcConnectArrivedPtr = ^VipcConnectArrivedType;
+
+	VipcConnectResponseType = RECORD
+		ipcHeader:		IpcHeaderType;
+		status:			WORD;
+		END;
+	VipcConnectResponsePtr = ^VipcConnectResponseType;
+
+	VipcConnectRequestType = RECORD
+		ipcHeader:		IpcHeaderType;
+		pathNameLen:	BYTE;
+		pathNameChars:	ARRAY [1..1] OF BYTE;
+		END;
+	VipcConnectRequestPtr = ^VipcConnectRequestType;
+
+	VipcConnectConfirmType = RECORD
+		ipcHeader:		IpcHeaderType;
+		status:			WORD;
+		END;
+	VipcConnectConfirmPtr = ^VipcConnectConfirmType;
+
+	VipcDisconnectArrivedType = RECORD
+		ipcHeader:		IpcHeaderType;
+		reason:			WORD;
+		END;
+	VipcDisconnectArrivedPtr = ^VipcDisconnectArrivedType;
+
+	VipcDisconnectResponseType = RECORD
+		ipcHeader:		IpcHeaderType;
+		END;
+	VipcDisconnectResponsePtr = ^VipcDisconnectResponseType;
+
+	VipcDisconnectRequestType = RECORD
+		ipcHeader:		IpcHeaderType;
+		reason:			WORD;
+		END;
+	VipcDisconnectRequestPtr = ^VipcDisconnectRequestType;
+
+	VipcDisconnectConfirmType = RECORD
+		ipcHeader:		IpcHeaderType;
+		status:			WORD;
+		END;
+	VipcDisconnectConfirmPtr = ^VipcDisconnectConfirmType;
+
+	VipcSetConnStatusRequestType = RECORD
+		ipcHeader:		IpcHeaderType;
+		propertyList:	ARRAY [1..1] OF BYTE;
+		END;
+	VipcSetConnStatusRequestPtr = ^VipcSetConnStatusRequestType;
+
+	VipcSetConnStatusResponseType = RECORD
+		ipcHeader:		IpcHeaderType;
+		status:			WORD;
+		END;
+	VipcSetConnStatusResponsePtr = ^VipcSetConnStatusResponseType;
+
+	VipcChangeRcvProcessType = RECORD
+		fD:				BYTE;	
+		length:			WORD;	{ length of property = 3}
+		tag:			BYTE;
+		procID:			WORD;
+		END;
+
+{&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&	Other VIPC Types.
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&}
+
+	VipcCardStatusType = RECORD
+		configured:		BOOLEAN;
+		protocol:		ARRAY [0..3] OF BYTE;
+		END;
+

@@ -1,0 +1,309 @@
+$COMPACT (EXPORTS PrimaryDlcProcess)
+$OPTIMIZE(3)
+$TITLE ('CCDLC - Primary Module')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+*
+*         COMPASS CENTRAL DATA LINK CONTROL
+*
+*    Module:    PrimaryModule.    1/28/83
+*
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+PrimaryModule: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`CommonDefines.inc~Text~)
+$INCLUDE (``ccIncs`MachineDefines.inc~Text~)
+$INCLUDE (``ccIncs`MacDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`MemoryDefines.inc~Text~)
+$INCLUDE (``ccIncs`DlcSupportModule.inc~Text~)
+$INCLUDE (``ccIncs`GlobalDataModule.inc~Text~)
+$INCLUDE (``ccIncs`GeneralModule.inc~Text~)
+$INCLUDE (``ccIncs`MacModule.inc~Text~)
+$INCLUDE (``ccIncs`dlcActionModule1.inc~Text~)
+$INCLUDE (``ccIncs`PriMachineModule.inc~Text~)
+$INCLUDE (``ccIncs`PriParseModule.inc~Text~)
+$INCLUDE (``ccIncs`TimerModule.inc~Text~)
+$INCLUDE (``ccIncs`UtlModule.inc~Text~)
+$INCLUDE (``Incs`OsPlmProcs.inc~Text~)
+$INCLUDE (``Incs`ConPlmProcs.inc~Text~)
+$INCLUDE (``Incs`MovRtns.Plm.inc~Text~)
+$RESTORE
+
+$EJ
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+ 
+PrimaryDlcProcess: PROCEDURE CLEAN;
+
+/*-------------------------------------------------------------------------
+
+ Purpose: This procedure is used to create an instance of the 
+      primary data link control process. Variables associated
+      with a particular dlc process are allocated on the 
+      process stack.
+
+ Algorithm: The dlc process will perform the following steps:
+
+      o  After process creation, the dlc process will wait for
+       the initialization message. This message contains
+       various initialization parameters.
+      o  When the initialization message is received, the dlc
+       will use the parameters to set up, and will return
+       an initialization complete message with an appropriate
+       status of OK or Invalid Initialization.
+      o  If the initialization was invalid, the dlc process
+       will repeat the first step.
+      o  If the initialization was successful, the dlc process
+       will enter a loop for normal I/O processing. All
+       external events are handled in this loop.
+       The loop consists of the following steps:
+        1) If any message of class high priority is
+          pending on message then pick it up
+        2) else wait for message of any class (presumably
+          only classes low and high priority are seen).
+        3) Using subclass, parse the received message to
+          generate the machine control block, event
+          and parameter to execute the state machine.
+         1) If subclass is defer timer, then put message
+           onto internal defer timer queue. 
+           (No event is generated.)
+         2) else if subclass is Media access control then
+          1) if message subclass is receive or frameIn
+            then parse receive event.
+          2) else if subclass is frameout or frameoutdata
+            then parse transmit event.
+          3) else call machine failure to log unknown.
+         3) else if subclass is dlc then parse dlc event.
+        4) if any valid parsed event then execute the state
+          machine using parsed event.
+        5) if all machines are deferring then
+         1) if internal defer queue is not empty then
+          1) get message off of queue.
+          2) parse dlc event.
+          3) if valid parsed event then execute machine.
+
+
+-------------------------------------------------------------------------*/
+
+DCL	linkNumber BYTE;	/* link number for this dlc process use */
+
+/*	Queue for holding machine defer time out message control blocks.
+	When no machine is currently active (i.e. using data link), next
+	machine whose defer timer is expired becomes active machine.
+*/
+DCL	(dlcDeferMachineQhead, dlcDeferMachineQtail) SELECTOR;
+
+/*	Contains state information control blocks for 8 active machines, 
+	plus one station to return too-many-stations error
+*/
+DCL	stateMachineArray (maxNumberOfStations) SELECTOR;
+
+DCL	numberOfStations BYTE;    /* limits number of operating stations */
+
+/*	Used to point to and access the machine control block
+	for which the current event is intended
+*/
+DCL	pStateMachine	SELECTOR;
+DCL	stateMachine	BASED pStateMachine dlcPrimaryMachineType;
+
+/*	Used to point to and access the message control block,
+	if any, associated with the current event
+*/
+DCL	pDlCB			SELECTOR;
+DCL	dlCB			BASED pDlCB STRUCTURE(DlCBgenDescriptor);
+DCL	configureDlCB	BASED pDlCB STRUCTURE(DlCBgenDescriptor,
+												DlCBConfigureParams);
+
+/* Boolean used to control the termination of the dlc process */
+DCL	shutDown BYTE;
+
+DCL	(note, error) WORD;	/* Needed for Os procedure calls */
+
+DCL	pTempDlCB	SELECTOR;	/* Used for clean up during shut */
+DCL	tempDlCB	BASED pTempDlCB STRUCTURE(DlCBgenDescriptor, DlCBTimerParams);
+
+/* Needed for controlling search through machine control block array */
+DCL	x WORD;
+
+DCL	msgType WORD;	/* Simple variable for checking received message type */
+
+/*-----------------------------------------------------------------------*/
+
+$EJ
+/* Initialize the dlc. Loop until successful init message processed */
+
+	error = 1;
+	DO WHILE error <> ok;    /* wait for initialization message */
+		pDlCB = SELECTOR$OF(OsReceive(anyProcess, anyClass, waitForEver,
+															@note, @error));
+		IF error = ok THEN
+		DO;
+			CALL ConLineOut (@('Primary Initializing: '), 22);
+			CALL ConHexOut (configureDlCB.linkNumber);
+
+			IF (dlCB.msgFormat <> (msgRequest OR dlcConfigure)) THEN
+				error = eDlcInvalidRequest;
+			ELSE
+				IF configureDlCB.stationCount >= maxNumberOfStations THEN
+					error = eDlcTooManyStations;
+			ELSE
+				DO;
+					linkNumber = configureDlCB.linkNumber;
+					/* add one to support negative signon response for
+						too many stations */
+					numberOfStations = configureDlCB.stationCount + 1;
+					priSdlcMachineInitValues.currentRetries,
+					priSdlcMachineInitValues.maxRetries =
+													configureDlCB.retryCount;
+					priSdlcMachineInitValues.responseTime =
+													configureDlCB.responseTO;
+					priSdlcMachineInitValues.pollTime =
+													configureDlCB.pollTO;
+					CALL MacEnableTransmitter(linkNumber);
+				END;
+			CALL GenReturnUserRequest(nullWord, pDlCB, error);
+			IF error <> 0 THEN
+			DO;
+				CALL ConLineOut (@(', error: '), 9);
+				CALL ConHexOut (error);
+			END;
+			CALL ConLineOut (@(0Dh, 0Ah), 2);
+		END;
+	END;
+
+	/* Initialize state machine array */
+	DO x = 0 TO (maxNumberOfStations - 1);
+		stateMachineArray(x) = nullWord;
+	END;
+
+	/* Initialize global ptr to state machine array */
+	globalStateMachinePtr(linkNumber) = @stateMachineArray(0);
+
+	/* Initialize the deferred timer queue */
+	dlcdeferMachineQhead, dlcdeferMachineQtail = nullWord;
+   
+$EJ
+	/* now enter the main operating loop */
+
+	shutDown = FALSE;
+	DO WHILE NOT shutDown;
+		pDlCB = nullWord; 
+		pStateMachine = nullWord;
+		pDlCB = SELECTOR$OF(OsReceive(anyProcess, anyClass, waitForever,
+															@note, @error));
+		IF (error = ok) AND (pDlCB <> nullWord) THEN
+		DO;
+			msgType = dlCB.msgFormat;
+			IF (msgType AND msgClassMask) = classMac THEN
+			DO;
+				IF (msgType AND msgMacIoTypeMask) = msgMacReceive THEN
+					pStateMachine = PriParseReceiveEvent(@stateMachineArray(0),
+													pDlCB, numberOfStations);
+				ELSE
+					IF (msgType AND msgMacIoTypeMask) = msgMacTransmit THEN
+						pStateMachine = PriParseTransmitEvent(
+												@stateMachineArray(0), pDlCB);
+				ELSE
+					DO;
+						CALL OsLogError(2, eCcInternalError, invalidReceive,
+																@(6,'PriPr3'));
+						CALL AcFreeCB(nullWord, pDlCB);
+					END;
+			END;
+			ELSE
+				IF (msgType AND msgClassMask) = classTimer THEN
+				DO;
+					IF msgType = (tmrDeferTimer OR msgResponse) THEN
+						CALL UtlPutQ(@dlcDeferMachineQhead, pDlCB);
+					ELSE
+						pStateMachine = PriParseTimerEvent(
+								@stateMachineArray(0), pDlCB, numberOfStations);
+				END;
+			ELSE
+				IF (msgType AND msgClassMask) = classDlc THEN
+				DO;
+					IF msgType = (dlcDie OR msgRequest) THEN
+						shutDown = TRUE;
+					ELSE
+						pStateMachine = PriParseDlcEvent(@stateMachineArray(0),
+								pDlCB, numberOfStations, @lastAllocatedAddress);
+				END;
+			ELSE 
+				CALL GenMachineFailure(nullWord, pDlCB, invalidReceive);
+		END;
+		ELSE
+			CALL GenMachineFailure(nullWord, pDlCB, invalidReceive);
+
+		IF NOT shutdown THEN
+		DO;
+			IF pStateMachine <> nullWord THEN
+			DO;
+				CALL GenExecuteMachine(pStateMachine, pDlCB);
+				IF NOT stateMachine.operating THEN
+				CALL FreeUsedMachine(@stateMachineArray(0),
+											pStateMachine, numberOfStations);
+			END;
+			IF (NOT isAnyMachineActive(@stateMachineArray(0),
+														numberOfStations)) THEN
+				IF (pDlCB := UtlPopQ(@dlcDeferMachineQhead)) <> nullWord THEN
+				DO;
+					pStateMachine = PriParseTimerEvent(@stateMachineArray(0),
+													pDlCB, numberOfStations);
+					IF pStateMachine <> nullWord THEN
+					DO;
+						CALL GenExecuteMachine(pStateMachine, pDlCB);
+						IF NOT stateMachine.operating THEN
+							CALL FreeUsedMachine(@stateMachineArray(0),
+											pStateMachine, numberOfStations);
+					END;
+				END;
+		END;
+	END;
+
+$EJ
+	/*	dlc has received shutdown request message. Need to shutdown each
+		operating machine. No attempt is made by machines to cleanly
+		break any data link connections.
+	*/
+
+	CALL MacDisable(linkNumber);
+
+	DO x = 0 TO (numberOfStations - 1);
+		IF (pStateMachine := stateMachineArray(x)) <> nullWord THEN
+		DO;
+			DO WHILE (pTempDlCB :=
+							UtlPopQ(@stateMachine.sendQhead(0))) <> nullWord;
+				CALL GenReturnUserRequest(pStateMachine, pTempDlCB,
+															eDlcNotInitialized);
+			END;
+			DO WHILE (pTempDlCB :=
+						UtlPopQ(@stateMachine.outstandingQhead(0))) <> nullWord;
+				CALL GenReturnUserRequest(pStateMachine, pTempDlCB,
+															eDlcNotInitialized);
+			END;
+			DO WHILE (pTempDlCB :=
+						UtlPopQ(@stateMachine.ackedQhead(0))) <> nullWord;
+				CALL GenReturnUserRequest(pStateMachine, pTempDlCB, ok);
+			END;
+			CALL OsFree(BUILD$PTR(pStateMachine, 0), @error);
+		END;
+	END;
+
+	globalStateMachinePtr(linkNumber) = NIL;
+
+	/* return shut request message */
+	CALL GenReturnUserRequest(nullWord, pDlCB, ok);
+
+	/* wait for process delete */
+	DO WHILE TRUE;
+		pDlCB = SELECTOR$OF(OsReceive(anyProcess, anyClass,
+												waitForEver, @note, @error));
+		IF error = ok THEN
+		CALL GenReturnUserRequest(nullWord, pDlCB, eDlcNotInitialized);
+	END; 
+
+END PrimaryDlcProcess;
+
+END PrimaryModule;

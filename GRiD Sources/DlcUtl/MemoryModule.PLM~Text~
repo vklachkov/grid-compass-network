@@ -1,0 +1,164 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('Compass Central - Data Comm Memory Manager')
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+MemoryModule: DO;
+
+$SAVE NOLIST
+$INCLUDE (``ccIncs`commonDefines.inc~Text~)
+$INCLUDE (``ccIncs`dlcMsgDefines.inc~Text~)
+$INCLUDE (``ccIncs`memoryDefines.inc~Text~)
+
+$SET(utlQueuesOnly)
+$INCLUDE (``ccIncs`utlModule.inc~Text~)
+
+$INCLUDE (``Incs`osPlmProcs.inc~Text~)
+$INCLUDE (``Incs`conPlmProcs.inc~Text~)
+$RESTORE
+
+$IF creator
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+MemFreeMemory: PROCEDURE(pMemSegment, pError) CLEAN;
+DCL pMemSegment			SELECTOR;
+DCL memSegment			BASED pMemSegment memHeaderType;
+DCL pError				POINTER;
+DCL error				BASED pError WORD;
+
+	CALL OsDeleteSemaphore(memSegment.semaphore, pError);
+	CALL OsFree(BUILD$PTR(pMemSegment, 0), pError);
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+MemAllocateMemory: PROCEDURE(numberOfEntries, entrySize, pError)
+															SELECTOR CLEAN;
+DCL (numberOfEntries,
+	entrySize)			WORD;
+DCL pError				POINTER;
+DCL error				BASED pError WORD;
+DCL pMemSegment			POINTER;
+DCL memSegment			BASED pMemSegment memHeaderType;
+DCL returnSeg			SELECTOR;
+DCL (segmentSize,
+	error2)				WORD;
+DCL (segCount, 
+	x) 					BYTE;
+DCL pBLock				SELECTOR;
+DCL wBlock				WORD AT (@pBlock);
+
+	pMemSegment = NIL;
+	IF (entrySize MOD memParagraphSize) > 0 THEN 
+		/* ensure selector boundary */
+		entrySize = ((entrySize / memParagraphSize) + 1) * memParagraphSize; 
+
+	/* approximate segment size */
+	segmentSize = numberOfEntries * entrySize;
+
+	/* ensure segment boundary */
+	IF (segmentSize MOD memFixedSegmentSize) > 0 THEN
+		segmentSize = ((segmentSize / memFixedSegmentSize) + 1) *
+						memFixedSegmentSize;
+
+	/* actual number of entries */
+	numberOfEntries = segmentSize / entrySize;
+
+	/* add room for header */
+	pMemSegment = OsAllocate((segmentSize + memParagraphSize), pError);
+	IF error = 0 THEN
+	DO;
+		CALL SETW(00AAh, pMemSegment, ((segmentSize / 2) + 8));
+		memSegment.semaphore = OsCreateSemaphore(pError);
+		IF error = 0 THEN
+		DO;
+			memSegment.numberOfEntries = numberOfEntries;
+			memSegment.entrySize = entrySize;
+			memSegment.freeQhead, memSegment.freeQtail = null;
+			pBlock = SELECTOR$OF(pMemSegment);
+			wBlock = wBlock + 1; /* skip mem header */
+			DO x = 1 TO numberOfEntries;
+				CALL UtlPutQ(@memSegment.freeQhead, pBlock);
+				wBlock = wBlock + (entrySize / memParagraphSize);
+			END;
+		END;
+		ELSE
+			CALL OsFree(pMemSegment, @error2);
+	END;
+
+	RETURN SELECTOR$OF(pMemSegment);
+END;
+
+$ENDIF
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+MemGetBlock: PROCEDURE(pMemSegment, pError) SELECTOR CLEAN;
+DCL pMemSegment			SELECTOR;
+DCL memSegment			BASED pMemSegment memHeaderType;
+DCL pError				POINTER;
+DCL error				BASED pError WORD;
+DCL (note,
+	error2)				WORD;
+DCL returnPtr			SELECTOR;
+
+	error = ok;
+	returnPtr = null;
+	
+	DISABLE;
+	returnPtr = UtlPopQ(@memSegment.freeQhead);
+	ENABLE;
+      
+	IF returnPtr = null THEN
+	DO;
+		/* try again, first wait on free CB semaphore */
+		note = OsWait(memSegment.semaphore, 10000, @error2);
+		DISABLE;
+		returnPtr = UtlPopQ(@memSegment.freeQhead);
+		ENABLE;
+	END;
+
+	IF returnPtr <> null THEN 
+		CALL SETW(null, BUILD$PTR(returnPtr, 0), SHR(memSegment.entrySize, 2));
+	ELSE
+		error = eNoCBsAvailable;
+
+	RETURN returnPtr;
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+MemFreeBlock: PROCEDURE(pMemSegment, pMemBlock, pError) CLEAN;
+DCL pMemSegment			SELECTOR;
+DCL wMemSegment			WORD AT (@pMemSegment);
+DCL memSegment			BASED pMemSegment memHeaderType;
+DCL pMemBlock			SELECTOR;
+DCL wMemBlock			WORD AT (@pMemBlock);
+DCL pError				POINTER;
+DCL error				BASED pError WORD;
+DCL (note,
+	high)				WORD;
+DCL signalWaiter		BYTE;
+
+	error = ok;
+	high = wMemSegment + ((memSegment.numberOfEntries *
+					memSegment.entrySize) / memParagraphSize);
+	IF ((wMemBlock > wMemSegment) AND (wMemBlock <= high)) THEN 
+	DO;
+		signalWaiter = FALSE;
+		DISABLE;
+		IF memSegment.freeQhead = null THEN
+			signalWaiter = TRUE;
+		CALL UtlPutQ(@memSegment.freeQhead, pMemBlock);
+		ENABLE;
+
+		/* signal for any processes waiting on free CB */
+		IF signalWaiter THEN
+			CALL OsSignal(memSegment.semaphore, 2, 0, @error);
+	END;
+	ELSE
+		error = eInvalidCB;
+END;
+
+/*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
+
+END MemoryModule;

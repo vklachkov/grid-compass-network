@@ -1,0 +1,10 @@
+
+/*         This is Os.ConInOut.Ext.Inc         */
+
+OsAddKbChar: PROCEDURE (char) EXTERNAL;
+  DCL char  CharType;
+  END;
+
+OsKeyboardHandler: PROCEDURE EXTERNAL;
+  END;
+

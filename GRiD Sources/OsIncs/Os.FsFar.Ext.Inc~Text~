@@ -1,0 +1,47 @@
+/* this is os.far.ext.inc */
+
+FlushCurrentFar : PROCEDURE WORD EXTERNAL;
+    END;
+
+ReadThisFar : PROCEDURE (farNum) WORD EXTERNAL;
+    DCL farNum WORD;
+    END;
+
+UpdateDescriptor : PROCEDURE WORD EXTERNAL;
+    END;
+
+FlushCurrentPage : PROCEDURE WORD EXTERNAL;
+    END;
+
+ReadFilePage : PROCEDURE (pageNum) WORD EXTERNAL;
+    DCL pageNum WORD;
+    END;
+
+MakeNewFar : PROCEDURE (pFar, farNum, prev, curr, next) EXTERNAL;
+    DCL pFar PTR;
+    DCL (farNum, prev, curr, next) WORD;
+    END;
+
+ReadFirstFar : PROCEDURE WORD EXTERNAL;
+    END;
+
+AppendCurrentPage : PROCEDURE WORD EXTERNAL;
+    END;
+
+TruncateFile : PROCEDURE (pageNum) WORD EXTERNAL;
+    DCL pageNum WORD;
+    END;
+
+GetFarPointer : PROCEDURE PTR EXTERNAL;
+    END;
+
+DescChecksum: PROCEDURE WORD EXTERNAL;
+  END;
+
+PutDescChecksum: PROCEDURE EXTERNAL;
+  END;
+
+GetFarNumIndex : PROCEDURE (pageNum, pFarNum) WORD EXTERNAL;
+  DCL pageNum      WORD;
+  DCL pFarNum      PTR;
+  END;

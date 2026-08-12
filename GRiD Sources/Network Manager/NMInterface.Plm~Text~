@@ -1,0 +1,1321 @@
+$COMPACT (EXPORTS InterfaceProc)
+$TITLE('Network Manager Application Interface')
+/****************************************************************************/
+/*																			*/
+/*				Network Manager Application Interface	-	1/3/86			*/
+/*																			*/
+/****************************************************************************/
+
+NMInterface: DO;
+
+$SAVE NOLIST
+$INCLUDE(``Incs`PLMLits.Inc~Text~)
+$INCLUDE(``Incs`OsPlmTypes.Inc~Text~)
+$INCLUDE(``Incs`OsPlmProcs.Inc~Text~)
+$SET(includeOsConstants)
+$INCLUDE(``Incs`Errors.Inc~Text~)
+$INCLUDE(``Incs`Strings.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`VIPC.PlmTypes.Inc~Text~)
+$INCLUDE(``Incs`MovRtns.Plm.Inc~Text~)
+$INCLUDE(NMConstants.Plm.Inc~Text~)
+$INCLUDE(NMData.Plm.Inc~Text~)
+$INCLUDE(NMUtils.Plm.Inc~Text~)
+$INCLUDE(NMMisc.Plm.Inc~Text~)
+$RESTORE
+
+$EJ
+/* Logging. */
+
+LogActivateTry: PROCEDURE(pConn, userPid, cardNum, portNum) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	userPid		WORD,
+	cardNum		BYTE,
+	portNum		BYTE,
+	error		WORD;
+
+	pServer = connInfo.pServerInfo;
+	CALL AddLogStr(NewStringLit(@('Activating port ')));
+	CALL AddLogInt(portNum);
+	CALL AddLogStr(NewStringLit(@(' on card ')));
+	CALL AddLogInt(cardNum);
+	CALL AddLogStr(NewStringLit(@(' for user ')));
+	CALL AddLogInt(userPid);
+	CALL AddLogStr(NewStringLit(@(' to server ')));
+	CALL AddLogStr(CopyOfString(serverInfo.pName));
+	CALL AddLogStr(NewStringLit(@(cr, lf, '                    ')));
+	CALL AddLogStr(NewStringLit(@(' on connection ')));
+	CALL AddLogStr(CopyOfString(connInfo.pName));
+	IF connInfo.pPhoneNumber <> nullPtr THEN
+	DO;
+		CALL AddLogStr(NewStringLit(@(' using phone number ')));
+		CALL AddLogStr(ConstructNumber(pConn, (4*cardNum + portNum)));
+	END;
+	CALL DoLog(@error);
+
+END LogActivateTry;
+
+
+LogActivated: PROCEDURE(cardNum, portNum, pConn) CLEAN;
+
+DCL	cardNum		BYTE,
+	portNum		BYTE,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	error		WORD;
+
+	CALL AddLogStr(NewStringLit(@('Activated port ')));
+	CALL AddLogInt(portNum);
+	CALL AddLogStr(NewStringLit(@(' on card ')));
+	CALL AddLogInt(cardNum);
+	IF pConn <> nullPtr THEN
+	DO;
+		IF connInfo.pPhoneNumber <> nullPtr THEN
+		DO;
+			CALL AddLogStr(NewStringLit(@(' using phone number ')));
+			CALL AddLogStr(ConstructNumber(pConn, (4*cardNum + portNum)));
+		END;
+	END;
+	CALL DoLog(@error);
+
+END LogActivated;
+
+
+LogActivateFail: PROCEDURE(cardNum, portNum, error) CLEAN;
+
+DCL	cardNum		BYTE,
+	portNum		BYTE,
+	error		WORD;
+
+	CALL AddLogStr(NewStringLit(@('Activation failed - port = ')));
+	CALL AddLogInt(portNum);
+	CALL AddLogStr(NewStringLit(@(', card = ')));
+	CALL AddLogInt(cardNum);
+	CALL AddLogStr(NewStringLit(@(', error = ')));
+	CALL AddLogInt(error);
+	CALL DoLog(@error);
+
+END LogActivateFail;
+
+
+LogLinkFreed: PROCEDURE(pConn, cardNum, portNum) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	cardNum		BYTE,
+	portNum		BYTE,
+	error		WORD;
+
+	CALL AddLogStr(NewStringLit(@('Link deactivated - port = ')));
+	CALL AddLogInt(portNum);
+	CALL AddLogStr(NewStringLit(@(' card = ')));
+	CALL AddLogInt(cardNum);
+	IF pConn <> nullPtr THEN
+	DO;
+		CALL AddLogStr(NewStringLit(@(' connection = ')));
+		CALL AddLogStr(CopyOfString(connInfo.pName));
+	END;
+	ELSE
+		CALL AddLogStr(NewStringLit(@(' Connection was not found')));
+	CALL DoLog(@error);
+
+END LogLinkFreed;
+
+
+LogBadReq: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq	POINTER,
+	req		BASED pReq msgBadReq,
+	error	WORD;
+
+	CALL AddLogStr(NewStringLit(@('Bad message - Function code = ')));
+	CALL AddLogInt(req.functionCode);
+	CALL AddLogStr(NewStringLit(@(' Source pid = ')));
+	CALL AddLogInt(req.sourcePid);
+	CALL AddLogStr(NewStringLit(@(' Class = ')));
+	CALL AddLogInt(req.class);
+	CALL AddLogStr(NewStringLit(@(' Command = ')));
+	CALL AddLogInt(req.cmd);
+	CALL AddLogStr(NewStringLit(@(' Length = ')));
+	CALL AddLogInt(req.length);
+	CALL DoLog(@error);
+
+END LogBadReq;
+
+
+LogConnect: PROCEDURE CLEAN;
+
+DCL	error	WORD;
+
+	CALL AddLogStr(NewStringLit(@('Connected: Company = ')));
+	CALL AddLogStr(GetPropString(companyProp, @userIdBuffer, userIdBufferLen));
+	CALL AddLogStr(NewStringLit(@(', Group = ')));
+	CALL AddLogStr(GetPropString(groupProp, @userIdBuffer, userIdBufferLen));
+	CALL AddLogStr(NewStringLit(@(', User = ')));
+	CALL AddLogStr(GetPropString(userProp, @userIdBuffer, userIdBufferLen));
+	CALL DoLog(@error);
+
+END LogConnect;
+
+
+LogRealConfig: PROCEDURE CLEAN;
+
+DCL	card	BYTE,
+	port	BYTE,
+	ch		(3) BYTE,
+	error	WORD;
+
+	CALL AddLogStr(NewStringLit(@('Communication configuration is:')));
+	CALL DoLog(@error);
+	ch(1) = ' '; ch(2) = '';
+	DO card = 0 TO 7;
+		IF cardInfo(card).configured THEN
+		DO;
+			ch(0) = '0' + card;
+			CALL AddLogStr(NewStringLit(@ch));
+			DO port = 4*card TO (4*card + 3);
+				IF portInfo(port).protocol = phonelink THEN
+				DO;
+					CALL AddLogStr(NewStringLit(@(', PhoneLink')));
+					IF portInfo(port).baudChoice = baudExternal THEN
+						CALL AddLogStr(NewStringLit(@('External')));
+					ELSE
+						IF portInfo(port).baudChoice = baud1200and2400 THEN
+							CALL AddLogStr(NewStringLit(@('1200/2400')));
+					ELSE
+						CALL AddLogInt(portInfo(port).baudRate);
+				END;
+				ELSE
+					IF portInfo(port).protocol = gridlinkPrimary THEN
+						CALL AddLogStr(NewStringLit(@(', GRiDLink')));
+				ELSE
+					IF portInfo(port).protocol = fiberlinkPrimary THEN
+						CALL AddLogStr(NewStringLit(@(', OpticGRiDLink')));
+				ELSE
+					CALL AddLogStr(NewStringLit(@(', Empty')));
+			END;
+			CALL DoLog(@error);
+		END;
+	END;
+
+END LogRealConfig;
+
+$EJ
+/* Construct phone number. */
+
+ConstructNumber: PROCEDURE(pConn, portIndex) POINTER CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	portIndex	WORD,
+	i			WORD,
+	pStr		POINTER,
+	str			BASED pStr stringType,
+	pNumber		POINTER,
+	number		BASED pNumber stringType,
+	tempNumber	(phoneNumberLength) BYTE;
+
+	pNumber = NewString(3*phoneNumberLength);
+	i = 0;
+	IF (portInfo(portIndex).lineKind = internalLine) AND
+								(portInfo(portIndex).prefix(0) > 0) AND
+									(connInfo.networkType = publicNetwork) THEN
+	DO;
+		i = portInfo(portIndex).prefix(0);
+		CALL MOVB(@portInfo(portIndex).prefix(1), @number.chars(0), i);
+		number.chars(i) = ',';
+		i = i + 1;
+	END;
+	IF (pStr := connInfo.pPhoneNumber) <> nullPtr THEN
+	DO;
+		str.dummy = str.len;
+		IF NOT LocalNumber(@str.dummy, @tempNumber) THEN
+		DO;
+			CALL MOVB(@myLongDistCode(1), @number.chars(i), myLongDistCode(0));
+			i = i + myLongDistCode(0);
+		END;
+		CALL MOVB(@tempNumber(1), @number.chars(i), tempNumber(0));
+		i = i + tempNumber(0);
+	END;
+	number.len, number.dummy = i;
+	RETURN pNumber;
+
+END ConstructNumber;
+
+$EJ
+/* Set fixed response fields. */
+
+SetRspFields: PROCEDURE(pRsp) CLEAN;
+
+DCL	pRsp	POINTER,
+	rsp		BASED pRsp stdMessage;
+
+	rsp.functionCode = nmUserFunctionCode;
+	rsp.toBeFreed = TRUE;
+	rsp.ctrl, rsp.newCredits, rsp.status = 0;
+
+END SetRspFields;
+
+
+/* Send response. */
+
+SendResponse: PROCEDURE(pReq, pRsp, pError) CLEAN;
+
+DCL	pReq	POINTER,
+	req		BASED pReq stdMessage,
+	pRsp	POINTER,
+	rsp		BASED pRsp stdMessage,
+	pError	POINTER,
+	error	BASED pError WORD;
+
+	CALL OsSend(req.sourcePid, req.Class, req.cmd, @rsp, @error);
+
+END SendResponse;
+
+
+/* Free message. */
+
+FreeMessage: PROCEDURE(pMsg, pError) CLEAN;
+
+DCL	pMsg	POINTER,
+	msg		BASED pMsg stdMessage,
+	pError	POINTER,
+	error	BASED pError WORD;
+
+	IF msg.toBeFreed THEN
+	DO;
+		CALL OsFree(pMsg, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1640, attentionOn);
+	END;
+
+END FreeMessage;
+
+$EJ
+/* Parse message and return message type. */
+
+ParseMessage: PROCEDURE(pMsg) BYTE CLEAN;
+
+DCL pMsg	POINTER,
+	msg		BASED pMsg stdMessage;
+
+	IF msg.class = nmUserClass THEN
+	DO;
+		IF (msg.cmd < cmdAllocateLink) OR (msg.cmd > cmdGetCardStatus) OR
+				 		(msg.functionCode <> nmUserFunctionCode) OR
+											(msg.length < msgCreditSize) THEN
+			RETURN cmdErrorMessage;
+		ELSE
+			RETURN msg.cmd;
+	END;
+	ELSE
+		IF (msg.class = nmIpcClass) THEN
+		DO;
+			IF (msg.functionCode = nmIpcLinkActivated) THEN
+				RETURN cmdLinkActivated;
+			ELSE
+				IF (msg.functionCode = nmIpcLinkDeactivated) THEN
+					RETURN cmdLinkDeactivated;
+		END;
+	ELSE
+		RETURN cmdErrorMessage;
+
+END ParseMessage;
+
+$EJ
+/* Process unknown message/ errors. */
+
+ProcessErrorMessage: PROCEDURE(pReq, msgError) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgBadReq,
+	msgError	WORD,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgBadRsp,
+	error		WORD;
+
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+		rsp.length = SIZE(rsp) - msgHdrSize;
+		rsp.error = msgError;
+		CALL SendResponse(pReq, pRsp, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1641, attentionOn);
+	END;
+	ELSE
+		CALL LogError(error, 1642, attentionOn);
+
+	CALL LogBadReq(pReq);
+	CALL FreeMessage(pReq, @error);
+
+END ProcessErrorMessage;
+
+$EJ
+/* Stuff response with properties. */
+
+StuffProps: PROCEDURE(pServer, pConn, cardNum, portNum, pProps, pRspLen) CLEAN;
+
+DCL	pServer			POINTER,
+	serverInfo		BASED pServer serverInfoType,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	cardNum			WORD,
+	portNum			WORD,
+	pProps			POINTER,
+	props			BASED pProps (1) BYTE,
+	pRspLen			POINTER,
+	rspLen			BASED pRspLen WORD,
+	pStr			POINTER,
+	str				BASED pStr stringType;
+
+	rspLen = 0;
+	IF pServer <> nullPtr THEN
+	DO;
+		pStr = serverInfo.pName;
+		CALL PutProperty(VIPC_serverNameProp, @str.chars, str.len, @props,
+																	@rspLen);
+	END;
+	IF pConn <> nullPtr THEN
+	DO;
+		pStr = connInfo.pName;
+		CALL PutProperty(VIPC_linkNameProp, @str.chars, str.len, @props,
+																	@rspLen);
+		IF (pStr := connInfo.pPhoneNumber) <> nullPtr THEN
+			CALL PutProperty(VIPC_phoneNumProp, @str.chars, str.len, @props,
+																	@rspLen);
+	END;
+	CALL PutProperty(VIPC_cardNumProp, @cardNum, 1, @props, @rspLen);
+	CALL PutProperty(VIPC_portNumProp, @portNum, 1, @props, @rspLen);
+
+END StuffProps;
+
+$EJ
+/* Activate the link. */
+
+ActivateLink: PROCEDURE(pConn, cardNum, portNum) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	cardNum		BYTE,
+	portNum		BYTE,
+	ipcPid		WORD,
+	error		WORD,
+	pMsg		POINTER,
+	msg			BASED pMsg msgActivateLink,
+	i			WORD,
+	portIndex	WORD,
+	pStr		POINTER,
+	str			BASED pStr stringType;
+
+	portIndex = 4*cardNum + portNum;
+
+	ipcName(ipcName(0)) = '0' + cardNum;
+	ipcPid = OsLookupName(@ipcName, @error);
+	IF error <> eOk THEN GOTO procExit;
+
+	pMsg = AllocateMemory(
+				(SIZE(msg) + 2*phoneNumberLength + prefixLength), @error);
+	IF error <> eOk THEN GOTO procExit;
+
+	msg.functionCode = nmIpcActivateLink;
+	msg.toBeFreed = TRUE;
+	msg.linkNumber = portNum;
+	msg.stationNumber = 0;
+	msg.activeConnect = TRUE;
+	msg.disconnectAfter = nullWord;
+	msg.waitForAnswer = connInfo.waitForAnswer;
+	msg.userTimeout = 1000*msg.waitForAnswer + 30000;
+
+	/* If dialing a 1200 baud modem, always dial at 1200 baud: this is
+		due to a bug in the US Robotics 2400 which causes it to answer a
+		2400 baud call at 2400 baud even if programmed for 1200 baud. */
+
+	msg.linkSpeed = nullWord;
+	IF connInfo.baudChoice = baud1200 THEN
+	DO;
+		IF portNum = 0 THEN msg.linkSpeed = 65;
+		ELSE
+			msg.linkSpeed = 260;
+	END;
+
+	pStr = ConstructNumber(pConn, portIndex);
+	str.dummy = str.len;
+	CALL MOVB(@str.dummy, @msg.phoneNumber(0), str.dummy + 1);
+	msg.length = SIZE(msg) + str.len;
+	CALL FreeString(@pStr);
+
+	i = 0;
+	error = eOutOfMem;
+	DO WHILE (i < 10) AND (error = eOutOfMem);
+		CALL OsSend(ipcPid, nmIpcClass, 0, @msg, @error);
+		i = i + 1;
+		IF error = eOutOfMem THEN
+			CALL OsDelay(500);
+	END;
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1643, attentionOn);
+
+END ActivateLink;
+
+$EJ
+/* Process response to activate link. */
+
+LinkActivated: PROCEDURE(pMsg) CLEAN;
+
+DCL	pMsg		POINTER,
+	msg			BASED pMsg msgLinkActivated,
+	rsp			BASED pMsg msgAllocateLinkRsp,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	cardNum		BYTE,
+	portNum		BYTE,
+	error		WORD,
+	oldError	WORD,
+	temp		WORD,
+	portIndex	WORD,
+	rspLength	WORD;
+
+	cardNum = msg.cardNumber;
+	portNum = msg.linkNumber;
+	portIndex = 4*cardNum + portNum;
+	error = msg.status;
+	IF error = eTimeout THEN
+		error = eModNotAnswer;
+	oldError = error;
+	IF msg.toBeFreed THEN
+		CALL FreeMessage(@msg, @temp);
+	IF NOT portInfo(portIndex).activateWait THEN
+	DO;
+		portInfo(portIndex).allocated = (error = eOk);
+		RETURN;
+	END;
+
+	pConn = portInfo(portIndex).pConnInfo;
+	portInfo(portIndex).activateWait = FALSE;
+	IF error = eOk THEN
+	DO;
+		CALL LogActivated(portIndex/4, portIndex MOD 4, pConn);
+		pMsg = AllocateMemory((SIZE(rsp) + serverNameLength + phoneNumberLength
+										+ connectionNameLength + 100), @error);
+		IF error = eOk THEN
+		DO;
+			portInfo(portIndex).doSearch = FALSE;
+			CALL SetRspFields(@rsp);
+			IF pConn <> nullPtr THEN pServer = connInfo.pServerInfo;
+			ELSE
+				pServer = nullPtr;
+			CALL StuffProps(pServer, pConn, cardNum, portNum, @rsp.prop,
+																	@rspLength);
+			portInfo(portIndex).allocated = TRUE;
+			IF pConn <> nullPtr THEN connInfo.allocated = TRUE;
+			rsp.error = eOk;
+			rsp.length = msgCreditSize + 2 + rspLength;
+			CALL OsSend(portInfo(portIndex).userPid, nmUserClass,
+											cmdAllocateLink, @rsp, @error);
+		END;
+	END;
+	ELSE
+		DO;
+			CALL LogActivateFail(portIndex/4, portIndex MOD 4, error);
+			IF portInfo(portIndex).doSearch THEN
+			DO;
+				portInfo(portIndex).pConnInfo = nullPtr;
+				IF pConn <> nullPtr THEN
+				DO;
+/*					CALL LogError(error, 1644, attentionOff);
+*/					portInfo(portIndex).doSearch = FALSE;
+					/* Try next port only if resource was not available. */
+					IF error <> eNMResourceNotAvailable THEN
+						portInfo(portIndex).portNum = nullByte;
+					CALL AllocateByServer(pConn, portInfo(portIndex).portNum,
+							0, nullPtr, portInfo(portIndex).userPid, @error);
+					IF error = eNMResourceNotAvailable THEN
+						error = oldError;
+				END;
+				ELSE
+					portInfo(portIndex).doSearch = FALSE;
+			END;
+			ELSE
+				DO;
+					/* Try next port only if resource was not available. */
+					IF error = eNMResourceNotAvailable THEN
+						CALL AllocateByLinkName(portIndex, 0, nullPtr, 0,
+								nullptr, portInfo(portIndex).userPid, @error);
+					IF error = eNMResourceNotAvailable THEN
+						error = oldError;
+				END;
+			IF error <> eOk THEN
+			DO;
+				temp = error;
+				pMsg = AllocateMemory(SIZE(rsp), @error);
+				IF error = eOk THEN
+				DO;
+					CALL SetRspFields(@rsp);
+					rsp.length = msgCreditSize + 2;
+					rsp.error = temp;
+					CALL OsSend(portInfo(portIndex).userPid, nmUserClass,
+											cmdAllocateLink, @rsp, @error);
+				END;
+			END;
+		END;
+
+procExit:
+	IF error <> eOk THEN
+		CALL LogError(error, 1645, attentionOn);
+
+END LinkActivated;
+
+$EJ
+/* Allocate link by server name. */
+
+AllocateByServer: PROCEDURE(pConn, curPortNum, len, pName, userPid,
+															pError) CLEAN;
+
+DCL	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	curPortNum	BYTE,
+	len			BYTE,
+	pName		POINTER,
+	name		BASED pName (1) BYTE,
+	userPid		WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	i			WORD,
+	j			WORD,
+	k			WORD,
+	cardNum		BYTE,
+	portNum		BYTE;
+
+	error = eOk;
+	IF pConn = nullPtr THEN
+	DO;
+		IF NOT FindServer(len, @name, @pServer) THEN
+		DO;
+			error = eNMServerNotFound;
+			GOTO procExit;
+		END;
+		pConn = serverInfo.pConnInfo;
+		IF pConn = nullPtr THEN
+		DO;
+			error = eNMConnectionNotFound;
+			GOTO procExit;
+		END;
+		curPortNum = 0;
+	END;
+	ELSE
+		DO;
+			pServer = connInfo.pServerInfo;
+			IF curPortNum = nullByte THEN
+			DO;
+				pConn = connInfo.pNext;
+				curPortNum = 0;
+			END;
+			ELSE
+				curPortNum = curPortNum + 1;
+		END;
+
+	DO WHILE pConn <> nullPtr;
+		IF (NOT connInfo.allocated) AND (NOT connInfo.dedicated) AND
+													connInfo.consistent THEN
+		DO;
+			IF NOT connInfo.useAnyPort THEN
+			DO portNum = curPortNum TO 3;
+				IF (j := connInfo.port(portNum)) <> nullWord THEN
+				DO;
+					cardNum = j/4;
+					IF	(NOT portInfo(j).allocated) AND
+						(NOT portInfo(j).activateWait) AND
+						(NOT ((connInfo.networkType = privateNetwork)
+								AND (portInfo(j).lineKind = externalLine))) AND
+						(NOT cardInfo(cardNum).changed) AND
+						(cardInfo(cardNum).cardType = csCard) AND
+						cardInfo(cardNum).configured THEN
+					DO;
+						portInfo(j).activateWait = TRUE;
+						portInfo(j).doSearch = TRUE;
+						portInfo(j).pConnInfo = pConn;
+						portInfo(j).userPid = userPid;
+						portInfo(j).portNum = portNum;
+						CALL LogActivateTry(pConn, userPid, cardNum, j MOD 4);
+						CALL ActivateLink(pConn, cardNum, (j MOD 4));
+						GOTO procExit;
+					END;
+				END;
+			END;
+			ELSE
+				DO k = curPortNum TO 31;
+					j = searchOrder(k);
+					cardNum = j/4;
+					IF	cardInfo(cardNum).configured AND
+						(NOT portInfo(j).allocated) AND
+						(NOT portInfo(j).activateWait) AND
+						(NOT cardInfo(cardNum).changed) AND
+						(cardInfo(cardNum).cardType = csCard) AND
+						(portInfo(j).protocol = phonelink) AND
+						(portInfo(j).phonelinkType <> answerOnlyPdl) AND
+						(NOT ((connInfo.networkType = privateNetwork)
+								AND (portInfo(j).lineKind = externalLine))) AND
+						(portInfo(j).lineType <> leased) AND
+						((connInfo.baudRate = nullWord) OR
+						 (connInfo.baudRate = portInfo(j).baudRate) OR
+						 ((portInfo(j).baudChoice = baud1200and2400) AND
+						  ((connInfo.baudRate = 1200) OR
+						   (connInfo.baudRate = 2400))) OR
+						 ((connInfo.baudChoice = baud1200and2400) AND
+						  ((portInfo(j).baudRate = 1200) OR
+						   (portInfo(j).baudRate = 2400)))) THEN
+					DO;
+						portInfo(j).activateWait = TRUE;
+						portInfo(j).doSearch = TRUE;
+						portInfo(j).pConnInfo = pConn;
+						portInfo(j).userPid = userPid;
+						portInfo(j).portNum = k;
+						connInfo.port(0) = j;
+						CALL LogActivateTry(pConn, userPid, cardNum, j MOD 4);
+						CALL ActivateLink(pConn, cardNum, (j MOD 4));
+						GOTO procExit;
+					END;
+				END;
+		END;
+		pConn = connInfo.pNext;
+		curPortNum = 0;
+	END;
+	error = eNMResourceNotAvailable;
+
+procExit:
+
+END AllocateByServer;
+
+$EJ
+/* Allocate link by connection name. */
+
+AllocateByLinkName: PROCEDURE(curPortNum, lenS, pNameS, lenL, pNameL, userPid,
+																pError) CLEAN;
+
+DCL	curPortNum	BYTE,
+	lenS		BYTE,
+	pNameS		POINTER,
+	nameS		BASED pNameS (1) BYTE,
+	lenL		BYTE,
+	pNameL		POINTER,
+	nameL		BASED pNameL (1) BYTE,
+	userPid		WORD,
+	pError		POINTER,
+	error		BASED pError WORD,
+	j			WORD,
+	k			WORD,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	cardNum		BYTE,
+	portNum		BYTE;
+
+	error = eOk;
+	IF curPortNum = nullByte THEN
+	DO;
+		IF NOT FindServer(lenS, @nameS, @pServer) THEN
+		DO;
+			error = eNMServerNotFound;
+			GOTO procExit;
+		END;
+		IF NOT FindConnection(lenL, @nameL, @pConn) THEN
+		DO;
+			error = eNMConnectionNotFound;
+			GOTO procExit;
+		END;
+
+		IF pServer <> connInfo.pServerInfo THEN
+		DO;
+			error = eNMConnectionMismatch;
+			GOTO procExit;
+		END;
+		curPortNum = 0;
+	END;
+	ELSE
+		DO;
+			pConn = portInfo(curPortNum).pConnInfo;
+			portInfo(curPortNum).pConnInfo = nullPtr;
+			IF pConn <> nullPtr THEN
+			DO;
+				curPortNum = portInfo(curPortNum).portNum + 1;
+				pServer = connInfo.pServerInfo;
+			END;
+			ELSE
+				DO;
+					error = eNMResourceNotAvailable;
+					GOTO procExit;
+				END;
+		END;
+
+	IF (NOT connInfo.allocated) AND connInfo.consistent THEN
+	DO;
+		IF NOT connInfo.useAnyPort THEN
+		DO portNum = curPortNum TO 3;
+			IF (j := connInfo.port(portNum)) <> nullWord THEN
+			DO;
+				cardNum = j/4;
+				IF	(NOT portInfo(j).allocated) AND
+					(NOT portInfo(j).activateWait) AND
+					(NOT ((connInfo.networkType = privateNetwork)
+							AND (portInfo(j).lineKind = externalLine))) AND
+					(NOT cardInfo(cardNum).changed) AND
+					(cardInfo(cardNum).cardType = csCard) AND
+					cardInfo(cardNum).configured THEN
+				DO;
+					portInfo(j).activateWait = TRUE;
+					portInfo(j).doSearch = FALSE;
+					portInfo(j).pConnInfo = pConn;
+					portInfo(j).userPid = userPid;
+					portInfo(j).portNum = portNum;
+					CALL LogActivateTry(pConn, userPid, cardNum, (j MOD 4));
+					CALL ActivateLink(pConn, cardNum, (j MOD 4));
+					GOTO procExit;
+				END;
+			END;
+		END;
+		ELSE
+			DO k = curPortNum TO 31;
+				j = searchOrder(k);
+				cardNum = j/4;
+				IF	cardInfo(cardNum).configured AND
+					(NOT portInfo(j).allocated) AND
+					(NOT portInfo(j).activateWait) AND
+					(NOT cardInfo(cardNum).changed) AND
+					(NOT ((connInfo.networkType = privateNetwork)
+							AND (portInfo(j).lineKind = externalLine))) AND
+					(cardInfo(cardNum).cardType = csCard) AND
+					(portInfo(j).protocol = phonelink) AND
+					(portInfo(j).phonelinkType <> answerOnlyPdl) AND
+					(portInfo(j).lineType <> leased) AND
+					((connInfo.baudRate = nullWord) OR
+					 (connInfo.baudRate = portInfo(j).baudRate) OR
+					 ((portInfo(j).baudChoice = baud1200and2400) AND
+					  ((connInfo.baudRate = 1200) OR
+					   (connInfo.baudRate = 2400))) OR
+					 ((connInfo.baudChoice = baud1200and2400) AND
+					  ((portInfo(j).baudRate = 1200) OR
+					   (portInfo(j).baudRate = 2400)))) THEN
+				DO;
+					portInfo(j).activateWait = TRUE;
+					portInfo(j).doSearch = FALSE;
+					portInfo(j).pConnInfo = pConn;
+					portInfo(j).userPid = userPid;
+					portInfo(j).portNum = k;
+					connInfo.port(0) = j;
+					CALL LogActivateTry(pConn, userPid, cardNum, (j MOD 4));
+					CALL ActivateLink(pConn, cardNum, (j MOD 4));
+					GOTO procExit;
+				END;
+			END;
+	END;
+	error = eNMResourceNotAvailable;
+
+procExit:
+
+END AllocateByLinkName;
+
+$EJ
+/* Allocate link. */
+
+AllocateLink: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgAllocateLinkReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgAllocateLinkRsp,
+	error		WORD,
+	propLen		WORD,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	rspLength	WORD,
+	indexS		WORD,
+	pPropS		POINTER,
+	propertyS	BASED pPropS stdPropType,
+	indexL		WORD,
+	pPropL		POINTER,
+	propertyL	BASED pPropL stdPropType,
+	cardNum		BYTE,
+	portNum		BYTE;
+
+	/* Allocate response message (for error reporting). */
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+		propLen = req.length - msgCreditSize;
+		indexS = 0;
+		indexL = 0;
+		pStr = @req.prop;
+		IF FindProperty(VIPC_serverNameProp, pStr, propLen, @indexS,@error) THEN
+		DO;
+			pPropS = @str(indexS);
+			IF (propertyS.length > serverNameLength) OR (propertyS.length = 1)
+																			THEN
+				error = eNMIllegalServerName;
+			ELSE
+				IF FindProperty(VIPC_linkNameProp, pStr, propLen, @indexL,
+																@error) THEN
+				DO;
+					pPropL = @str(indexL);
+					IF (propertyL.length > connectionNameLength) OR
+													(propertyL.length = 1) THEN
+						error = eNMIllegalConnectionName;
+					ELSE
+						CALL AllocateByLinkName(nullByte,
+							(propertyS.length - 1), @propertyS.prop,
+									(propertyL.length - 1), @propertyL.prop,
+														req.sourcePid, @error);
+				END;
+			ELSE
+				CALL AllocateByServer(nullPtr, 0, (propertyS.length - 1),
+									@propertyS.prop, req.sourcePid, @error);
+		END;
+		ELSE
+			error = eNMSignOnParms;
+
+		IF error <> eOk THEN
+		DO;
+			rsp.error = error;
+			rsp.length = msgCreditSize + 2;	/* 2 bytes for error field. */
+			CALL SendResponse(pReq, pRsp, @error);
+			IF error <> eOk THEN
+				CALL LogError(error, 1646, attentionOn);
+		END;
+		ELSE
+			CALL FreeMessage(pRsp, @error);
+	END;
+	ELSE
+		CALL LogError(error, 1647, attentionOn);
+
+	CALL FreeMessage(pReq, @error);
+
+END AllocateLink;
+
+$EJ
+/* Free link. */
+
+FreeLink: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgFreeLinkReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgFreeLinkRsp,
+	error		WORD,
+	index		WORD,
+	pConn		POINTER,
+	connInfo	BASED pConn connInfoType,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	pProp		POINTER,
+	property	BASED pProp stdPropType,
+	propLen		WORD,
+	cardNum		BYTE,
+	portNum		BYTE,
+	portIndex	BYTE;
+
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+		index = 0;
+		pStr = @req.prop;
+		propLen = req.length - msgCreditSize;
+		IF FindProperty(VIPC_cardNumProp, pStr, propLen, @index, @error) THEN
+		DO;
+			pProp = @str(index);
+			cardNum = property.prop(0);
+			IF NOT ((property.length = 2) AND (cardNum <= 7))  THEN
+			DO;
+				error = eNMIllegalCardProperty;
+				GOTO sendRsp;
+			END;
+			index = 0;
+			IF FindProperty(VIPC_portNumProp, pStr, propLen, @index, @error)THEN
+            DO;
+				pProp = @str(index);
+				portNum = property.prop(0);
+				IF NOT ((property.length = 2) AND (portNum <= 3))  THEN
+				DO;
+					error = eNMIllegalPortProperty;
+					GOTO sendRsp;
+				END;
+				portIndex = 4*cardNum + portNum;
+				pConn = portInfo(portIndex).pConnInfo;
+				portInfo(portIndex).allocated = FALSE;
+				IF pConn <> nullPtr THEN
+					connInfo.allocated = FALSE;
+			END;
+			ELSE
+				error = eNMPortPropertyNotFound;
+			GOTO sendRsp;
+		END;
+
+sendRsp:
+		rsp.length = SIZE(rsp) - msgHdrSize;
+		rsp.error = error;
+		CALL SendResponse(pReq, pRsp, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1648, attentionOn);
+	END;
+	ELSE
+		CALL LogError(error, 1649, attentionOn);
+
+	CALL FreeMessage(pReq, @error);
+
+END FreeLink;
+
+$EJ
+/* Get remote system names. */
+
+GetRemoteSystemNames: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgGetRemoteSystemNamesReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgGetRemoteSystemNamesRsp,
+	error		WORD,
+	index		WORD,
+	cLen		BYTE,
+	nLen		BYTE,
+	pServer		POINTER,
+	serverInfo	BASED pServer serverInfoType,
+	pStrN		POINTER,
+	strN		BASED pStrN stringtype,
+	pStrC		POINTER,
+	strC		BASED pStrC stringtype,
+	pProp		POINTER,
+	prop		BASED pProp stdPropType,
+	numInMsg	WORD,
+	connOnly	BOOLEAN,
+	done		BOOLEAN;
+
+DCL	maxInMsg	LIT	'10';
+
+	connOnly = req.connOnly;
+	pServer = pServerInfo;
+	done = FALSE;
+	error = eOk;
+
+	DO WHILE (NOT done) AND (error = eOk);
+
+		numInMsg = maxInMsg;
+		pRsp = AllocateMemory((SIZE(rsp) +
+				numInMsg*(serverNameLength + commentLength + 5)), @error);
+		IF error = eOk THEN
+		DO;
+			CALL SetRspFields(pRsp);
+			index = 0;
+			DO WHILE (numInMsg > 0) AND (pServer <> nullPtr);
+				IF NOT (connOnly AND (serverInfo.nConnections = 0)) THEN
+				DO;
+					pStrN = serverInfo.pName;
+					pStrC = serverInfo.pComment;
+					strN.dummy, nLen = strN.len;
+					IF pStrC <> nullPtr THEN
+						strC.dummy, cLen = strC.len;
+					ELSE
+						cLen = 0;
+					pProp = @rsp.prop(index);
+					prop.fdByte = 0FDh;
+					prop.length = cLen + nLen + 3;
+					prop.propType = VIPC_ServerNameProp;
+					CALL MOVB(@strN.dummy, @prop.prop, nLen + 1);
+					IF pStrC <> nullPtr THEN
+						CALL MOVB(@strC.dummy, @prop.prop(nLen + 1), cLen + 1);
+					ELSE
+						prop.prop(nLen + 1) = 0;
+					index = index + prop.length + 3;
+				END;
+				pServer = serverInfo.pNext;
+				numInMsg = numInMsg - 1;
+			END;
+			done = (pServer = nullPtr);
+
+			rsp.error = error;
+			rsp.length = msgCreditSize + index + 3;
+			rsp.lastMsg = done;
+			CALL SendResponse(pReq, pRsp, @error);
+			IF error <> eOk THEN
+				CALL LogError(error, 1650, attentionOn);
+		END;
+		ELSE
+			CALL LogError(error, 1651, attentionOn);
+	END;
+
+	CALL FreeMessage(pReq, @error);
+
+END GetRemoteSystemNames;
+
+$EJ
+/* Get card status. */
+
+GetCardStatus: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgGetCardStatusReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgGetCardStatusRsp,
+	error		WORD,
+	index		WORD,
+	i			WORD,
+	j			WORD,
+	pProp		POINTER,
+	property	BASED pProp stdPropType,
+	pStr		POINTER,
+	str			BASED pStr (1) BYTE,
+	cardNum		BYTE,
+	propLen		WORD;
+
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+
+		index = 0;
+		pStr = @req.prop;
+		propLen = req.length - msgCreditSize;
+		IF FindProperty(VIPC_cardNumProp, pStr, propLen, @index, @error) THEN
+		DO;
+			pProp = @str(index);
+			cardNum = property.prop(0);
+			IF NOT ((property.length = 2) AND (cardNum <= 7))  THEN
+				error = eNMIllegalCardProperty;
+			ELSE
+				DO;
+					i = 4*cardNum;
+					IF (rsp.configured := cardInfo(cardNum).configured) THEN
+					DO j = 0 TO 3;
+						rsp.protocol(j) = portInfo(i + j).protocol;
+					END;
+					ELSE
+						CALL MOVB(@portProtocol(i), @rsp.protocol, 4);
+				END;
+		END;
+		ELSE
+			error = eNMIllegalCardProperty;
+
+		rsp.error = error;
+		rsp.length = SIZE(rsp) - msgHdrSize;
+		CALL SendResponse(pReq, pRsp, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1652, attentionOn);
+	END;
+	ELSE
+		CALL LogError(error, 1653, attentionOn);
+
+	CALL FreeMessage(pReq, @error);
+
+END GetCardStatus;
+
+$EJ
+/* Allocate port. */
+
+AllocatePort: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgAllocatePortReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgAllocatePortRsp,
+	error		WORD,
+	portIndex	BYTE;
+
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+		portIndex = 4*req.card + req.port;
+		IF req.card > 7 THEN
+			error = eNMIllegalCardProperty;
+		ELSE
+			IF req.port > 3 THEN
+				error = eNMIllegalPortProperty;
+		ELSE
+			IF portUsed(portIndex) OR cardInfo(req.card).configured THEN
+				error = eNMResourceNotAvailable;
+		ELSE
+			IF req.protocol <= maxSystemProtocol THEN
+				error = eNMProtocolNotSupported;
+		ELSE
+			DO;
+				portProtocol(portIndex) = req.protocol;
+				portUsed(portIndex) = TRUE;
+			END;
+
+		rsp.error = error;
+		rsp.length = SIZE(rsp) - msgHdrSize;
+		CALL SendResponse(pReq, pRsp, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1652, attentionOn);
+	END;
+	ELSE
+		CALL LogError(error, 1653, attentionOn);
+
+	CALL FreeMessage(pReq, @error);
+
+END AllocatePort;
+
+$EJ
+/* Free port. */
+
+FreePort: PROCEDURE(pReq) CLEAN;
+
+DCL	pReq		POINTER,
+	req			BASED pReq msgFreePortReq,
+	pRsp		POINTER,
+	rsp			BASED pRsp msgFreePortRsp,
+	error		WORD,
+	portIndex	BYTE;
+
+	pRsp = AllocateMemory(SIZE(rsp), @error);
+	IF error = eOk THEN
+	DO;
+		CALL SetRspFields(pRsp);
+		portIndex = 4*req.card + req.port;
+		IF req.card > 7 THEN
+			error = eNMIllegalCardProperty;
+		ELSE
+			IF req.port > 3 THEN
+				error = eNMIllegalPortProperty;
+		ELSE
+			IF cardInfo(req.card).configured THEN
+				error = eNMResourceNotAvailable;
+		ELSE
+			DO;
+				portProtocol(portIndex) = emptyLink;
+				portUsed(portIndex) = FALSE;
+			END;
+
+		rsp.error = error;
+		rsp.length = SIZE(rsp) - msgHdrSize;
+		CALL SendResponse(pReq, pRsp, @error);
+		IF error <> eOk THEN
+			CALL LogError(error, 1652, attentionOn);
+	END;
+	ELSE
+		CALL LogError(error, 1653, attentionOn);
+
+	CALL FreeMessage(pReq, @error);
+
+END FreePort;
+
+$EJ
+/* Free dlc link. */
+
+FreeDlcLink: PROCEDURE(pMsg) CLEAN;
+
+DCL	pMsg			POINTER,
+	msg				BASED pMsg msgLinkDeactivated,
+	cardNum			BYTE,
+	portNum			BYTE,
+	portIndex		BYTE,
+	pConn			POINTER,
+	connInfo		BASED pConn connInfoType,
+	error			WORD;
+
+	cardNum = msg.cardNumber;
+	portNum = msg.linkNumber;
+	IF (cardNum < 8) AND (portNum < 4) AND
+										cardInfo(cardNum).configured THEN
+	DO;
+		portIndex = 4*cardNum + portNum;
+		IF (portInfo(portIndex).protocol = phonelink) AND
+					(portInfo(portIndex).phonelinkType <> answerOnlyPdl) THEN
+		DO;
+			pConn = portInfo(portIndex).pConnInfo;
+			portInfo(portIndex).allocated = FALSE;
+			portInfo(portIndex).pConnInfo = nullPtr;
+			IF pConn <> nullPtr THEN
+				connInfo.allocated = FALSE;
+			CALL LogLinkFreed(pConn, cardNum, portNum);
+		END;
+		ELSE
+			CALL LogError(eNMIllegalPortProperty, 1654, attentionOn);
+	END;
+	ELSE
+		CALL LogError(eNMIllegalCardProperty, 1655, attentionOn);
+
+	CALL FreeMessage(pMsg, @error);
+
+END FreeDlcLink;
+
+$EJ
+/* Main process. */
+
+InterfaceProc:	PROCEDURE CLEAN;
+
+DCL	error	WORD,
+	note	WORD,
+	pMsg	POINTER;
+
+$IF NOT compassMode
+	CALL OsRegisterName(@nmInterfaceName, OsWhoAmI, unregisterName, @error);
+	CALL OsRegisterName(@nmInterfaceName, OsWhoAmI, registerName, @error);
+	IF error <> eOk THEN
+	DO;
+		CALL LogError(error, 1656, attentionOn);
+		CALL OsExit(0);
+	END;
+$ENDIF
+
+	DO WHILE TRUE;
+		error = NOT eOk;
+		DO WHILE error <> eOk;
+			pMsg = OsReceive(nullWord, nullWord, nullWord, @note, @error);
+			IF error <> eOk THEN
+				CALL LogError(error, 1657, attentionOn);
+		END;
+
+		CALL GetAccess(@error);
+		IF error <> eOk THEN
+		DO;
+			CALL LogError(error, 1658, attentionOn);
+			IF error = eTimeout THEN
+				error = eNMConfigInProgress;
+			CALL ProcessErrorMessage(pMsg, error);
+		END;
+		
+		IF error = eOk THEN
+		DO;
+			DO CASE ParseMessage(pMsg);
+
+				;									/* Undefined. */
+
+				CALL AllocateLink(pMsg);			/* Allocate a connection. */
+
+				CALL FreeLink(pMsg);				/* Free a connection. */
+
+				CALL GetRemoteSystemNames(pMsg);	/* Get rem. system names. */
+
+				CALL AllocatePort(pMsg);			/* Allocate a port. */
+
+				CALL FreePort(pMsg);				/* Free a port. */
+
+				CALL GetCardStatus(pMsg);			/* Get card status. */
+
+				CALL LinkActivated(pMsg);			/* Link activated. */
+
+				CALL FreeDlcLink(pMsg);				/* Link deactivated. */
+
+				CALL ProcessErrorMessage(pMsg, eNMUnknownCommand);
+													/* Unknown message. */
+			END;
+
+			CALL FreeAccess(@error);
+		END;
+	END;
+
+END InterfaceProc;
+
+END NMInterface;

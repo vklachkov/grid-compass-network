@@ -1,0 +1,19 @@
+
+/* This is Os.FsAlias.Ext.Inc  */
+
+OsAddAlias: PROCEDURE (pOrigName, pFinalName, pid, mode, pError) EXTERNAL;
+  DCL mode       WORD;
+  DCL pid        PidType;
+  DCL pOrigName  PTR;
+  DCL pFinalName PTR;
+  DCL pError     PTR;
+  END;
+
+OsDeleteAlias: PROCEDURE (pOrigName, pError) EXTERNAL;
+  DCL pOrigName  PTR;
+  DCL pError     PTR;
+  END;
+
+DeleteMyAliases: PROCEDURE (sHighDev) EXTERNAL;
+  DCL sHighDev         SELECTOR;
+  END;

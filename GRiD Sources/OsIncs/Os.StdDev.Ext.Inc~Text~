@@ -1,0 +1,21 @@
+/* this is os.stddev.ext.inc */
+
+OsMassFileSystem: PROCEDURE (request, pPl, pError) EXTERNAL;
+    DCL request WORD;
+    DCL (pPl, pError) PTR;
+    END;
+
+OsCoDevice : PROCEDURE (request, pPl, pError) EXTERNAL;
+    DCL request WORD;
+    DCL (pPl, pError) PTR;
+    END;
+
+OsCiDevice : PROCEDURE (request, pPl, pError) EXTERNAL;
+    DCL request WORD;
+    DCL (pPl, pError) PTR;
+    END;
+
+OsBbDevice : PROCEDURE (request, pPl, pError) EXTERNAL;
+    DCL request WORD;
+    DCL (pPl, pError) PTR;
+    END;

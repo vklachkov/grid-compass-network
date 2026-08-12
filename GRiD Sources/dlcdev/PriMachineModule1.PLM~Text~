@@ -1,0 +1,425 @@
+$COMPACT OPTIMIZE(3)
+$TITLE ('CCDLC - Primary State Machine, Part 1')
+
+/**************************************************************************
+*
+*				COMPASS CENTRAL DATA LINK CONTROL
+*
+*				Module: PriMachineModule1. 1/29/83
+*
+*				Contains: Data Structures:
+*					Transition Tables for: 
+*						priSxAcknowledge, PriSxRemotePolled,
+*						PriSxRemoteNotPolled,
+*						priSxClosed, priSxConnecting,
+*						priSxContention, priSxDeferring.
+*
+*					priTransitionList: array of pointers to
+*						the primary state transition lists.
+*
+*					priActionList: array of pointers to
+*						the primary action routines. 
+*
+*
+**************************************************************************/
+
+PriMachineModule1: DO;
+
+$SAVE NOLIST
+$INCLUDE(``ccincs`CommonDefines.inc~text~)
+$INCLUDE(``ccincs`PriStAndEvDefines.inc~text~)
+$INCLUDE(``ccincs`PriAcDefines.inc~text~)
+$INCLUDE(``ccincs`PriMachineModule2.inc~text~)
+$INCLUDE(``ccincs`DlcActionModule.inc~text~)
+$RESTORE
+$EJ
+
+DECLARE	priStRemoteNotPolled	(*) BYTE PUBLIC DATA (
+
+priExUserTimeOut,		priExXmitComplete,		/* first event,last event*/
+
+/* ACTION 		 			NEXT STATE				EVENT */
+
+priAxIgnoreTimeOut,		nsc,					/* priExUserTimeOut */
+priAxIgnoreTimeOut,		nsc,					/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,					/* priExDlcAttachRequest */
+priAxShutDown,			priSxClosed,			/* priExDlcDetachRequest */
+priAxReportBadRequest, 	nsc,					/* priExDlcConnRequest */
+priAxStartFlush,		priSxDiscFlushing,		/* priExDlcDiscRequest */
+priAxQueueSend,			nsc,					/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,					/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcFlushRequest */
+priAxStartFlush,		priSxResetFlushing, 	/* priExDlcResetRequest */
+priAxGetStatus,			nsc,					/* priExDlcStatusRequest */
+priAxDoControl,			nsc,					/* priExDlcControlRequest */
+priAxEndPoll,			nsc,					/* priExPollTimeOut */
+priAxIgnoreTimeOut,		nsc,					/* priExResponseTimeOut */
+priAxEndExchange,		priSxDeferring,			/* priExRetriesOk */
+priAxStartFlush,		priSxErrorFlushing,		/* priExRetriesExhausted */
+priAxHandleCMDR,		priSxResetting,			/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRnf */
+priAxStartFlush,		priSxResetting,			/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMnf */
+priAxProcessInfo,		nsc,					/* priExRecvdIf */
+priAxProcessInfo,		nsc,					/* priExRecvdInf */
+priAxStartFlush,		priSxDiscFlushing,		/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDnf */
+priAxProcessBusyAck,	nsc,					/* priExRecvdRNRf */
+priAxProcessBusyAck,	nsc,					/* priExRecvdRNRnf */
+priAxProcessAck,		nsc,					/* priExRecvdRRf */
+priAxProcessAck,		nsc,					/* priExRecvdRRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDnf */
+priAxProcessNoBuf,		nsc,					/* priExRecvdNoBufferf */
+priAxProcessNoBuf,		nsc,					/* priExRecvdNoBuffernf */
+priAxCheckRetries,		nsc,					/* priExRecvdInvalid */
+priAxCheckPoll,			nsc,					/* priExCheckPoll */
+priAxSendPoll,			priSxRemotePolled,		/* priExStartPoll */
+priAxSendNext,			nsc,					/* priExContinuePoll */
+priAxEndExchange,		priSxDeferring,			/* priExEndPoll */
+priAxCheckXmitCmp,		nsc);					/* priExXmitComplete */
+$EJ
+
+DECLARE	priStRemotePolled 		(*) BYTE PUBLIC DATA (
+
+priExUserTimeOut,		priExXmitComplete, 		/* first event,last event */
+
+/* ACTION 					NEXT STATE				EVENT */
+
+priAxIgnoreTimeOut,		nsc,					/* priExUserTimeOut */
+priAxIgnoreTimeOut,		nsc,					/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,					/* priExDlcAttachRequest */
+priAxShutDown,			priSxClosed,			/* priExDlcDetachRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcConnRequest */
+priAxStartFlush,		priSxDiscFlushing,		/* priExDlcDiscRequest */
+priAxQueueSend,			nsc,					/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,					/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcFlushRequest */
+priAxStartFlush,		priSxResetFlushing,		/* priExDlcResetRequest */
+priAxGetStatus,			nsc,					/* priExDlcStatusRequest */
+priAxDoControl,			nsc,					/* priExDlcControlRequest */
+priAxEndPoll,			nsc,					/* priExPollTimeOut */
+priAxProcessNoRsp,		nsc,					/* priExResponseTimeOut */
+priAxEndExchange,		priSxDeferring,			/* priExRetriesOk */
+priAxStartFlush,		priSxErrorFlushing,		/* priExRetriesExhausted */
+priAxHandleCMDR,		priSxResetting,			/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRnf */
+priAxStartFlush,		priSxResetting,			/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMnf */
+priAxProcessInfo,		priSxRemoteNotPolled,	/* priExRecvdIf */
+priAxProcessInfo,		nsc,					/* priExRecvdInf */
+priAxStartFlush,		priSxDiscFlushing,		/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDnf */
+priAxProcessBusyAck,	priSxRemoteNotPolled,	/* priExRecvdRNRf */
+priAxProcessBusyAck,	nsc,					/* priExRecvdRNRnf */
+priAxProcessAck,		priSxRemoteNotPolled,	/* priExRecvdRRf */
+priAxProcessAck,		nsc,					/* priExRecvdRRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDnf */
+priAxProcessNoBuf,		priSxRemoteNotPolled,	/* priExRecvdNoBufferf */
+priAxProcessNoBuf,		nsc,					/* priExRecvdNoBuffernf */
+priAxCheckRetries,		nsc,					/* priExRecvdInvalid */
+priAxIgnoreEvent,		nsc,					/* priExCheckPoll */
+priAxIgnoreEvent,		nsc,					/* priExStartPoll */
+priAxIgnoreEvent,		nsc,					/* priExContinuePoll */
+priAxIgnoreEvent,		nsc,					/* priExEndPoll */
+priAxCheckXmitCmp,		nsc);					/* priExXmitComplete */
+$EJ
+
+DECLARE priStClosed				(*) BYTE PUBLIC DATA (
+
+priExDlcAttachRequest, priExDlcControlRequest, /* first event,last event */
+
+/* ACTION					NEXT STATE				EVENT */
+ 
+priAxStartUp,			nsc,					/* priExDlcAttachRequest */
+priAxReportBadRequest, 	nsc,					/* priExDlcDetachRequest */
+priAxstartConn,			priSxNewDeferring,		/* priExDlcConnRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcDiscRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,					/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcFlushRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcResetRequest */
+priAxGetStatus,			nsc,					/* priExDlcStatusRequest */
+priAxDoControl,			nsc);					/* priExDlcControlRequest */
+$EJ
+DECLARE priStConnDeferring		(*) BYTE PUBLIC DATA (
+
+priExUserTimeOut,		priExXmitComplete,		/* first event,last event */
+
+/* ACTION 					NEXT STATE 				EVENT */
+
+priAxReportConnFailure,	priSxDisconnected,		/* priExUserTimeOut */
+priAxSendSnrmP,			priSxConnecting,		/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,					/* priExDlcAttachRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcDetachRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcConnRequest */
+priAxStartFlush,		priSxDiscFlushing,		/* priExDlcDiscRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,					/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcFlushRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcResetRequest */
+priAxGetStatus,			nsc,					/* priExDlcStatusRequest */
+priAxDoControl,			nsc,					/* priExDlcControlRequest */
+priAxIgnoreTimeOut,		nsc,					/* priExPollTimeOut */
+priAxIgnoreTimeOut,		nsc,					/* priExResponseTimeOut */
+priAxIgnoreEvent,		nsc,					/* priExRetriesOk */
+priAxIgnoreEvent,		nsc,					/* priExRetriesExhausted */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdIf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdInf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRNRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRNRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdNoBufferf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdNoBuffernf */
+priAxIgnoreEvent,		nsc,					/* priExRecvdInvalid */
+priAxIgnoreEvent,		nsc,					/* priExCheckPoll */
+priAxIgnoreEvent,		nsc,					/* priExStartPoll */
+priAxSendNext,			priSxRemotePolled,		/* priExContinuePoll */
+priAxIgnoreEvent,		nsc,					/* priExEndPoll */
+priAxFreeCB,			nsc);					/* priExXmitComplete */
+$EJ
+
+DECLARE priStConnecting				(*) BYTE PUBLIC DATA (
+ 
+priExUserTimeOut,		priExXmitComplete,		/* first event,last event */
+
+/* ACTION					NEXT STATE				EVENT */
+ 
+priAxReportConnFailure,	priSxDisconnected,		/* priExUserTimeOut */
+priAxIgnoreTimeOut,		nsc,					/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,					/* priExDlcAttachRequest */
+priAxShutDown,			priSxClosed,			/* priExDlcDetachRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcConnRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcDiscRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,					/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcFlushRequest */
+priAxReportBadRequest,	nsc,					/* priExDlcResetRequest */
+priAxGetStatus,			nsc,					/* priExDlcStatusRequest */
+priAxDoControl,			nsc,					/* priExDlcControlRequest */
+priAxIgnoreTimeOut,		nsc,					/* priExPollTimeOut */
+priAxCheckRetries,		nsc,					/* priExResponseTimeOut */
+priAxStartDefer,		priSxConnDeferring,		/* priExRetriesOk */
+priAxRestartNewDefer,	priSxNewDeferring,		/* priExRetriesExhausted */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdCMDRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdDMnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdIf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdInf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRDnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRNRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRNRnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRRf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdRRnf */
+priAxReportConnected,	nsc,					/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdUAnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdXIDnf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdNoBufferf */
+priAxIgnoreRecv,		nsc,					/* priExRecvdNoBuffernf */
+priAxIgnoreEvent,		nsc,					/* priExRecvdInvalid */
+priAxStartDefer,		priSxDeferring,			/* priExCheckPoll */
+priAxStartDefer,		priSxDeferring,			/* priExStartPoll */
+priAxStartDefer,		priSxDeferring,			/* priExContinuePoll */
+priAxStartDefer,		priSxDeferring,			/* priExEndPoll */
+priAxFreeCB,			nsc);					/* priExXmitComplete */
+$EJ
+
+DECLARE priStContention				(*) BYTE PUBLIC DATA (
+
+priExUserTimeOut,		priExFoundTestStation, 		/* first event,last event */
+
+/* ACTION					NEXT STATE					EVENT */
+
+priAxReportConnFailure,	priSxDisconnected,			/* priExUserTimeOut */
+priAxIgnoreTimeOut,		nsc,						/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,						/* priExDlcAttachRequest */
+priAxShutDown,			priSxClosed,				/* priExDlcDetachRequest */
+priAxReportBadRequest,	nsc,						/* priExDlcConnRequest */
+priAxDeferEvent,		nsc,						/* priExDlcDiscRequest */
+priAxQueueSend,			nsc,						/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,						/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,						/* priExDlcFlushRequest */
+priAxReportBadRequest,	nsc,						/* priExDlcResetRequest */
+priAxGetStatus,			nsc,						/* priExDlcStatusRequest */
+priAxDoControl,			nsc,						/* priExDlcControlRequest */
+priAxignoretimeout,		nsc,						/* priExPollTimeOut */
+priAxStartDefer,		priSxNewDeferring,			/* priExResponseTimeOut */
+priAxIgnoreEvent,		nsc,						/* priExRetriesOk */
+priAxIgnoreEvent,		nsc,						/* priExRetriesExhausted */
+priAxIgnoreRecv,		nsc,						/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdCMDRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdDMnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdIf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdInf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRDnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRNRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRNRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdUAnf */
+priAxCheckXid,			nsc,						/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdXIDnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdNoBufferf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdNoBuffernf */
+priAxIgnoreEvent,		nsc,						/* priExRecvdInvalid */
+priAxIgnoreEvent,		nsc,						/* priExCheckPoll */
+priAxIgnoreEvent,		nsc,						/* priExStartPoll */
+priAxIgnoreEvent,		nsc,						/* priExContinuePoll */
+priAxIgnoreEvent,		nsc,						/* priExEndPoll */
+priAxFreeCB,			nsc,						/* priExXmitComplete */
+priAxStartDefer,		priSxConnDeferring,			/* priExFoundNewStation */
+priAxStartTestDefer,	priSxTestDeferring);		/* priExFoundTestStation */
+$EJ
+
+DECLARE priStDeferring				(*) BYTE PUBLIC DATA (
+
+priExUserTimeOut,		priExXmitComplete,	/* first event,last event */
+
+/* ACTION					NEXT STATE				EVENT */
+
+priAxIgnoreTimeOut,		nsc,						/* priExUserTimeOut */
+priAxSendPoll,			priSxRemotePolled,			/* priExDeferTimeOut */
+priAxReportBadRequest,	nsc,						/* priExDlcAttachRequest */
+priAxShutDown,			priSxClosed,				/* priExDlcDetachRequest */
+priAxReportBadRequest,	nsc,						/* priExDlcConnRequest */
+priAxStartFlush,		priSxDiscFlushing,			/* priExDlcDiscRequest */
+priAxQueueSend,			nsc,						/* priExDlcSendRequest */
+priAxQueueReceive,		nsc,						/* priExDlcReceiveRequest */
+priAxReportBadRequest,	nsc,						/* priExDlcFlushRequest */
+priAxStartFlush,		priSxResetFlushing,			/* priExDlcResetRequest */
+priAxGetStatus,			nsc,						/* priExDlcStatusRequest */
+priAxDoControl,			nsc, 						/* priExDlcControlRequest */
+priAxIgnoreTimeOut,		nsc,						/* priExPollTimeOut */
+priAxIgnoreTimeOut,		nsc,						/* priExResponseTimeOut */
+priAxIgnoreEvent,		nsc,						/* priExRetriesOk */
+priAxIgnoreEvent,		nsc,						/* priExRetriesExhausted */
+priAxIgnoreRecv,		nsc,						/* priExRecvdCMDRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdCMDRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdDMf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdDMnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdIf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdInf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRDf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRDnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRNRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRNRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRRf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdRRnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdUAf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdUAnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdXIDf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdXIDnf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdNoBufferf */
+priAxIgnoreRecv,		nsc,						/* priExRecvdNoBuffernf */
+priAxIgnoreEvent,		nsc,						/* priExRecvdInvalid */
+priAxIgnoreEvent,		nsc,						/* priExCheckPoll */
+priAxIgnoreEvent,		nsc,						/* priExStartPoll */
+priAxIgnoreEvent,		nsc,						/* priExContinuePoll */
+priAxIgnoreEvent,		nsc,						/* priExEndPoll */
+priAxCheckXmitCmp,		nsc);						/* priExXmitComplete */
+$EJ
+
+/* Should not try to find transition for state with zero index! */
+
+DECLARE priStInvalidState (*) BYTE PUBLIC DATA (0, 0);
+
+
+DECLARE priStateList (*) POINTER PUBLIC DATA
+		(@priStInvalidState,
+		@priStClosed, 
+		@priStConnDeferring,
+		@priStConnecting,
+		@priStContention, 
+		@priStDeferring,
+		@priStDiscDeferring, 
+		@priStDisconnected, 
+		@priStDisconnecting,
+		@priStDiscFlushing, 
+		@priStErrorFlushing, 
+		@priStNewDeferring,
+		@priStRemoteNotPolled,
+		@priStRemotePolled,
+		@priStResetting, 
+		@priStResetFlushing,
+		@priStTestDeferring,
+		@priStTesting,
+		@priStWaitForOrders);
+
+DECLARE priActionList (*) WORD PUBLIC DATA (
+
+		.PriAcInvalidAction,
+		.PriAcCheckPoll,
+		.PriAcCheckRetries,
+		.PriAcInvalidAction,
+		.PriAcInvalidAction,
+		.PriAcCheckUserFlush,
+		.PriAcDeferEvent,
+		.PriAcEndPoll,
+		.PriAcFIOFlushed,
+		.PriAcInvalidAction,
+		.PriAcInvalidAction,
+		.PriAcIgnoreRecv,
+		.PriAcIgnoreEvent,
+		.PriAcIgnoreTimeout,
+		.PriAcProcessAck,
+		.priAcEndExchange,
+		.priAcProcessBusyAck,
+		.PriAcSendPoll,
+		.PriAcProcessInfo,
+		.PriAcProcessNoBuf,
+		.PriAcInvalidAction,
+		.PriAcQueueReceive,
+		.PriAcQueueSend,
+		.PriAcReportBadRequest,
+		.PriAcReportConnected,
+		.PriAcReportConnFailure,
+		.PriAcReportDisconnected,
+		.PriAcInvalidAction,
+		.PriAcInvalidAction,
+		.PriAcSendDiscP,
+		.PriAcSendNext,
+		.PriAcSendSnrmP,
+		.PriAcSendXidP0,
+		.PriAcInvalidAction,
+		.PriAcShutDown,
+		.PriAcStartConn,
+		.PriAcStartDefer,
+		.PriAcStartDisc,
+		.PriAcStartFlush,
+		.PriAcStartUp,
+		.PriAcUserFlushed,
+		.PriAcCheckXid,
+		.PriAcFreeCB,
+		.PriAcCheckXmitCmp,
+		.PriAcRestartNewDefer,
+		.PriAcReportFlushed,
+		.PriAcReturnDisconnected,
+		.PriAcStartTest,
+		.PriAcRespondTest,
+		.PriAcProcessNoRsp,
+		.PriAcStartTestDefer,
+		.PriAcEndTesting);
+
+END PriMachineModule1;

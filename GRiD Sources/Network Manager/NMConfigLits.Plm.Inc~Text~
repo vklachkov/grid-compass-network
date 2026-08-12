@@ -1,0 +1,112 @@
+/* Network manager configuration literals */
+
+/* Data structures for remote forms and menus. */
+
+/* Maximim token string length */
+
+DCL	maxTokenStrLength	LIT	'85',
+	maxTokenLength		LIT	'80';
+
+/* Token types. */
+
+DCL	passwordTokenType		LIT '0',
+	optionsTokenType		LIT '1',
+	cardTokenType			LIT '2',
+	serverTokenType			LIT '3',
+	networkTokenType		LIT	'4',
+	connectionTokenType		LIT '5',
+	unknownTokenType		LIT '6';
+
+/* Yes and No choices. */
+
+DCL	yesChoice	LIT	'1',
+	noChoice	LIT	'2';
+
+/* Port selection choices. */
+
+DCL	noPort		LIT	'1';
+
+/* Password form lits. */
+
+DCL	passwordFormItemCount	LIT	'1',
+	passwordFormRowSize		LIT	'14';
+
+/* Main menu selections. */
+
+DCL	noSelection					LIT	'0',
+	configCardSelection			LIT	'1',
+	defineServerSelection		LIT	'2',
+	customizeConnSelection      LIT '3',
+	changePswdSelection			LIT	'4',
+	eraseServerSelection		LIT	'5',
+	optionsSelection			LIT	'6',
+	transferSelection			LIT	'7',
+	quitSelection				LIT	'8',
+	cancelSelection				LIT	'9';
+
+/* Connection menu selections. */
+
+DCL	addConnSelection			LIT	'1',
+	modifyConnSelection			LIT	'2',
+	modifyInconsistentSelection	LIT	'3',
+	eraseInconsistentSelection	LIT	'4',
+	eraseConnSelection			LIT	'5';
+
+/* Lits for protocol type selection form. */
+
+DCL	protFormItemCount	LIT	'4',
+	protFormRowSize		LIT	'56';	/* 4 * 14 */
+
+/* Lits for port parameters form. */
+
+DCL	portInfoFormItemCount	LIT	'7',
+	portInfoFormRowSize		LIT	'98';	/* 7*14 */
+
+/* Lits for remote system name form. */
+
+DCL	remSystemFormItemCount	LIT	'2',
+	remSystemFormRowSize	LIT	'28';
+
+/* Lits for comment form. */
+
+DCL	commentFormItemCount	LIT	'1',
+	commentFormRowSize		LIT	'14';
+
+/* Lits for network type form. */
+
+DCL	netTypeFormItemCount	LIT	'1',
+	netTypeFormRowSize		LIT	'14';
+
+/* Lits for public network form. */
+
+DCL	netFormItemCount		LIT	'8',
+	netFormRowSize			LIT	'112';
+
+/* Lits for phonelink connection info form. */
+
+DCL	connFormItemCount	LIT '6',
+	connFormRowSize		LIT	'84';
+
+DCL	leasedConnFormItemCount	LIT '4',
+	leasedConnFormRowSize	LIT	'56';
+
+/* Lits for system port form. */
+
+DCL	sysPortFormItemCount	LIT	'4',
+	sysPortFormRowSize		LIT	'56';
+
+/* Lits for select connection form. */
+
+DCL	selectConnFormItemCount	LIT	'1',
+	selectConnFormRowSize	LIT	'14';
+
+/* Lits for options form. */
+
+DCL	optionsFormItemCount	LIT	'5',
+	optionsFormRowSize		LIT	'70';	/* 14*5 */
+
+/* Miscellaneous definitions. */
+
+DCL	serverDefinition		LIT	'1',
+	serverErasure			LIT	'2',
+	connectionDefinition	LIT	'3';

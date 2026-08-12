@@ -1,0 +1,25 @@
+
+/*   This is Os.Name.Ext.Inc   */
+
+/*
+InitNameDevice: PROCEDURE EXTERNAL;
+  END;
+
+OsNameDevice: PROCEDURE (req, pPl, pError) EXTERNAL;
+  DCL req      WORD;
+  DCL pPl      PTR;
+  DCL pError   PTR;
+  END;
+*/
+
+OsLookupName: PROCEDURE (pName, pError) DWORD EXTERNAL;
+  DCL pName    PTR;
+  DCL pError   PTR;
+  END;
+
+OsRegisterName: PROCEDURE (pName, token, mode, pError) EXTERNAL;
+  DCL mode     BYTE;
+  DCL token    DWORD;
+  DCL pName    PTR;
+  DCL pError   PTR;
+  END;

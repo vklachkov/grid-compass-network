@@ -161,16 +161,12 @@ mod tests {
     }
 
     #[test]
-    fn accepts_full_vfs_write_frame() {
+    fn accepts_maximum_vipc_payload() {
         let mut vipc = Vec::with_capacity(518);
         vipc.extend(83u16.to_le_bytes());
         vipc.extend(3u16.to_le_bytes());
         vipc.extend(512u16.to_le_bytes());
-        vipc.extend(5u16.to_le_bytes());
-        vipc.extend(0x7db2u16.to_le_bytes());
-        vipc.extend(3u16.to_le_bytes());
-        vipc.extend(504u16.to_le_bytes());
-        vipc.extend(std::iter::repeat_n(DLE, 504));
+        vipc.extend(std::iter::repeat_n(DLE, 512));
 
         let mut data_frame = Vec::with_capacity(524);
         data_frame.extend(0u16.to_le_bytes());
@@ -194,13 +190,8 @@ mod tests {
             panic!("expected VIPC message");
         };
         let message = crate::gridlink::vipc::IncomingMessage::try_from_slice(payload).unwrap();
-        let crate::gridlink::vipc::IncomingMessageBody::Vfs(request) = message.body else {
-            panic!("expected VFS request");
-        };
-        let crate::gridlink::vipc::VfsRequestBody::Write(write) = request.body else {
-            panic!("expected VFS write");
-        };
-        assert_eq!(write.data.len(), 504);
-        assert!(write.data.iter().all(|&byte| byte == DLE));
+        assert_eq!(message.body.ty, crate::gridlink::vipc::MessageType(83));
+        assert_eq!(message.body.payload.len(), 512);
+        assert!(message.body.payload.iter().all(|&byte| byte == DLE));
     }
 }

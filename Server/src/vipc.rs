@@ -1,4 +1,11 @@
-use crate::{gridlink::FrameError, gridlink::vipc::*, mail::MailServer, vfs::Vfs};
+use crate::{
+    gridlink::{
+        FrameError,
+        vipc::{IncomingMessage, OutgoingMessage, OutgoingMessageBody},
+    },
+    mail::{self, MailServer},
+    vfs::{self, Vfs, VfsRequest},
+};
 
 pub struct Vipc {
     vfs: Box<Vfs>,
@@ -18,9 +25,10 @@ impl Vipc {
 
         info!("session: received vipc message: {message:?}");
 
-        let responses = match message.body {
-            IncomingMessageBody::Vfs(req) => {
-                let response = self.vfs.process_request(req);
+        let responses = match message.body.ty {
+            vfs::MESSAGE_TYPE => {
+                let request = VfsRequest::try_from_slice(message.body.payload)?;
+                let response = self.vfs.process_request(request).to_bytes();
                 if let Some(data) = self.vfs.take_finalized_mail()
                     && !self.mail.accept_outgoing(data)
                 {
@@ -28,22 +36,26 @@ impl Vipc {
                 }
                 vec![OutgoingMessage {
                     note: message.note,
-                    body: response,
+                    body: OutgoingMessageBody {
+                        ty: vfs::MESSAGE_TYPE,
+                        payload: response,
+                    },
                 }]
             }
-            IncomingMessageBody::Mail(payload) => self
+            mail::MESSAGE_TYPE => self
                 .mail
-                .process(message.note, payload)
+                .process(message.note, message.body.payload)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|response| OutgoingMessage {
                     note: 0x8000 | response.note,
-                    body: OutgoingMessageBody::Mail {
+                    body: OutgoingMessageBody {
+                        ty: mail::MESSAGE_TYPE,
                         payload: response.payload,
                     },
                 })
                 .collect(),
-            IncomingMessageBody::Unsupported(_) => Vec::new(),
+            _ => Vec::new(),
         };
 
         Ok(responses)
@@ -94,7 +106,7 @@ mod tests {
 
     fn vfs_message(note: u16, payload: &[u8]) -> Vec<u8> {
         let mut data = Vec::new();
-        data.extend(83u16.to_le_bytes());
+        data.extend(vfs::MESSAGE_TYPE.0.to_le_bytes());
         data.extend(note.to_le_bytes());
         data.extend((payload.len() as u16).to_le_bytes());
         data.extend_from_slice(payload);

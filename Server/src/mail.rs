@@ -1,3 +1,7 @@
+use crate::gridlink::vipc::MessageType;
+
+pub const MESSAGE_TYPE: MessageType = MessageType(0x7444);
+
 const MORE: u8 = 1;
 const TRANSPORT_HEADER_LEN: usize = 4;
 const MAX_REQUEST: usize = 64 * 1024;

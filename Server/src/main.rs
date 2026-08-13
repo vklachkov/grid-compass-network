@@ -29,6 +29,7 @@ macro_rules! error {
 
 mod gridlink;
 mod mail;
+mod sentry;
 mod vfs;
 mod vipc;
 

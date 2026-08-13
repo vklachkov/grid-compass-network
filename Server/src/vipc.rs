@@ -4,12 +4,14 @@ use crate::{
         vipc::{IncomingMessage, OutgoingMessage, OutgoingMessageBody},
     },
     mail::{self, MailServer},
+    sentry::{self, SentryServer},
     vfs::{self, Vfs, VfsRequest},
 };
 
 pub struct Vipc {
     vfs: Box<Vfs>,
     mail: MailServer,
+    sentry: SentryServer,
 }
 
 impl Vipc {
@@ -17,6 +19,7 @@ impl Vipc {
         Self {
             vfs,
             mail: MailServer::new(),
+            sentry: SentryServer::new(),
         }
     }
 
@@ -52,6 +55,18 @@ impl Vipc {
                     body: OutgoingMessageBody {
                         ty: mail::MESSAGE_TYPE,
                         payload: response.payload,
+                    },
+                })
+                .collect(),
+            sentry::MESSAGE_TYPE => self
+                .sentry
+                .process(message.body.payload)
+                .into_iter()
+                .map(|payload| OutgoingMessage {
+                    note: message.note,
+                    body: OutgoingMessageBody {
+                        ty: sentry::MESSAGE_TYPE,
+                        payload,
                     },
                 })
                 .collect(),
@@ -93,6 +108,39 @@ mod tests {
         assert_eq!(
             responses[0].to_bytes(),
             [0x44, 0x74, 0x10, 0x80, 8, 0, 0, 1, 0, 0, 0xfd, 1, 0, b'z']
+        );
+    }
+
+    #[test]
+    fn serializes_sentry_variant_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [0xff, 0xff, 0xff, 0xff, 1, 0, 4];
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [0xff, 0xff, 0xff, 0xff, 4, 0, 3, 0x25, 1, b'3']
+        );
+    }
+
+    #[test]
+    fn serializes_sentry_add_user_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let payload = [
+            6, 9, 3, b'B', b'O', b'B', 0x0a, 2, b'P', b'W', 0x1a, 2, 0, 0, 0x26, 4, 0, 4, 0, 0,
+        ];
+        let mut request = vec![0xff, 0xff, 0xff, 0xff];
+        request.extend((payload.len() as u16).to_le_bytes());
+        request.extend_from_slice(&payload);
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [0xff, 0xff, 0xff, 0xff, 3, 0, 2, 0, 0]
         );
     }
 

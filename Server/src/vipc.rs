@@ -129,7 +129,8 @@ mod tests {
     fn serializes_sentry_add_user_response() {
         let mut vipc = Vipc::new(Box::new(Vfs::new()));
         let payload = [
-            6, 9, 3, b'B', b'O', b'B', 0x0a, 2, b'P', b'W', 0x1a, 2, 0, 0, 0x26, 4, 0, 4, 0, 0,
+            6, 7, 4, b'G', b'R', b'i', b'D', 8, 4, b'D', b'e', b'm', b'o', 9, 3, b'B', b'O', b'B',
+            0x0a, 2, b'P', b'W', 0x1a, 2, 0, 0, 0x26, 4, 0, 4, 0, 0,
         ];
         let mut request = vec![0xff, 0xff, 0xff, 0xff];
         request.extend((payload.len() as u16).to_le_bytes());

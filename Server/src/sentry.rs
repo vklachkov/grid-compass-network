@@ -14,6 +14,10 @@ const COMMAND_STATUS: u8 = 0x02;
 const COMMAND_REPLY: u8 = 0x03;
 const COMMAND_VARIANT_QUERY: u8 = 0x04;
 const COMMAND_ADD_USER: u8 = 0x06;
+/// Both are built by `sub_2749`, which takes the command byte as an argument
+/// and sends company, group, disk space text and quota without a user name.
+const COMMAND_ADD_GROUP: u8 = 0x09;
+const COMMAND_ADD_COMPANY: u8 = 0x0a;
 const COMMAND_LIST_FIRST: u8 = 0x1e;
 const COMMAND_LIST_NEXT: u8 = 0x1f;
 
@@ -40,6 +44,10 @@ const STATUS_OK: u16 = 0;
 /// The listing loop clears this status silently instead of showing an error
 /// dialog, so it is how an enumeration ends.
 const STATUS_END_OF_LISTING: u16 = 1005;
+/// `1015: Company not defined` in the client error table.
+const STATUS_COMPANY_NOT_DEFINED: u16 = 1015;
+/// `1017: eAlreadyDefined`.
+const STATUS_ALREADY_DEFINED: u16 = 1017;
 
 const AUTHORITY_NORMAL: u16 = 0;
 const AUTHORITY_GROUP_ADMIN: u16 = 20;
@@ -60,105 +68,85 @@ const UNLOCKED: [u8; 2] = [0, 0];
 
 const MEGABYTE: u32 = 1024 * 1024;
 
-/// One row of the demo directory, in the order the client walks it: a company,
-/// then each of its groups followed by that group's users.
-const DEMO_DIRECTORY: &[Row] = &[
-    Row::company(b"GRiD"),
-    Row::group(b"GRiD", b"Demo"),
-    Row::user(
-        b"GRiD",
-        b"Demo",
-        b"GUEST",
-        AUTHORITY_NORMAL,
-        MEGABYTE,
-        262144,
-    ),
-    Row::user(
-        b"GRiD",
-        b"Demo",
-        b"OPERATOR",
-        AUTHORITY_GROUP_ADMIN,
-        QUOTA_UNLIMITED,
-        MEGABYTE,
-    ),
-    Row::group(b"GRiD", b"Systems"),
-    Row::user(
-        b"GRiD",
-        b"Systems",
-        b"MANAGER",
-        AUTHORITY_SYSTEM_ADMIN,
-        QUOTA_UNLIMITED,
-        4 * MEGABYTE,
-    ),
-];
-
 /// The client tells the three record levels apart by comparing the names:
 /// `company == group` marks a company, `group == user` a group, anything else
 /// a user.
 struct Row {
-    company: &'static [u8],
-    group: &'static [u8],
-    user: &'static [u8],
+    company: Vec<u8>,
+    group: Vec<u8>,
+    user: Vec<u8>,
     authority: u16,
     quota: u32,
     used: u32,
 }
 
 impl Row {
-    const fn company(company: &'static [u8]) -> Self {
+    fn company(company: &[u8], quota: u32) -> Self {
         Self {
-            company,
-            group: company,
-            user: company,
+            company: company.to_vec(),
+            group: company.to_vec(),
+            user: company.to_vec(),
             authority: AUTHORITY_COMPANY_ADMIN,
-            quota: QUOTA_UNLIMITED,
+            quota,
             used: 0,
         }
     }
 
-    const fn group(company: &'static [u8], group: &'static [u8]) -> Self {
+    fn group(company: &[u8], group: &[u8], quota: u32) -> Self {
         Self {
-            company,
-            group,
-            user: group,
+            company: company.to_vec(),
+            group: group.to_vec(),
+            user: group.to_vec(),
             authority: AUTHORITY_GROUP_ADMIN,
-            quota: QUOTA_UNLIMITED,
+            quota,
             used: 0,
         }
     }
 
-    const fn user(
-        company: &'static [u8],
-        group: &'static [u8],
-        user: &'static [u8],
-        authority: u16,
-        quota: u32,
-        used: u32,
-    ) -> Self {
+    fn user(company: &[u8], group: &[u8], user: &[u8], authority: u16, quota: u32) -> Self {
         Self {
-            company,
-            group,
-            user,
+            company: company.to_vec(),
+            group: group.to_vec(),
+            user: user.to_vec(),
             authority,
             quota,
-            used,
+            used: 0,
         }
     }
 
     /// Whether the row sits under the given company / group / user prefix.
     fn matches(&self, prefix: &[&[u8]]) -> bool {
-        [self.company, self.group, self.user]
+        [&self.company, &self.group, &self.user]
             .iter()
             .zip(prefix)
             .all(|(name, wanted)| name.eq_ignore_ascii_case(wanted))
     }
+
+    /// A company row lists itself at all three levels, a group row at the last
+    /// two: that is how the client tells the levels apart when rendering.
+    #[cfg(test)]
+    fn is_company(&self) -> bool {
+        self.company == self.group && self.group == self.user
+    }
+
+    #[cfg(test)]
+    fn is_group(&self) -> bool {
+        self.company != self.group && self.group == self.user
+    }
 }
 
-pub struct SentryServer;
+pub struct SentryServer {
+    /// The account directory, in the order the client walks it: a company, then
+    /// each of its groups followed by that group's users. Lives for the session
+    /// only — nothing is written to disk yet.
+    directory: Vec<Row>,
+}
 
 impl SentryServer {
     pub fn new() -> Self {
-        Self
+        Self {
+            directory: demo_directory(),
+        }
     }
 
     pub fn process(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
@@ -170,19 +158,202 @@ impl SentryServer {
 
         match *command {
             COMMAND_VARIANT_QUERY => Some(variant_response()),
-            COMMAND_ADD_USER => {
-                log_add_user(&records);
-                // TODO: create the user for real once the account store exists.
-                Some(status_response(STATUS_OK))
-            }
-            COMMAND_LIST_FIRST => Some(listing_response(seek(&records))),
-            COMMAND_LIST_NEXT => Some(listing_response(resume(&records))),
+            COMMAND_ADD_USER => Some(self.add_user(&records)),
+            COMMAND_ADD_GROUP => Some(self.add_group(&records)),
+            COMMAND_ADD_COMPANY => Some(self.add_company(&records)),
+            COMMAND_LIST_FIRST => Some(self.listing_response(self.seek(&records))),
+            COMMAND_LIST_NEXT => Some(self.listing_response(resume(&records))),
             command => {
                 info!("sentry: ignored unsupported command {command:#04x} with {records:?}");
                 None
             }
         }
     }
+
+    /// `sub_172C` sends the company name, an optional disk space text and the
+    /// quota, and reports `Complete` when the status word comes back zero.
+    fn add_company(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+        let company = record(records, TAG_COMPANY).unwrap_or_default();
+        let quota = quota(records);
+
+        info!(
+            "sentry: add company {:?}, quota={}, disk space={:?}",
+            BStr::new(company),
+            quota_name(quota),
+            BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
+        );
+
+        if self.find(&[company]).is_some() {
+            info!("sentry: company {:?} already exists", BStr::new(company));
+            return status_response(STATUS_ALREADY_DEFINED);
+        }
+
+        // Companies sort after everything already stored, so the new row simply
+        // goes last and keeps the company/group/user grouping intact.
+        self.directory.push(Row::company(company, quota));
+
+        status_response(STATUS_OK)
+    }
+
+    /// `sub_121C` sends the same records as `add_company` plus the group name.
+    fn add_group(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+        let company = record(records, TAG_COMPANY).unwrap_or_default();
+        let group = record(records, TAG_GROUP).unwrap_or_default();
+        let quota = quota(records);
+
+        info!(
+            "sentry: add group {:?} to company {:?}, quota={}, disk space={:?}",
+            BStr::new(group),
+            BStr::new(company),
+            quota_name(quota),
+            BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
+        );
+
+        let Some(last) = self.find(&[company]) else {
+            info!("sentry: company {:?} is not defined", BStr::new(company));
+            return status_response(STATUS_COMPANY_NOT_DEFINED);
+        };
+
+        if self.find(&[company, group]).is_some() {
+            info!("sentry: group {:?} already exists", BStr::new(group));
+            return status_response(STATUS_ALREADY_DEFINED);
+        }
+
+        self.directory
+            .insert(last + 1, Row::group(company, group, quota));
+
+        status_response(STATUS_OK)
+    }
+
+    fn add_user(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+        let company = record(records, TAG_COMPANY).unwrap_or_default();
+        let group = record(records, TAG_GROUP).unwrap_or_default();
+        let user = record(records, TAG_USER).unwrap_or_default();
+        let quota = quota(records);
+        let authority = record(records, TAG_AUTHORITY)
+            .and_then(|value| <[u8; 2]>::try_from(value).ok())
+            // The client writes this field big endian, unlike the quota.
+            .map_or(0, u16::from_be_bytes);
+
+        info!(
+            "sentry: add user {:?} to {:?}/{:?}, password={:?}, authority={authority} ({}), \
+             quota={}, disk space={:?}",
+            BStr::new(user),
+            BStr::new(company),
+            BStr::new(group),
+            BStr::new(record(records, TAG_PASSWORD).unwrap_or_default()),
+            authority_name(authority),
+            quota_name(quota),
+            BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
+        );
+
+        let Some(last) = self.find(&[company, group]) else {
+            info!("sentry: group {:?} is not defined", BStr::new(group));
+            return status_response(STATUS_COMPANY_NOT_DEFINED);
+        };
+
+        if self.find(&[company, group, user]).is_some() {
+            info!("sentry: user {:?} already exists", BStr::new(user));
+            return status_response(STATUS_ALREADY_DEFINED);
+        }
+
+        self.directory
+            .insert(last + 1, Row::user(company, group, user, authority, quota));
+
+        status_response(STATUS_OK)
+    }
+
+    /// The index of the last row under the given prefix, which is both the
+    /// existence check and the insertion point for a new child.
+    fn find(&self, prefix: &[&[u8]]) -> Option<usize> {
+        self.directory.iter().rposition(|row| row.matches(prefix))
+    }
+
+    /// The client repeats the previous row as the filter of the next `0x1e`, so
+    /// the three names address a record instead of starting a search: the answer
+    /// is the row right after the last one matching them.
+    fn seek(&self, records: &[(u8, &[u8])]) -> Option<usize> {
+        let prefix: &[&[u8]] = &match (
+            filter(records, TAG_COMPANY),
+            filter(records, TAG_GROUP),
+            filter(records, TAG_USER),
+        ) {
+            (Filter::Start, _, _) => return Some(0),
+            (Filter::Skip, _, _) => return None,
+            (Filter::Name(company), Filter::Start | Filter::Skip, _) => vec![company],
+            (Filter::Name(company), Filter::Name(group), Filter::Start | Filter::Skip) => {
+                vec![company, group]
+            }
+            (Filter::Name(company), Filter::Name(group), Filter::Name(user)) => {
+                vec![company, group, user]
+            }
+        };
+
+        Some(self.find(prefix)? + 1)
+    }
+
+    /// Answers one step of a listing. Running past the last row ends the
+    /// enumeration with the status the client clears without complaining.
+    fn listing_response(&self, index: Option<usize>) -> Vec<u8> {
+        let Some((index, row)) = index.and_then(|index| Some((index, self.directory.get(index)?)))
+        else {
+            info!("sentry: end of listing");
+            return status_response(STATUS_END_OF_LISTING);
+        };
+
+        info!(
+            "sentry: listing row {index}: company={:?}, group={:?}, user={:?}, authority={} ({})",
+            BStr::new(&row.company),
+            BStr::new(&row.group),
+            BStr::new(&row.user),
+            row.authority,
+            authority_name(row.authority),
+        );
+
+        let mut payload = vec![COMMAND_REPLY];
+        payload.extend(tagged(TAG_CURSOR, index.to_string().as_bytes()));
+        payload.extend(tagged(TAG_COMPANY, &row.company));
+        payload.extend(tagged(TAG_GROUP, &row.group));
+        payload.extend(tagged(TAG_USER, &row.user));
+        payload.extend(tagged(TAG_AUTHORITY, &row.authority.to_le_bytes()));
+        payload.extend(tagged(TAG_DEVICE, DEVICE));
+        payload.extend(tagged(TAG_QUOTA, &row.quota.to_le_bytes()));
+        payload.extend(tagged(TAG_DISK_USED, &row.used.to_le_bytes()));
+        payload.extend(tagged(TAG_CREATED, CREATED));
+        payload.extend(tagged(TAG_MODIFIED, MODIFIED));
+        payload.extend(tagged(TAG_LOCKED, &UNLOCKED));
+        payload
+    }
+}
+
+/// The directory every session starts from, so that listing has something to
+/// show before anything is created.
+fn demo_directory() -> Vec<Row> {
+    let mut directory = vec![
+        Row::company(b"GRiD", QUOTA_UNLIMITED),
+        Row::group(b"GRiD", b"Demo", QUOTA_UNLIMITED),
+        Row::user(b"GRiD", b"Demo", b"GUEST", AUTHORITY_NORMAL, MEGABYTE),
+        Row::user(
+            b"GRiD",
+            b"Demo",
+            b"OPERATOR",
+            AUTHORITY_GROUP_ADMIN,
+            QUOTA_UNLIMITED,
+        ),
+        Row::group(b"GRiD", b"Systems", QUOTA_UNLIMITED),
+        Row::user(
+            b"GRiD",
+            b"Systems",
+            b"MANAGER",
+            AUTHORITY_SYSTEM_ADMIN,
+            QUOTA_UNLIMITED,
+        ),
+    ];
+
+    directory[2].used = 262144;
+    directory[3].used = MEGABYTE;
+    directory[5].used = 4 * MEGABYTE;
+    directory
 }
 
 /// Splits the Sentry payload into `<tag><length><value>` records.
@@ -260,29 +431,11 @@ fn filter<'a>(records: &[(u8, &'a [u8])], tag: u8) -> Filter<'a> {
     }
 }
 
-/// The client repeats the previous row as the filter of the next `0x1e`, so the
-/// three names address a record instead of starting a search: the answer is the
-/// row right after the last one matching them.
-fn seek(records: &[(u8, &[u8])]) -> Option<usize> {
-    let prefix: &[&[u8]] = &match (
-        filter(records, TAG_COMPANY),
-        filter(records, TAG_GROUP),
-        filter(records, TAG_USER),
-    ) {
-        (Filter::Start, _, _) => return Some(0),
-        (Filter::Skip, _, _) => return None,
-        (Filter::Name(company), Filter::Start | Filter::Skip, _) => vec![company],
-        (Filter::Name(company), Filter::Name(group), Filter::Start | Filter::Skip) => {
-            vec![company, group]
-        }
-        (Filter::Name(company), Filter::Name(group), Filter::Name(user)) => {
-            vec![company, group, user]
-        }
-    };
-
-    let last = DEMO_DIRECTORY.iter().rposition(|row| row.matches(prefix))?;
-
-    Some(last + 1)
+/// The quota is the only numeric field the client writes little endian.
+fn quota(records: &[(u8, &[u8])]) -> u32 {
+    record(records, TAG_QUOTA)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map_or(0, u32::from_le_bytes)
 }
 
 /// `0x1f` continues a user listing by echoing the cursor of the previous row.
@@ -291,61 +444,6 @@ fn resume(records: &[(u8, &[u8])]) -> Option<usize> {
     let index: usize = std::str::from_utf8(cursor).ok()?.parse().ok()?;
 
     Some(index + 1)
-}
-
-/// Answers one step of a listing. Running past the last row ends the
-/// enumeration with the status the client clears without complaining.
-fn listing_response(index: Option<usize>) -> Vec<u8> {
-    let Some((index, row)) = index.and_then(|index| Some((index, DEMO_DIRECTORY.get(index)?)))
-    else {
-        info!("sentry: end of listing");
-        return status_response(STATUS_END_OF_LISTING);
-    };
-
-    info!(
-        "sentry: listing row {index}: company={:?}, group={:?}, user={:?}, authority={} ({})",
-        BStr::new(row.company),
-        BStr::new(row.group),
-        BStr::new(row.user),
-        row.authority,
-        authority_name(row.authority),
-    );
-
-    let mut payload = vec![COMMAND_REPLY];
-    payload.extend(tagged(TAG_CURSOR, index.to_string().as_bytes()));
-    payload.extend(tagged(TAG_COMPANY, row.company));
-    payload.extend(tagged(TAG_GROUP, row.group));
-    payload.extend(tagged(TAG_USER, row.user));
-    payload.extend(tagged(TAG_AUTHORITY, &row.authority.to_le_bytes()));
-    payload.extend(tagged(TAG_DEVICE, DEVICE));
-    payload.extend(tagged(TAG_QUOTA, &row.quota.to_le_bytes()));
-    payload.extend(tagged(TAG_DISK_USED, &row.used.to_le_bytes()));
-    payload.extend(tagged(TAG_CREATED, CREATED));
-    payload.extend(tagged(TAG_MODIFIED, MODIFIED));
-    payload.extend(tagged(TAG_LOCKED, &UNLOCKED));
-    payload
-}
-
-fn log_add_user(records: &[(u8, &[u8])]) {
-    let text = |tag| BStr::new(record(records, tag).unwrap_or_default());
-    let authority = record(records, TAG_AUTHORITY)
-        .and_then(|value| <[u8; 2]>::try_from(value).ok())
-        .map_or(0, u16::from_be_bytes);
-    let quota = record(records, TAG_QUOTA)
-        .and_then(|value| <[u8; 4]>::try_from(value).ok())
-        .map_or(0, u32::from_le_bytes);
-
-    info!(
-        "sentry: add user (not applied): company={:?}, group={:?}, user={:?}, password={:?}, \
-         authority={authority} ({}), quota={}, disk space={:?}",
-        text(TAG_COMPANY),
-        text(TAG_GROUP),
-        text(TAG_USER),
-        text(TAG_PASSWORD),
-        authority_name(authority),
-        quota_name(quota),
-        text(TAG_DISK_SPACE_TEXT),
-    );
 }
 
 fn authority_name(authority: u16) -> &'static str {
@@ -384,6 +482,8 @@ mod tests {
         let mut sentry = SentryServer::new();
         let request = [
             0x06, // Add User
+            0x07, 0x04, b'G', b'R', b'i', b'D', // Company
+            0x08, 0x04, b'D', b'e', b'm', b'o', // Group
             0x09, 0x07, b'Z', b'Z', b'C', b'A', b'P', b'0', b'1', // User
             0x0a, 0x05, b'T', b'E', b'S', b'T', b'1', // Password
             0x1a, 0x02, 0x00, 0x00, // Normal user
@@ -394,6 +494,137 @@ mod tests {
         let response = sentry.process(&request).unwrap();
 
         assert_eq!(response, [0x02, 0x00, 0x00]);
+    }
+
+    fn add_company(sentry: &mut SentryServer, company: &[u8]) -> Vec<u8> {
+        let mut request = vec![COMMAND_ADD_COMPANY];
+        request.extend(tagged(TAG_COMPANY, company));
+        request.extend(tagged(TAG_QUOTA, &QUOTA_UNLIMITED.to_le_bytes()));
+        sentry.process(&request).unwrap()
+    }
+
+    fn add_group(sentry: &mut SentryServer, company: &[u8], group: &[u8]) -> Vec<u8> {
+        let mut request = vec![COMMAND_ADD_GROUP];
+        request.extend(tagged(TAG_COMPANY, company));
+        request.extend(tagged(TAG_GROUP, group));
+        request.extend(tagged(TAG_QUOTA, &QUOTA_UNLIMITED.to_le_bytes()));
+        sentry.process(&request).unwrap()
+    }
+
+    fn names(sentry: &mut SentryServer) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        let mut rows = Vec::new();
+        let mut request = list_first(b"", b"", b"");
+
+        while let Some(response) = sentry.process(&request) {
+            if response[0] == COMMAND_STATUS {
+                break;
+            }
+
+            let records = records(&response[1..]).unwrap();
+            let text = |tag| record(&records, tag).unwrap().to_vec();
+            rows.push((text(TAG_COMPANY), text(TAG_GROUP), text(TAG_USER)));
+            request = list_first(&text(TAG_COMPANY), &text(TAG_GROUP), &text(TAG_USER));
+        }
+
+        rows
+    }
+
+    #[test]
+    fn created_company_appears_in_the_listing() {
+        let mut sentry = SentryServer::new();
+
+        assert_eq!(
+            add_company(&mut sentry, b"ACME"),
+            status_response(STATUS_OK)
+        );
+
+        let rows = names(&mut sentry);
+        assert_eq!(rows.last().unwrap().0, b"ACME");
+        assert!(sentry.directory.last().unwrap().is_company());
+    }
+
+    #[test]
+    fn created_group_lands_inside_its_company() {
+        let mut sentry = SentryServer::new();
+
+        assert_eq!(
+            add_group(&mut sentry, b"GRiD", b"Payroll"),
+            status_response(STATUS_OK)
+        );
+
+        // The group is appended after the last row of `GRiD`, so the company
+        // block stays contiguous and the client keeps walking it in order.
+        let rows = names(&mut sentry);
+        assert_eq!(
+            rows.last().unwrap(),
+            &(b"GRiD".to_vec(), b"Payroll".to_vec(), b"Payroll".to_vec())
+        );
+        assert!(rows.iter().all(|(company, _, _)| company == b"GRiD"));
+    }
+
+    #[test]
+    fn created_user_lands_inside_its_group() {
+        let mut sentry = SentryServer::new();
+        let mut request = vec![COMMAND_ADD_USER];
+        request.extend(tagged(TAG_COMPANY, b"GRiD"));
+        request.extend(tagged(TAG_GROUP, b"Demo"));
+        request.extend(tagged(TAG_USER, b"CLERK"));
+        request.extend(tagged(TAG_AUTHORITY, &AUTHORITY_NORMAL.to_be_bytes()));
+        request.extend(tagged(TAG_QUOTA, &MEGABYTE.to_le_bytes()));
+
+        assert_eq!(
+            sentry.process(&request).unwrap(),
+            status_response(STATUS_OK)
+        );
+
+        let rows = names(&mut sentry);
+        let demo: Vec<_> = rows
+            .iter()
+            .filter(|(_, group, _)| group == b"Demo")
+            .map(|(_, _, user)| user.clone())
+            .collect();
+        assert_eq!(
+            demo,
+            [
+                b"Demo".to_vec(),
+                b"GUEST".into(),
+                b"OPERATOR".into(),
+                b"CLERK".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_a_duplicate_company() {
+        let mut sentry = SentryServer::new();
+
+        assert_eq!(
+            add_company(&mut sentry, b"GRiD"),
+            status_response(STATUS_ALREADY_DEFINED)
+        );
+    }
+
+    #[test]
+    fn rejects_a_group_without_its_company() {
+        let mut sentry = SentryServer::new();
+
+        assert_eq!(
+            add_group(&mut sentry, b"MISSING", b"Payroll"),
+            status_response(STATUS_COMPANY_NOT_DEFINED)
+        );
+    }
+
+    #[test]
+    fn a_created_company_accepts_groups() {
+        let mut sentry = SentryServer::new();
+
+        add_company(&mut sentry, b"ACME");
+
+        assert_eq!(
+            add_group(&mut sentry, b"acme", b"Sales"),
+            status_response(STATUS_OK)
+        );
+        assert!(sentry.directory.last().unwrap().is_group());
     }
 
     #[test]

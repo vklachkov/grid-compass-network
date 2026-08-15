@@ -1,4 +1,5 @@
 use crate::{
+    broadcast::{self, BroadcastServer},
     gridlink::{
         FrameError,
         vipc::{IncomingMessage, OutgoingMessage, OutgoingMessageBody},
@@ -12,6 +13,7 @@ pub struct Vipc {
     vfs: Box<Vfs>,
     mail: MailServer,
     sentry: SentryServer,
+    broadcast: BroadcastServer,
 }
 
 impl Vipc {
@@ -20,6 +22,7 @@ impl Vipc {
             vfs,
             mail: MailServer::new(),
             sentry: SentryServer::new(),
+            broadcast: BroadcastServer::new(),
         }
     }
 
@@ -73,6 +76,18 @@ impl Vipc {
                     },
                 })
                 .collect(),
+            broadcast::MESSAGE_TYPE => self
+                .broadcast
+                .process(message.body.payload)
+                .map(|payload| OutgoingMessage {
+                    note: 0x8000 | message.note,
+                    body: OutgoingMessageBody {
+                        ty: broadcast::MESSAGE_TYPE,
+                        payload,
+                    },
+                })
+                .into_iter()
+                .collect(),
             _ => Vec::new(),
         };
 
@@ -98,6 +113,30 @@ mod tests {
             responses[0].to_bytes(),
             [0x44, 0x74, 0, 0x80, 8, 0, 0, 5, 0, 0, 0xfe, 1, 0, b'z']
         );
+    }
+
+    #[test]
+    fn serializes_broadcast_initialization_response() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [
+            0x00, 0x70, 0, 0, 11, 0, 0, 1, 0, 0, 0xfe, 4, 0, b'a', 0xec, 0x2c, 1,
+        ];
+
+        let responses = vipc.process_message(&request).unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            responses[0].to_bytes(),
+            [0x00, 0x70, 0, 0x80, 8, 0, 0, 1, 0, 0, 0xfe, 1, 0, b'z']
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_broadcast_frames() {
+        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let request = [0x00, 0x70, 0, 0, 4, 0, 0, 1, 0, 0];
+
+        assert!(vipc.process_message(&request).unwrap().is_empty());
     }
 
     #[test]

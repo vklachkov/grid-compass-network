@@ -27,6 +27,7 @@ macro_rules! error {
     };
 }
 
+mod broadcast;
 mod gridlink;
 mod mail;
 mod sentry;

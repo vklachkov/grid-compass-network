@@ -1,8 +1,8 @@
-use std::io;
+use std::io::{self, Write};
 
 use super::{
     error::FrameError,
-    utils::{CursorExt, ReadExt},
+    utils::{CursorExt, ReadExt, WriteExt},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,16 +56,31 @@ impl<'a> IncomingMessage<'a> {
 }
 
 impl OutgoingMessage {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    /// The payload length is a `u16` on the wire, so an oversized payload is a
+    /// reported error rather than a panic: a long directory listing must not be
+    /// able to take the server down.
+    pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
         let payload_length =
-            u16::try_from(self.body.payload.len()).expect("VIPC payload exceeds u16 length");
-        let mut data = Vec::with_capacity(6 + self.body.payload.len());
+            u16::try_from(self.body.payload.len()).map_err(|_| FrameError::Validation {
+                reason: format!(
+                    "VIPC payload of {} bytes exceeds the u16 length field",
+                    self.body.payload.len()
+                ),
+            })?;
 
-        data.extend(self.body.ty.0.to_le_bytes());
-        data.extend(self.note.to_le_bytes());
-        data.extend(payload_length.to_le_bytes());
-        data.extend_from_slice(&self.body.payload);
+        dst.reserve(6 + self.body.payload.len());
+        dst.write_u16(self.body.ty.0)?;
+        dst.write_u16(self.note)?;
+        dst.write_u16(payload_length)?;
+        dst.write_all(&self.body.payload)?;
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        self.write_into(&mut data).unwrap();
         data
     }
 }

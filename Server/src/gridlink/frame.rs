@@ -122,26 +122,31 @@ impl<'a> Frame<'a> {
         })
     }
 
-    pub fn into_raw(self) -> RawFrame {
-        let mut data = Vec::with_capacity(5);
-        data.push(self.body.repr());
-        data.push(self.flags);
-        data.push(self.window_size);
-        data.push(self.seq_number);
+    /// Writing into a caller owned buffer lets a session reuse one allocation
+    /// for every frame it sends instead of building a fresh `Vec` per response.
+    pub fn write_into(&self, dst: &mut Vec<u8>) {
+        dst.push(self.body.repr());
+        dst.push(self.flags);
+        dst.push(self.window_size);
+        dst.push(self.seq_number);
 
         match self.body {
             FrameBody::Rfc(body) => {
-                data.push(body.connection_id);
-                data.extend_from_slice(&body.version);
+                dst.push(body.connection_id);
+                dst.extend_from_slice(&body.version);
             }
             FrameBody::Ack(body) | FrameBody::Disc(body) | FrameBody::Ping(body) => {
-                data.push(body.connection_id);
+                dst.push(body.connection_id);
             }
             FrameBody::Data(body) => {
-                data.extend_from_slice(body);
+                dst.extend_from_slice(body);
             }
         }
+    }
 
+    pub fn into_raw(self) -> RawFrame {
+        let mut data = Vec::with_capacity(5);
+        self.write_into(&mut data);
         RawFrame::new(data)
     }
 }

@@ -2,9 +2,11 @@ use std::{collections::HashMap, io, num::NonZeroU16};
 
 use bstr::BStr;
 
+use std::io::Write;
+
 use crate::gridlink::{
     FrameError,
-    utils::{CursorExt, ReadExt},
+    utils::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
 };
 
 pub const MESSAGE_TYPE: crate::gridlink::vipc::MessageType = crate::gridlink::vipc::MessageType(83);
@@ -310,43 +312,50 @@ impl<'a> VfsRequest<'a> {
 }
 
 impl VfsResponse {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut data = Vec::new();
+    /// Appends the wire form of this response to `dst`.
+    ///
+    /// Every length prefix is patched in after its body has been written, so a
+    /// prefix cannot disagree with the bytes it describes the way a separate
+    /// counting pass over the same data could.
+    pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
         match self {
-            Self::Simple(response) => write_header(&mut data, response),
+            Self::Simple(response) => write_header(dst, response)?,
             Self::GetStatus(response) => {
-                write_header(&mut data, &response.header);
-                data.extend(15u16.to_le_bytes());
-                data.push(response.open as u8);
-                data.push(response.access as u8);
-                data.push(response.seek as u8);
-                data.extend(response.file_position.to_le_bytes());
-                data.extend(response.file_length.to_le_bytes());
-                data.extend(response.num_pages.to_le_bytes());
-                data.extend(response.num_pages_alloc.to_le_bytes());
+                write_header(dst, &response.header)?;
+                with_u16_len(dst, |dst| {
+                    dst.write_u8(response.open as u8)?;
+                    dst.write_u8(response.access as u8)?;
+                    dst.write_u8(response.seek as u8)?;
+                    dst.write_u32(response.file_position)?;
+                    dst.write_u32(response.file_length)?;
+                    dst.write_u16(response.num_pages)?;
+                    dst.write_u16(response.num_pages_alloc)?;
+                    Ok(())
+                })?;
             }
             Self::ReadDirPage(response) => {
-                write_header(&mut data, &response.header);
-                let length: u16 = response
-                    .entries
-                    .iter()
-                    .map(|entry| 9 + entry.name.len() as u16)
-                    .sum();
-                data.extend(length.to_le_bytes());
-                for entry in &response.entries {
-                    data.extend([0; 4]);
-                    data.extend((9 + entry.name.len() as u32).to_le_bytes());
-                    data.push(entry.name.len() as u8);
-                    data.extend_from_slice(&entry.name);
-                }
+                write_header(dst, &response.header)?;
+                with_u16_len(dst, |dst| {
+                    for entry in &response.entries {
+                        let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
+                        dst.write_array([0; 4])?;
+                        dst.write_u32(9 + u32::from(name_length))?;
+                        dst.write_u8(name_length)?;
+                        dst.write_all(&entry.name)?;
+                    }
+                    Ok(())
+                })?;
             }
             Self::Read(response) => {
-                write_header(&mut data, &response.header);
-                data.extend((response.data.len() as u16).to_le_bytes());
-                data.extend_from_slice(&response.data);
+                write_header(dst, &response.header)?;
+                with_u16_len(dst, |dst| {
+                    dst.write_all(&response.data)?;
+                    Ok(())
+                })?;
             }
         }
-        data
+
+        Ok(())
     }
 }
 
@@ -445,11 +454,6 @@ fn read_write_request<'a>(
     Ok(VfsWriteRequest { data })
 }
 
-fn read_small_slice<'a>(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
-    let length = cursor.read_u8()?;
-    cursor.read_slice(length as usize).map_err(Into::into)
-}
-
 fn ensure_empty(cursor: &io::Cursor<&[u8]>, context: &str) -> Result<(), FrameError> {
     let remaining = cursor
         .get_ref()
@@ -464,11 +468,12 @@ fn ensure_empty(cursor: &io::Cursor<&[u8]>, context: &str) -> Result<(), FrameEr
     }
 }
 
-fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) {
-    dst.extend(header.response.to_le_bytes());
-    dst.extend(header.servers_conn_id.to_le_bytes());
-    dst.extend(header.requestors_conn_id.to_le_bytes());
-    dst.extend(header.error.to_le_bytes());
+fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), FrameError> {
+    dst.write_u16(header.response)?;
+    dst.write_u16(header.servers_conn_id)?;
+    dst.write_u16(header.requestors_conn_id)?;
+    dst.write_u16(header.error)?;
+    Ok(())
 }
 
 const RESOURCES: &[&str] = &["Hard Disk~FS~"];
@@ -540,7 +545,7 @@ impl Vfs {
             VfsRequestBody::Attach(body) => self.attach(&header, body),
             VfsRequestBody::Detach => self.detach(&header),
             VfsRequestBody::Close => self.close(&header),
-            VfsRequestBody::Unknown(body) => self.unknown(body),
+            VfsRequestBody::Unknown(body) => self.unknown(&header, body),
         }
     }
 
@@ -714,12 +719,35 @@ impl Vfs {
         })
     }
 
-    fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
-        let conn_id = self.connection_id;
+    /// Hands out the next free connection id. Ids are only released on detach,
+    /// so after 65535 attaches the counter wraps onto live entries: probing the
+    /// whole range keeps that case an error instead of a collision.
+    fn allocate_connection_id(&mut self) -> Option<NonZeroU16> {
+        for _ in 0..u16::MAX {
+            let conn_id = self.connection_id;
 
-        if self.files.contains_key(&conn_id) {
-            unimplemented!();
+            // no wrapping_add() for NonZero types.
+            self.connection_id = conn_id.checked_add(1).unwrap_or(NonZeroU16::MIN);
+
+            if !self.files.contains_key(&conn_id) {
+                return Some(conn_id);
+            }
         }
+
+        None
+    }
+
+    fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
+        let Some(conn_id) = self.allocate_connection_id() else {
+            info!("vfs: refused attach, no free connection id");
+
+            return VfsResponse::Simple(VfsResponseHeader {
+                response: 0x8000 | VfsRequestCode::Attach as u16,
+                servers_conn_id: 0,
+                requestors_conn_id: header.requestors_conn_id,
+                error: VFS_ERROR_DEVICE_FULL,
+            });
+        };
 
         self.files.insert(
             conn_id,
@@ -732,9 +760,6 @@ impl Vfs {
                 write_failed: false,
             },
         );
-
-        // no wrapping_add() for NonZero types.
-        self.connection_id = conn_id.checked_add(1).unwrap_or(NonZeroU16::MIN);
 
         VfsResponse::Simple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Attach as u16,
@@ -773,8 +798,24 @@ impl Vfs {
         })
     }
 
-    fn unknown(&mut self, _body: &[u8]) -> VfsResponse {
-        panic!("unsupported VFS request")
+    /// A request code the parser did not recognize. Answering with an error
+    /// keeps a single unknown message from taking the server down: the client
+    /// sees a failed request instead of a closed connection.
+    fn unknown(&mut self, header: &VfsRequestHeader, body: &[u8]) -> VfsResponse {
+        info!(
+            "vfs: unsupported request {:#06x} with {} body bytes",
+            header.request,
+            body.len()
+        );
+
+        VfsResponse::Simple(VfsResponseHeader {
+            // The response code mirrors the request code with the high bit set,
+            // the same way every handled request answers.
+            response: 0x8000 | header.request,
+            servers_conn_id: header.servers_conn_id,
+            requestors_conn_id: header.requestors_conn_id,
+            error: VFS_ERROR_BAD_PARAMETER,
+        })
     }
 }
 

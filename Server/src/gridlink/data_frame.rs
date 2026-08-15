@@ -4,7 +4,7 @@ use bstr::BStr;
 
 use super::{
     error::FrameError,
-    utils::{CursorExt, ReadExt, WriteExt},
+    utils::{self, CursorExt, ReadExt, WriteExt},
 };
 
 #[derive(Clone, Copy, Debug, strum::FromRepr)]
@@ -85,7 +85,9 @@ pub enum DataFrameResponse<'a> {
 
     Msg {
         header: ConnectHeader,
-        payload: Vec<u8>,
+        /// Borrowed rather than owned so a caller can serialize the VIPC message
+        /// into a reused buffer and hand it straight over.
+        payload: &'a [u8],
     },
 }
 
@@ -155,39 +157,36 @@ impl<'a> DataFrameRequest<'a> {
     }
 
     fn read_small_slice(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
-        let length = cursor.read_u8()?;
-        cursor.read_slice(length as usize).map_err(Into::into)
+        utils::read_small_slice(cursor)
     }
 }
 
 impl DataFrameResponse<'_> {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(6);
-
-        data.extend(self.to_repr().to_le_bytes());
+    pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
+        dst.write_u16(self.to_repr())?;
 
         match self {
             Self::Connect { header, status } => {
-                Self::write_connect_header(&mut data, header);
-                data.extend(status.to_le_bytes());
+                Self::write_connect_header(dst, header)?;
+                dst.write_u16(*status)?;
             }
             Self::Disconnect { header } => {
-                Self::write_connect_header(&mut data, header);
+                Self::write_connect_header(dst, header)?;
             }
             Self::SignOn {
                 status,
                 server_name,
             } => {
-                data.extend(status.to_le_bytes());
-                Self::write_nslice(&mut data, server_name);
+                dst.write_u16(*status)?;
+                Self::write_nslice(dst, server_name)?;
             }
             Self::Msg { header, payload } => {
-                Self::write_connect_header(&mut data, header);
-                data.extend_from_slice(payload);
+                Self::write_connect_header(dst, header)?;
+                dst.write_all(payload)?;
             }
         }
 
-        data
+        Ok(())
     }
 
     fn to_repr(&self) -> u16 {
@@ -199,13 +198,17 @@ impl DataFrameResponse<'_> {
         }) as u16
     }
 
-    fn write_connect_header(dst: &mut Vec<u8>, header: &ConnectHeader) {
-        dst.extend(header.local_path_id.to_le_bytes());
-        dst.extend(header.remote_path_id.to_le_bytes());
+    fn write_connect_header(dst: &mut Vec<u8>, header: &ConnectHeader) -> Result<(), FrameError> {
+        dst.write_u16(header.local_path_id)?;
+        dst.write_u16(header.remote_path_id)?;
+        Ok(())
     }
 
-    fn write_nslice(dst: &mut Vec<u8>, value: &[u8]) {
-        dst.push(value.len() as u8);
-        dst.extend_from_slice(value);
+    /// The length is checked rather than truncated: a silently shortened prefix
+    /// would desynchronize the client's parser instead of failing here.
+    fn write_nslice(dst: &mut Vec<u8>, value: &[u8]) -> Result<(), FrameError> {
+        dst.write_u8(utils::u8_len(value.len(), "data frame slice")?)?;
+        dst.write_all(value)?;
+        Ok(())
     }
 }

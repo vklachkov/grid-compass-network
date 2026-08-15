@@ -86,6 +86,7 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
         last_seq_number: 0x1C,
         recv_sequence: 0x1C,
         vipc: Box::new(Vipc::new(vfs)),
+        scratch: Scratch::default(),
     };
 
     loop {
@@ -117,6 +118,18 @@ struct Session {
     last_seq_number: u8,
     recv_sequence: u8,
     vipc: Box<Vipc>,
+    /// Reused for serializing outgoing frames, one buffer per nesting level:
+    /// the VIPC message, the data frame around it and the PDL frame around
+    /// that. Frames are bounded by `MAX_FRAME_SIZE`, so after the first few
+    /// responses these stop growing and the send path allocates nothing.
+    scratch: Scratch,
+}
+
+#[derive(Default)]
+struct Scratch {
+    message: Vec<u8>,
+    body: Vec<u8>,
+    frame: Vec<u8>,
 }
 
 impl Session {
@@ -136,9 +149,7 @@ impl Session {
         match frame.body {
             FrameBody::Rfc(_) => {
                 self.recv_sequence = self.last_seq_number;
-                Frame::rfc(self.connection_id, self.last_seq_number)
-                    .into_raw()
-                    .write_to_io(&mut self.client)?;
+                self.write_frame(Frame::rfc(self.connection_id, self.last_seq_number))?;
             }
             FrameBody::Ack(_) => {
                 // TODO
@@ -147,9 +158,7 @@ impl Session {
                 return Ok(ProcessFrameResult::Disconnect);
             }
             FrameBody::Ping(_) => {
-                Frame::ack(self.connection_id, frame.seq_number)
-                    .into_raw()
-                    .write_to_io(&mut self.client)?;
+                self.write_frame(Frame::ack(self.connection_id, frame.seq_number))?;
             }
             FrameBody::Data(data) => {
                 let expected = self.recv_sequence.wrapping_add(1);
@@ -165,16 +174,12 @@ impl Session {
                         "session: ignored out-of-sequence data frame seq={}, expected={expected}",
                         frame.seq_number
                     );
-                    Frame::ack(self.connection_id, self.recv_sequence)
-                        .into_raw()
-                        .write_to_io(&mut self.client)?;
+                    self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
                     return Ok(ProcessFrameResult::Continue);
                 }
 
                 self.recv_sequence = frame.seq_number;
-                Frame::ack(self.connection_id, self.recv_sequence)
-                    .into_raw()
-                    .write_to_io(&mut self.client)?;
+                self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
                 self.process_data_frame(data)?;
             }
         }
@@ -220,9 +225,10 @@ impl Session {
             status: 0, // OK
         };
 
-        self.write_response(&body.to_bytes())?;
+        self.scratch.body.clear();
+        body.write_into(&mut self.scratch.body)?;
 
-        Ok(())
+        self.write_response()
     }
 
     fn disconnect(&mut self, remote_path_id: u16, _reason: u16) -> Result<(), FrameError> {
@@ -237,9 +243,10 @@ impl Session {
             },
         };
 
-        self.write_response(&body.to_bytes())?;
+        self.scratch.body.clear();
+        body.write_into(&mut self.scratch.body)?;
 
-        Ok(())
+        self.write_response()
     }
 
     fn sign_on(&mut self, _properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
@@ -252,9 +259,10 @@ impl Session {
             server_name: BStr::new("vklachkov server"),
         };
 
-        self.write_response(&body.to_bytes())?;
+        self.scratch.body.clear();
+        body.write_into(&mut self.scratch.body)?;
 
-        Ok(())
+        self.write_response()
     }
 
     fn sign_off(&mut self) -> Result<(), FrameError> {
@@ -267,27 +275,43 @@ impl Session {
 
     fn process_msg(&mut self, header: ConnectHeader, payload: &[u8]) -> Result<(), FrameError> {
         for outgoing in self.vipc.process_message(payload)? {
+            let Scratch { message, body, .. } = &mut self.scratch;
+
+            message.clear();
+            outgoing.write_into(message)?;
+
             let response = DataFrameResponse::Msg {
                 header: ConnectHeader {
                     local_path_id: header.remote_path_id,
                     remote_path_id: header.local_path_id,
                 },
-                payload: outgoing.to_bytes(),
+                payload: message,
             };
 
-            self.write_response(&response.to_bytes())?;
+            body.clear();
+            response.write_into(body)?;
+
+            self.write_response()?;
         }
 
         Ok(())
     }
 
-    fn write_response(&mut self, body: &[u8]) -> Result<(), FrameError> {
+    fn write_response(&mut self) -> Result<(), FrameError> {
         self.last_seq_number = self.last_seq_number.wrapping_add(1);
 
-        Frame::data(EOM_FLAG_ON, self.last_seq_number, body)
-            .into_raw()
-            .write_to_io(&mut self.client)?;
+        let Scratch { body, frame, .. } = &mut self.scratch;
 
-        Ok(())
+        frame.clear();
+        Frame::data(EOM_FLAG_ON, self.last_seq_number, body).write_into(frame);
+
+        RawFrame::write_data_to_io(frame, &mut self.client)
+    }
+
+    fn write_frame(&mut self, frame: Frame<'_>) -> Result<(), FrameError> {
+        self.scratch.frame.clear();
+        frame.write_into(&mut self.scratch.frame);
+
+        RawFrame::write_data_to_io(&self.scratch.frame, &mut self.client)
     }
 }

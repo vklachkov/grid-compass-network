@@ -1,6 +1,22 @@
-use crate::gridlink::vipc::MessageType;
+use std::io;
+
+use crate::gridlink::{
+    Tlv,
+    utils::{CursorExt, ReadExt, u16_len},
+    vipc::MessageType,
+};
 
 pub const MESSAGE_TYPE: MessageType = MessageType(0x7444);
+
+const RECORD_MARKER: u8 = 0xfd;
+const TAG_BODY: u8 = b'n';
+const TAG_TERMINATOR: u8 = b'z';
+/// A three byte selector, a six byte mail id, then the tags the client wants back.
+const TAG_SELECT: u8 = b'S';
+const TAG_INITIALIZE: u8 = b'I';
+
+/// Walk unread mail rather than fetch one item by id.
+const READ_NEW_SELECTOR: [u8; 3] = [1, 0, 1];
 
 const MORE: u8 = 1;
 const TRANSPORT_HEADER_LEN: usize = 4;
@@ -73,8 +89,8 @@ impl MailServer {
             0 if pending.data == [0xfe, 4, 0, b'a', 0x88, 0x2c, 1] => {
                 vec![(0, app_frame(0xfe, b"z"))]
             }
-            4 if pending.data.is_empty() => vec![(0, app_frame(0xfd, b"z"))],
-            6 if valid_tagged_request(&pending.data) => vec![(0, app_frame(0xfd, b"T"))],
+            4 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
+            6 if valid_tagged_request(&pending.data) => vec![(0, app_frame(RECORD_MARKER, b"T"))],
             7 => match SRequest::parse(&pending.data)? {
                 SRequest::List => mailbox_list(&self.messages),
                 SRequest::Detail(id) => vec![(
@@ -97,9 +113,13 @@ impl MailServer {
                         .unwrap_or_else(empty_mail_result),
                 )],
             },
-            8 if pending.data.is_empty() => vec![(0, app_frame(0xfd, b"z"))],
-            0x0d if valid_i_request(&pending.data) => vec![(0, app_frame(0xfd, b"z"))],
-            0x0e | 0x10 if pending.data.is_empty() => vec![(0, app_frame(0xfd, b"z"))],
+            8 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
+            0x0d if valid_i_request(&pending.data) => {
+                vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
+            }
+            0x0e | 0x10 if pending.data.is_empty() => {
+                vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
+            }
             _ => return None,
         };
 
@@ -130,38 +150,25 @@ struct Fragment<'a> {
 
 impl<'a> Fragment<'a> {
     fn parse(data: &'a [u8]) -> Option<Self> {
-        let [flags, connection_id, error_lo, error_hi, body @ ..] = data else {
-            return None;
-        };
+        let mut cursor = io::Cursor::new(data);
+
         Some(Self {
-            flags: *flags,
-            connection_id: *connection_id,
-            error: u16::from_le_bytes([*error_lo, *error_hi]),
-            data: body,
+            flags: cursor.read_u8().ok()?,
+            connection_id: cursor.read_u8().ok()?,
+            error: cursor.read_u16().ok()?,
+            data: cursor.read_remainder(),
         })
     }
 }
 
 fn valid_tagged_request(data: &[u8]) -> bool {
-    if data.is_empty() {
-        return false;
-    }
+    records(data).all_records_valid()
+}
 
-    let mut offset = 0;
-    while offset < data.len() {
-        let Some(header) = data.get(offset..offset + 3) else {
-            return false;
-        };
-        if header[0] != 0xfd {
-            return false;
-        }
-        let length = u16::from_le_bytes([header[1], header[2]]) as usize;
-        if length == 0 || data.get(offset + 3..offset + 3 + length).is_none() {
-            return false;
-        }
-        offset += 3 + length;
-    }
-    true
+/// Walks a GRiDMail application payload as `<0xfd><u16 length><tag + value>`
+/// records.
+fn records(data: &[u8]) -> Tlv<'_> {
+    Tlv::marker_u16(data, RECORD_MARKER)
 }
 
 enum SRequest {
@@ -172,35 +179,48 @@ enum SRequest {
 
 impl SRequest {
     fn parse(data: &[u8]) -> Option<Self> {
-        if data.len() < 13
-            || data[0] != 0xfd
-            || data[3] != b'S'
-            || u16::from_le_bytes([data[1], data[2]]) as usize != data.len() - 3
-        {
-            return None;
-        }
+        // The whole payload must be exactly one `S` record: a trailing second
+        // record would mean the client asked for something this parse ignores.
+        let value = match records(data).collect_all().ok()?.as_slice() {
+            [entry] if entry.tag == TAG_SELECT => entry.value,
+            _ => return None,
+        };
 
-        let requested_tags = data.get(13..)?;
-        if !requested_tags.contains(&b'n') {
+        let mut cursor = io::Cursor::new(value);
+        let selector: [u8; 3] = cursor.read_array().ok()?;
+        let id: [u8; 6] = cursor.read_array().ok()?;
+        let requested_tags = cursor.read_remainder();
+
+        if !requested_tags.contains(&TAG_BODY) {
             return Some(Self::List);
         }
 
-        if data[4..7] == [1, 0, 1] {
+        if selector == READ_NEW_SELECTOR {
             Some(Self::ReadNew)
         } else {
-            Some(Self::Detail(data.get(7..13)?.try_into().ok()?))
+            Some(Self::Detail(id))
         }
     }
 }
 
 fn valid_i_request(data: &[u8]) -> bool {
-    data.len() == 6 && data[..4] == [0xfd, 3, 0, b'I']
+    matches!(
+        records(data).collect_all().as_deref(),
+        Ok([entry]) if entry.tag == TAG_INITIALIZE && entry.value.len() == 2
+    )
 }
 
 fn app_frame(marker: u8, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(payload.len() + 3);
     frame.push(marker);
-    frame.extend((payload.len() as u16).to_le_bytes());
+    // Every caller builds the payload from fields already checked against
+    // `MAX_TAG_VALUE`, so an oversized one is a bug here rather than something
+    // a client can trigger.
+    frame.extend(
+        u16_len(payload.len(), "GRiDMail record")
+            .unwrap()
+            .to_le_bytes(),
+    );
     frame.extend_from_slice(payload);
     frame
 }
@@ -262,52 +282,21 @@ fn mail_id(value: u32) -> [u8; 6] {
 }
 
 fn tagged_value(data: &[u8], wanted: u8) -> Option<&[u8]> {
-    let mut offset = 0;
-    while offset + 3 <= data.len() {
-        if data[offset] != 0xfd {
-            offset += 1;
-            continue;
-        }
-        let length = u16::from_le_bytes([data[offset + 1], data[offset + 2]]) as usize;
-        if length == 0 {
-            offset += 1;
-            continue;
-        }
-        let end = offset.checked_add(3 + length)?;
-        let record = match data.get(offset + 3..end) {
-            Some(record) => record,
-            None => {
-                offset += 1;
-                continue;
-            }
-        };
-        if record[0] == wanted {
-            return Some(&record[1..]);
-        }
-        offset = end;
-    }
-    None
+    records(data).find_tag(wanted)
 }
 
+/// The body of an outgoing mail object: the `n` record that is immediately
+/// followed by the `z` terminator, which is where GRiDMail stops writing.
+/// A rewritten mail object can keep a tail of the longer version it replaced,
+/// so the records before it are read rather than the whole buffer rejected.
 fn outgoing_body(data: &[u8]) -> Option<&[u8]> {
-    let terminator = [0xfd, 1, 0, b'z'];
-    let mut offset = 0;
-    while offset + 4 <= data.len() {
-        if data[offset] != 0xfd {
-            offset += 1;
-            continue;
-        }
-        let length = u16::from_le_bytes([data[offset + 1], data[offset + 2]]) as usize;
-        let end = offset.checked_add(3 + length)?;
-        if length > 0
-            && data.get(offset + 3) == Some(&b'n')
-            && data.get(end..end + terminator.len()) == Some(terminator.as_slice())
-        {
-            return data.get(offset + 4..end);
-        }
-        offset += 1;
-    }
-    None
+    records(data)
+        .well_formed_prefix()
+        .windows(2)
+        .find(|pair| {
+            pair[0].tag == TAG_BODY && pair[1].tag == TAG_TERMINATOR && pair[1].value.is_empty()
+        })
+        .map(|pair| pair[0].value)
 }
 
 fn mail_header(message: &MailMessage) -> Vec<u8> {
@@ -315,7 +304,7 @@ fn mail_header(message: &MailMessage) -> Vec<u8> {
     value.push(b'b');
     value.extend(message.id);
     value.extend([0, 0, 0, 0, 1]);
-    app_frame(0xfd, &value)
+    app_frame(RECORD_MARKER, &value)
 }
 
 fn mailbox_list(messages: &[MailMessage]) -> Vec<(u8, Vec<u8>)> {
@@ -331,11 +320,11 @@ fn mailbox_list(messages: &[MailMessage]) -> Vec<(u8, Vec<u8>)> {
             let mut data = mail_header(message);
             let mut sender = vec![b'k'];
             sender.extend_from_slice(&message.sender);
-            data.extend(app_frame(0xfd, &sender));
+            data.extend(app_frame(RECORD_MARKER, &sender));
             let mut subject = vec![b's'];
             subject.extend_from_slice(&message.subject);
-            data.extend(app_frame(0xfd, &subject));
-            data.extend(app_frame(0xfd, b"z"));
+            data.extend(app_frame(RECORD_MARKER, &subject));
+            data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
             let flags = if index == last { 0 } else { MORE };
             (flags, data)
@@ -344,7 +333,7 @@ fn mailbox_list(messages: &[MailMessage]) -> Vec<(u8, Vec<u8>)> {
 }
 
 fn empty_mail_result() -> Vec<u8> {
-    app_frame(0xfd, b"z")
+    app_frame(RECORD_MARKER, &[TAG_TERMINATOR])
 }
 
 fn mail_detail_len(message: &MailMessage) -> usize {
@@ -378,9 +367,9 @@ fn mail_detail(message: &MailMessage) -> Vec<u8> {
     ] {
         let mut record = vec![tag];
         record.extend_from_slice(value);
-        data.extend(app_frame(0xfd, &record));
+        data.extend(app_frame(RECORD_MARKER, &record));
     }
-    data.extend(app_frame(0xfd, b"z"));
+    data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
     // After parsing `z`, GRiDMail directly drains the remaining response stream.
     data.extend_from_slice(&message.body);
@@ -469,7 +458,7 @@ mod tests {
             mail.process(0x10, &[0, 1, 0, 0]),
             Some(vec![MailResponse {
                 note: 0x10,
-                payload: transport(0, 1, &app_frame(0xfd, b"z")),
+                payload: transport(0, 1, &app_frame(RECORD_MARKER, &[TAG_TERMINATOR])),
             }])
         );
     }
@@ -568,7 +557,7 @@ mod tests {
         outgoing.extend(app_frame(0xfd, b"tUser"));
         outgoing.extend(app_frame(0xfd, b"sSecond"));
         outgoing.extend(app_frame(0xfd, b"nSecond body"));
-        outgoing.extend(app_frame(0xfd, b"z"));
+        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
         let mut mail = MailServer::new();
         assert!(mail.accept_outgoing(outgoing));
@@ -604,7 +593,7 @@ mod tests {
         outgoing.extend(app_frame(0xfd, b"sSent subject"));
         outgoing.extend(app_frame(0xfd, b"DDemo attachment nnoise"));
         outgoing.extend(app_frame(0xfd, b"nSent body"));
-        outgoing.extend(app_frame(0xfd, b"z"));
+        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
         let mut mail = MailServer::new();
         assert!(mail.accept_outgoing(outgoing));
@@ -630,13 +619,28 @@ mod tests {
     }
 
     #[test]
+    fn accepts_outgoing_mail_with_a_stale_tail() {
+        let mut outgoing = Vec::new();
+        outgoing.extend(app_frame(RECORD_MARKER, b"tUser"));
+        outgoing.extend(app_frame(RECORD_MARKER, b"sShort"));
+        outgoing.extend(app_frame(RECORD_MARKER, b"nShort body"));
+        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
+        outgoing.extend_from_slice(b" leftovers of a longer object");
+
+        let mut mail = MailServer::new();
+        assert!(mail.accept_outgoing(outgoing));
+        assert_eq!(mail.messages[1].subject, b"Short");
+        assert_eq!(mail.messages[1].body, b"Short body");
+    }
+
+    #[test]
     fn read_new_iterates_all_mail_then_terminates() {
         let mut mail = MailServer::new();
         let mut outgoing = Vec::new();
         outgoing.extend(app_frame(0xfd, b"tUser"));
         outgoing.extend(app_frame(0xfd, b"sSecond"));
         outgoing.extend(app_frame(0xfd, b"nSecond body"));
-        outgoing.extend(app_frame(0xfd, b"z"));
+        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
         assert!(mail.accept_outgoing(outgoing));
 
         let query = read_new_query();
@@ -657,7 +661,7 @@ mod tests {
         let mut body_record = vec![b'n'];
         body_record.extend(body);
         outgoing.extend(app_frame(0xfd, &body_record));
-        outgoing.extend(app_frame(0xfd, b"z"));
+        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
         let mut mail = MailServer::new();
         assert!(!mail.accept_outgoing(outgoing));

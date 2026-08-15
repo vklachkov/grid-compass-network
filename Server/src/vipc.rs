@@ -31,7 +31,10 @@ impl Vipc {
         let responses = match message.body.ty {
             vfs::MESSAGE_TYPE => {
                 let request = VfsRequest::try_from_slice(message.body.payload)?;
-                let response = self.vfs.process_request(request).to_bytes();
+                let mut response = Vec::new();
+                self.vfs
+                    .process_request(request)
+                    .write_into(&mut response)?;
                 if let Some(data) = self.vfs.take_finalized_mail()
                     && !self.mail.accept_outgoing(data)
                 {

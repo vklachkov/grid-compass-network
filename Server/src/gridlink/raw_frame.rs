@@ -82,15 +82,21 @@ impl RawFrame {
 
     /// Stuffs and writes frame data to an I/O destination.
     pub fn write_to_io(&self, dst: impl io::Write) -> Result<(), FrameError> {
-        let crc = crc16(&self.data);
+        Self::write_data_to_io(&self.data, dst)
+    }
 
-        let count_of_dle = self.data.iter().filter(|&&b| b == DLE).count();
+    /// Taking a slice lets a caller serialize a frame into a reused buffer and
+    /// send it without wrapping it in an owned `RawFrame` first.
+    pub fn write_data_to_io(data: &[u8], dst: impl io::Write) -> Result<(), FrameError> {
+        let crc = crc16(data);
+
+        let count_of_dle = data.iter().filter(|&&b| b == DLE).count();
         if count_of_dle == 0 {
-            return Self::write_stuffed(dst, &self.data, crc);
+            return Self::write_stuffed(dst, data, crc);
         }
 
-        let mut stuffed_frame_data = Vec::with_capacity(self.data.len() + count_of_dle);
-        for &b in self.data.iter() {
+        let mut stuffed_frame_data = Vec::with_capacity(data.len() + count_of_dle);
+        for &b in data.iter() {
             stuffed_frame_data.push(b);
             if b == DLE {
                 stuffed_frame_data.push(DLE);

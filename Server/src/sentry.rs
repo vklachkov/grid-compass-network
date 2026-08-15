@@ -1,6 +1,12 @@
+use std::{io::Write, rc::Rc};
+
 use bstr::BStr;
 
-use crate::gridlink::vipc::MessageType;
+use crate::gridlink::{
+    FrameError, Tlv, TlvEntry,
+    utils::{WriteExt, u8_len},
+    vipc::MessageType,
+};
 
 // AdministratorSentry attaches `Admin~Manager~` with mode 10 (process connect) and then
 // sends every command with `OsSend(conn, class = 0xffff, note = 0xffff, ...)`, so the
@@ -49,10 +55,51 @@ const STATUS_COMPANY_NOT_DEFINED: u16 = 1015;
 /// `1017: eAlreadyDefined`.
 const STATUS_ALREADY_DEFINED: u16 = 1017;
 
-const AUTHORITY_NORMAL: u16 = 0;
-const AUTHORITY_GROUP_ADMIN: u16 = 20;
-const AUTHORITY_COMPANY_ADMIN: u16 = 30;
-const AUTHORITY_SYSTEM_ADMIN: u16 = 40;
+/// The authority level of an account.
+///
+/// This is *not* a plain `u16`: the client sends the field big endian in an
+/// add-user request but expects it back little endian in a listing row. The
+/// asymmetry is real client behaviour, not a bug, so it is spelled out once
+/// here — `read` and `write` are deliberately different — instead of sitting as
+/// a lone `from_be_bytes` that invites a well meaning "fix".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Authority(u16);
+
+impl Authority {
+    const NORMAL: Self = Self(0);
+    const GROUP_ADMIN: Self = Self(20);
+    const COMPANY_ADMIN: Self = Self(30);
+    const SYSTEM_ADMIN: Self = Self(40);
+
+    /// Parses the field as the client writes it in a request: big endian.
+    fn read(value: &[u8]) -> Option<Self> {
+        <[u8; 2]>::try_from(value)
+            .ok()
+            .map(|bytes| Self(u16::from_be_bytes(bytes)))
+    }
+
+    /// Serializes the field as the client reads it in a listing row: little
+    /// endian, unlike the request encoding above.
+    fn write(self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::NORMAL => "normal user",
+            Self::GROUP_ADMIN => "group administrator",
+            Self::COMPANY_ADMIN => "company administrator",
+            Self::SYSTEM_ADMIN => "system administrator",
+            _ => "unknown authority",
+        }
+    }
+}
+
+impl std::fmt::Display for Authority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 const QUOTA_UNLIMITED: u32 = u32::MAX;
 
@@ -72,42 +119,47 @@ const MEGABYTE: u32 = 1024 * 1024;
 /// `company == group` marks a company, `group == user` a group, anything else
 /// a user.
 struct Row {
-    company: Vec<u8>,
-    group: Vec<u8>,
-    user: Vec<u8>,
-    authority: u16,
+    /// The three names of a row are frequently the same string — a company row
+    /// repeats its name at all three levels — so they share one allocation
+    /// instead of being copied per level.
+    company: Rc<[u8]>,
+    group: Rc<[u8]>,
+    user: Rc<[u8]>,
+    authority: Authority,
     quota: u32,
     used: u32,
 }
 
 impl Row {
     fn company(company: &[u8], quota: u32) -> Self {
+        let company: Rc<[u8]> = Rc::from(company);
         Self {
-            company: company.to_vec(),
-            group: company.to_vec(),
-            user: company.to_vec(),
-            authority: AUTHORITY_COMPANY_ADMIN,
+            group: Rc::clone(&company),
+            user: Rc::clone(&company),
+            company,
+            authority: Authority::COMPANY_ADMIN,
             quota,
             used: 0,
         }
     }
 
     fn group(company: &[u8], group: &[u8], quota: u32) -> Self {
+        let group: Rc<[u8]> = Rc::from(group);
         Self {
-            company: company.to_vec(),
-            group: group.to_vec(),
-            user: group.to_vec(),
-            authority: AUTHORITY_GROUP_ADMIN,
+            company: Rc::from(company),
+            user: Rc::clone(&group),
+            group,
+            authority: Authority::GROUP_ADMIN,
             quota,
             used: 0,
         }
     }
 
-    fn user(company: &[u8], group: &[u8], user: &[u8], authority: u16, quota: u32) -> Self {
+    fn user(company: &[u8], group: &[u8], user: &[u8], authority: Authority, quota: u32) -> Self {
         Self {
-            company: company.to_vec(),
-            group: group.to_vec(),
-            user: user.to_vec(),
+            company: Rc::from(company),
+            group: Rc::from(group),
+            user: Rc::from(user),
             authority,
             quota,
             used: 0,
@@ -116,10 +168,14 @@ impl Row {
 
     /// Whether the row sits under the given company / group / user prefix.
     fn matches(&self, prefix: &[&[u8]]) -> bool {
-        [&self.company, &self.group, &self.user]
+        self.names()
             .iter()
             .zip(prefix)
             .all(|(name, wanted)| name.eq_ignore_ascii_case(wanted))
+    }
+
+    fn names(&self) -> [&[u8]; 3] {
+        [&self.company, &self.group, &self.user]
     }
 
     /// A company row lists itself at all three levels, a group row at the last
@@ -150,29 +206,43 @@ impl SentryServer {
     }
 
     pub fn process(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
-        let [command, body @ ..] = payload else {
-            return None;
-        };
-
-        let records = records(body)?;
-
-        match *command {
-            COMMAND_VARIANT_QUERY => Some(variant_response()),
-            COMMAND_ADD_USER => Some(self.add_user(&records)),
-            COMMAND_ADD_GROUP => Some(self.add_group(&records)),
-            COMMAND_ADD_COMPANY => Some(self.add_company(&records)),
-            COMMAND_LIST_FIRST => Some(self.listing_response(self.seek(&records))),
-            COMMAND_LIST_NEXT => Some(self.listing_response(resume(&records))),
-            command => {
-                info!("sentry: ignored unsupported command {command:#04x} with {records:?}");
+        match self.try_process(payload) {
+            Ok(response) => response,
+            Err(err) => {
+                info!("sentry: failed to build a response: {err}");
                 None
             }
         }
     }
 
+    fn try_process(&mut self, payload: &[u8]) -> Result<Option<Vec<u8>>, FrameError> {
+        let [command, body @ ..] = payload else {
+            return Ok(None);
+        };
+
+        let Some(records) = records(body) else {
+            return Ok(None);
+        };
+
+        let response = match *command {
+            COMMAND_VARIANT_QUERY => variant_response()?,
+            COMMAND_ADD_USER => self.add_user(&records),
+            COMMAND_ADD_GROUP => self.add_group(&records),
+            COMMAND_ADD_COMPANY => self.add_company(&records),
+            COMMAND_LIST_FIRST => self.listing_response(self.seek(&records))?,
+            COMMAND_LIST_NEXT => self.listing_response(resume(&records))?,
+            command => {
+                info!("sentry: ignored unsupported command {command:#04x} with {records:?}");
+                return Ok(None);
+            }
+        };
+
+        Ok(Some(response))
+    }
+
     /// `sub_172C` sends the company name, an optional disk space text and the
     /// quota, and reports `Complete` when the status word comes back zero.
-    fn add_company(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+    fn add_company(&mut self, records: &[TlvEntry]) -> Vec<u8> {
         let company = record(records, TAG_COMPANY).unwrap_or_default();
         let quota = quota(records);
 
@@ -196,7 +266,7 @@ impl SentryServer {
     }
 
     /// `sub_121C` sends the same records as `add_company` plus the group name.
-    fn add_group(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+    fn add_group(&mut self, records: &[TlvEntry]) -> Vec<u8> {
         let company = record(records, TAG_COMPANY).unwrap_or_default();
         let group = record(records, TAG_GROUP).unwrap_or_default();
         let quota = quota(records);
@@ -225,15 +295,14 @@ impl SentryServer {
         status_response(STATUS_OK)
     }
 
-    fn add_user(&mut self, records: &[(u8, &[u8])]) -> Vec<u8> {
+    fn add_user(&mut self, records: &[TlvEntry]) -> Vec<u8> {
         let company = record(records, TAG_COMPANY).unwrap_or_default();
         let group = record(records, TAG_GROUP).unwrap_or_default();
         let user = record(records, TAG_USER).unwrap_or_default();
         let quota = quota(records);
         let authority = record(records, TAG_AUTHORITY)
-            .and_then(|value| <[u8; 2]>::try_from(value).ok())
-            // The client writes this field big endian, unlike the quota.
-            .map_or(0, u16::from_be_bytes);
+            .and_then(Authority::read)
+            .unwrap_or(Authority::NORMAL);
 
         info!(
             "sentry: add user {:?} to {:?}/{:?}, password={:?}, authority={authority} ({}), \
@@ -242,7 +311,7 @@ impl SentryServer {
             BStr::new(company),
             BStr::new(group),
             BStr::new(record(records, TAG_PASSWORD).unwrap_or_default()),
-            authority_name(authority),
+            authority.name(),
             quota_name(quota),
             BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
         );
@@ -272,7 +341,7 @@ impl SentryServer {
     /// The client repeats the previous row as the filter of the next `0x1e`, so
     /// the three names address a record instead of starting a search: the answer
     /// is the row right after the last one matching them.
-    fn seek(&self, records: &[(u8, &[u8])]) -> Option<usize> {
+    fn seek(&self, records: &[TlvEntry]) -> Option<usize> {
         let prefix: &[&[u8]] = &match (
             filter(records, TAG_COMPANY),
             filter(records, TAG_GROUP),
@@ -294,11 +363,11 @@ impl SentryServer {
 
     /// Answers one step of a listing. Running past the last row ends the
     /// enumeration with the status the client clears without complaining.
-    fn listing_response(&self, index: Option<usize>) -> Vec<u8> {
+    fn listing_response(&self, index: Option<usize>) -> Result<Vec<u8>, FrameError> {
         let Some((index, row)) = index.and_then(|index| Some((index, self.directory.get(index)?)))
         else {
             info!("sentry: end of listing");
-            return status_response(STATUS_END_OF_LISTING);
+            return Ok(status_response(STATUS_END_OF_LISTING));
         };
 
         info!(
@@ -307,22 +376,22 @@ impl SentryServer {
             BStr::new(&row.group),
             BStr::new(&row.user),
             row.authority,
-            authority_name(row.authority),
+            row.authority.name(),
         );
 
         let mut payload = vec![COMMAND_REPLY];
-        payload.extend(tagged(TAG_CURSOR, index.to_string().as_bytes()));
-        payload.extend(tagged(TAG_COMPANY, &row.company));
-        payload.extend(tagged(TAG_GROUP, &row.group));
-        payload.extend(tagged(TAG_USER, &row.user));
-        payload.extend(tagged(TAG_AUTHORITY, &row.authority.to_le_bytes()));
-        payload.extend(tagged(TAG_DEVICE, DEVICE));
-        payload.extend(tagged(TAG_QUOTA, &row.quota.to_le_bytes()));
-        payload.extend(tagged(TAG_DISK_USED, &row.used.to_le_bytes()));
-        payload.extend(tagged(TAG_CREATED, CREATED));
-        payload.extend(tagged(TAG_MODIFIED, MODIFIED));
-        payload.extend(tagged(TAG_LOCKED, &UNLOCKED));
-        payload
+        write_tagged(&mut payload, TAG_CURSOR, index.to_string().as_bytes())?;
+        write_tagged(&mut payload, TAG_COMPANY, &row.company)?;
+        write_tagged(&mut payload, TAG_GROUP, &row.group)?;
+        write_tagged(&mut payload, TAG_USER, &row.user)?;
+        write_tagged(&mut payload, TAG_AUTHORITY, &row.authority.write())?;
+        write_tagged(&mut payload, TAG_DEVICE, DEVICE)?;
+        write_tagged(&mut payload, TAG_QUOTA, &row.quota.to_le_bytes())?;
+        write_tagged(&mut payload, TAG_DISK_USED, &row.used.to_le_bytes())?;
+        write_tagged(&mut payload, TAG_CREATED, CREATED)?;
+        write_tagged(&mut payload, TAG_MODIFIED, MODIFIED)?;
+        write_tagged(&mut payload, TAG_LOCKED, &UNLOCKED)?;
+        Ok(payload)
     }
 }
 
@@ -332,12 +401,12 @@ fn demo_directory() -> Vec<Row> {
     let mut directory = vec![
         Row::company(b"GRiD", QUOTA_UNLIMITED),
         Row::group(b"GRiD", b"Demo", QUOTA_UNLIMITED),
-        Row::user(b"GRiD", b"Demo", b"GUEST", AUTHORITY_NORMAL, MEGABYTE),
+        Row::user(b"GRiD", b"Demo", b"GUEST", Authority::NORMAL, MEGABYTE),
         Row::user(
             b"GRiD",
             b"Demo",
             b"OPERATOR",
-            AUTHORITY_GROUP_ADMIN,
+            Authority::GROUP_ADMIN,
             QUOTA_UNLIMITED,
         ),
         Row::group(b"GRiD", b"Systems", QUOTA_UNLIMITED),
@@ -345,7 +414,7 @@ fn demo_directory() -> Vec<Row> {
             b"GRiD",
             b"Systems",
             b"MANAGER",
-            AUTHORITY_SYSTEM_ADMIN,
+            Authority::SYSTEM_ADMIN,
             QUOTA_UNLIMITED,
         ),
     ];
@@ -357,40 +426,39 @@ fn demo_directory() -> Vec<Row> {
 }
 
 /// Splits the Sentry payload into `<tag><length><value>` records.
-fn records(data: &[u8]) -> Option<Vec<(u8, &[u8])>> {
-    let mut records = Vec::new();
-
-    let mut offset = 0;
-    while offset < data.len() {
-        let tag = data[offset];
-        let length = *data.get(offset + 1)? as usize;
-        let value = data.get(offset + 2..offset + 2 + length)?;
-        records.push((tag, value));
-        offset += 2 + length;
-    }
-
-    Some(records)
+fn records(data: &[u8]) -> Option<Vec<TlvEntry<'_>>> {
+    Tlv::tag_u8(data).collect_all().ok()
 }
 
-fn record<'a>(records: &[(u8, &'a [u8])], wanted: u8) -> Option<&'a [u8]> {
+fn record<'a>(records: &[TlvEntry<'a>], wanted: u8) -> Option<&'a [u8]> {
     records
         .iter()
-        .find(|(tag, _)| *tag == wanted)
-        .map(|(_, value)| *value)
+        .find(|entry| entry.tag == wanted)
+        .map(|entry| entry.value)
 }
 
+/// Every value written here is a fixed width field or a name the client already
+/// bounds, so an oversized one is a bug in this server rather than something a
+/// client can trigger: it is reported instead of truncated.
+fn write_tagged(dst: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), FrameError> {
+    dst.reserve(value.len() + 2);
+    dst.write_u8(tag)?;
+    dst.write_u8(u8_len(value.len(), "Sentry record")?)?;
+    dst.write_all(value)?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn tagged(tag: u8, value: &[u8]) -> Vec<u8> {
-    let mut record = Vec::with_capacity(value.len() + 2);
-    record.push(tag);
-    record.push(value.len() as u8);
-    record.extend_from_slice(value);
+    let mut record = Vec::new();
+    write_tagged(&mut record, tag, value).unwrap();
     record
 }
 
-fn variant_response() -> Vec<u8> {
+fn variant_response() -> Result<Vec<u8>, FrameError> {
     let mut payload = vec![COMMAND_REPLY];
-    payload.extend(tagged(TAG_VARIANT, &[VARIANT]));
-    payload
+    write_tagged(&mut payload, TAG_VARIANT, &[VARIANT])?;
+    Ok(payload)
 }
 
 /// The client reads the status word right after the command byte and reports
@@ -410,7 +478,7 @@ enum Filter<'a> {
     Name(&'a [u8]),
 }
 
-fn filter<'a>(records: &[(u8, &'a [u8])], tag: u8) -> Filter<'a> {
+fn filter<'a>(records: &[TlvEntry<'a>], tag: u8) -> Filter<'a> {
     let Some(value) = record(records, tag) else {
         return Filter::Start;
     };
@@ -432,28 +500,18 @@ fn filter<'a>(records: &[(u8, &'a [u8])], tag: u8) -> Filter<'a> {
 }
 
 /// The quota is the only numeric field the client writes little endian.
-fn quota(records: &[(u8, &[u8])]) -> u32 {
+fn quota(records: &[TlvEntry]) -> u32 {
     record(records, TAG_QUOTA)
         .and_then(|value| <[u8; 4]>::try_from(value).ok())
         .map_or(0, u32::from_le_bytes)
 }
 
 /// `0x1f` continues a user listing by echoing the cursor of the previous row.
-fn resume(records: &[(u8, &[u8])]) -> Option<usize> {
+fn resume(records: &[TlvEntry]) -> Option<usize> {
     let cursor = record(records, TAG_CURSOR)?;
     let index: usize = std::str::from_utf8(cursor).ok()?.parse().ok()?;
 
     Some(index + 1)
-}
-
-fn authority_name(authority: u16) -> &'static str {
-    match authority {
-        0 => "normal user",
-        20 => "group administrator",
-        30 => "company administrator",
-        40 => "system administrator",
-        _ => "unknown authority",
-    }
 }
 
 fn quota_name(quota: u32) -> String {
@@ -569,7 +627,7 @@ mod tests {
         request.extend(tagged(TAG_COMPANY, b"GRiD"));
         request.extend(tagged(TAG_GROUP, b"Demo"));
         request.extend(tagged(TAG_USER, b"CLERK"));
-        request.extend(tagged(TAG_AUTHORITY, &AUTHORITY_NORMAL.to_be_bytes()));
+        request.extend(tagged(TAG_AUTHORITY, &Authority::NORMAL.0.to_be_bytes()));
         request.extend(tagged(TAG_QUOTA, &MEGABYTE.to_le_bytes()));
 
         assert_eq!(

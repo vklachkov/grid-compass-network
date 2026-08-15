@@ -1,5 +1,42 @@
 use std::io;
 
+use super::error::FrameError;
+
+pub fn read_small_slice<'a>(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
+    let length = cursor.read_u8()?;
+    cursor.read_slice(length as usize).map_err(Into::into)
+}
+
+/// Patching the length in after the body is written makes the prefix and the
+/// bytes it describes impossible to disagree, which a separate pre-pass over
+/// the same data cannot guarantee.
+pub fn with_u16_len(
+    dst: &mut Vec<u8>,
+    f: impl FnOnce(&mut Vec<u8>) -> Result<(), FrameError>,
+) -> Result<(), FrameError> {
+    let at = dst.len();
+    dst.extend([0, 0]);
+
+    f(dst)?;
+
+    let length = u16_len(dst.len() - at - 2, "length-prefixed block")?;
+    dst[at..at + 2].copy_from_slice(&length.to_le_bytes());
+
+    Ok(())
+}
+
+pub fn u8_len(length: usize, what: &str) -> Result<u8, FrameError> {
+    u8::try_from(length).map_err(|_| FrameError::Validation {
+        reason: format!("{what} of {length} bytes exceeds the u8 length field"),
+    })
+}
+
+pub fn u16_len(length: usize, what: &str) -> Result<u16, FrameError> {
+    u16::try_from(length).map_err(|_| FrameError::Validation {
+        reason: format!("{what} of {length} bytes exceeds the u16 length field"),
+    })
+}
+
 pub trait ReadExt: io::Read {
     /// Reads a u8 value.
     fn read_u8(&mut self) -> io::Result<u8> {

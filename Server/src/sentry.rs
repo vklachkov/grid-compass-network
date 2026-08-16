@@ -14,14 +14,10 @@ use crate::{
 };
 
 const COMMAND_STATUS: u8 = 0x02;
-/// Generic reply container: carries the variant record for `0x04` and one
-/// directory row for `0x1e`/`0x1f`. The client checks for it in
-/// `Sentry_ValidateResponseCommand` before looking at the records.
 const COMMAND_REPLY: u8 = 0x03;
 const COMMAND_VARIANT_QUERY: u8 = 0x04;
 const COMMAND_ADD_USER: u8 = 0x06;
-/// Both are built by `sub_2749`, which takes the command byte as an argument
-/// and sends company, group, disk space text and quota without a user name.
+const COMMAND_QUERY: u8 = 0x0e;
 const COMMAND_ADD_GROUP: u8 = 0x09;
 const COMMAND_ADD_COMPANY: u8 = 0x0a;
 const COMMAND_LIST_FIRST: u8 = 0x1e;
@@ -37,6 +33,11 @@ const TAG_DISK_USED: u8 = 0x29;
 const TAG_CREATED: u8 = 0x2a;
 const TAG_MODIFIED: u8 = 0x2b;
 const TAG_LOCKED: u8 = 0x2c;
+const TAG_QUERY_LEVEL: u8 = 0x34;
+
+const QUERY_COMPANY: u8 = 1;
+const QUERY_GROUP: u8 = 2;
+const QUERY_USER: u8 = 3;
 
 /// The listing loop clears `1005: eUnknownUser` silently instead of showing an
 /// error dialog, so it is how an enumeration ends.
@@ -46,10 +47,8 @@ const STATUS_COMPANY_NOT_DEFINED: u16 = 1015; // eCompanyNotDefined
 /// The company exists but the group does not.
 const STATUS_ACCOUNT_NOT_DEFINED: u16 = 1016; // eAccountNotDefined
 const STATUS_ALREADY_DEFINED: u16 = 1017; // eAlreadyDefined
-/// What an account below the level a command needs gets back.
 const STATUS_INSUFFICIENT_AUTHORITY: u16 = 1030; // eInsufficientAccessAuthority
 const STATUS_INVALID_NAME: u16 = 1034; // eInvalidName
-
 /// Variant byte reported to the client. Anything but `1` keeps the full
 /// administrator menu, `1` replaces it with a "not supported" notice.
 const VARIANT: u8 = b'3';
@@ -273,6 +272,7 @@ impl SentryServer {
                 Ok(directory) => listing_response(&directory, resume(&records))?,
                 Err(response) => response,
             },
+            COMMAND_QUERY => self.query(&records)?,
             command => {
                 warn!(target: "sentry", "ignored unsupported command {command:#04x} with {records:?}");
                 return Ok(None);
@@ -280,6 +280,64 @@ impl SentryServer {
         };
 
         Ok(Some(response))
+    }
+
+    /// A name the request leaves out is taken from the signed-on account, which
+    /// is what makes UserSentry's "Query User Information" work: it sends the
+    /// level alone, meaning "the account I am", while AdministratorSentry fills
+    /// its form fields in.
+    fn query(&self, records: &[TlvEntry]) -> Result<Vec<u8>, FrameError> {
+        let level = match record(records, TAG_QUERY_LEVEL) {
+            Some([level]) => *level,
+            _ => QUERY_USER,
+        };
+
+        let company = record(records, property::COMPANY)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.actor.company.as_bytes());
+        let group = record(records, property::GROUP)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.actor.group.as_bytes());
+        let user = record(records, property::USER)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.actor.user.as_bytes());
+
+        // Addressed by the full triple rather than a prefix: repeating the name
+        // above is what picks a company row out of its own subtree.
+        let names: [&[u8]; 3] = match level {
+            QUERY_COMPANY => [company, company, company],
+            QUERY_GROUP => [company, group, group],
+            QUERY_USER => [company, group, user],
+            level => {
+                warn!(target: "sentry", "refused the unknown query level {level}");
+                return Ok(status_response(STATUS_ACCOUNT_NOT_DEFINED));
+            }
+        };
+
+        debug!(
+            target: "sentry",
+            "query level {level} for {:?}/{:?}/{:?}",
+            BStr::new(names[0]),
+            BStr::new(names[1]),
+            BStr::new(names[2]),
+        );
+
+        let directory = match self.directory() {
+            Ok(directory) => directory,
+            Err(response) => return Ok(response),
+        };
+
+        let Some(index) = directory.find(&names) else {
+            let status = if level == QUERY_COMPANY {
+                STATUS_COMPANY_NOT_DEFINED
+            } else {
+                STATUS_ACCOUNT_NOT_DEFINED
+            };
+            warn!(target: "sentry", "the queried record is not defined");
+            return Ok(status_response(status));
+        };
+
+        row_response(&directory, index)
     }
 
     /// `sub_172C` sends the company name, an optional disk space text and the
@@ -504,6 +562,17 @@ fn listing_response(directory: &Directory, index: Option<usize>) -> Result<Vec<u
         row.authority,
         row.authority.name(),
     );
+
+    row_response(directory, index)
+}
+
+/// The eleven records a directory row carries. Listing and query share it
+/// because the client parses both replies through the same `sub_41F3`, where a
+/// missing tag raises its own error dialog, 5001 through 5011.
+fn row_response(directory: &Directory, index: usize) -> Result<Vec<u8>, FrameError> {
+    let Some(row) = directory.get(index) else {
+        return Ok(status_response(STATUS_END_OF_LISTING));
+    };
 
     let mut payload = vec![COMMAND_REPLY];
     write_tagged(&mut payload, TAG_CURSOR, index.to_string().as_bytes())?;
@@ -786,15 +855,16 @@ mod tests {
         let mut sentry = sentry();
 
         assert_eq!(
-            add_company(&mut sentry, b"ACME"),
+            add_company(&mut sentry, b"Test Company"),
             status_response(status::OK)
         );
 
-        // Rows come back sorted, so a company named before `GRiD` leads the
-        // listing rather than trailing it.
+        // Rows come back sorted, so a company named after `GRiD` trails the
+        // listing rather than leading it.
         let rows = names(&mut sentry);
-        assert_eq!(rows.first().unwrap().0, b"ACME");
-        assert!(sentry.directory().unwrap().rows[0].is_company());
+        assert_eq!(rows.last().unwrap().0, b"Test Company");
+        let directory = sentry.directory().unwrap();
+        assert!(directory.rows.last().unwrap().is_company());
     }
 
     #[test]
@@ -802,7 +872,7 @@ mod tests {
         let mut sentry = sentry();
 
         assert_eq!(
-            add_group(&mut sentry, b"GRiD", b"Payroll"),
+            add_group(&mut sentry, b"GRiD", b"Demo Group"),
             status_response(status::OK)
         );
 
@@ -816,7 +886,7 @@ mod tests {
             .collect();
         assert_eq!(
             groups,
-            [b"Demo".to_vec(), b"Payroll".into(), b"Systems".into()]
+            [b"Demo".to_vec(), b"Demo Group".into(), b"Systems".into()]
         );
         assert!(rows.iter().all(|(company, _, _)| company == b"GRiD"));
     }
@@ -830,7 +900,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::NORMAL
             ),
@@ -849,8 +919,8 @@ mod tests {
             demo,
             [
                 b"Demo".to_vec(),
-                b"CLERK".into(),
                 b"GUEST".into(),
+                b"Lenin".into(),
                 b"OPERATOR".into()
             ]
         );
@@ -861,11 +931,11 @@ mod tests {
         let mut sentry = sentry_as(Authority::NORMAL);
 
         assert_eq!(
-            add_company(&mut sentry, b"ACME"),
+            add_company(&mut sentry, b"Test Company"),
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
         assert_eq!(
-            add_group(&mut sentry, b"GRiD", b"Payroll"),
+            add_group(&mut sentry, b"GRiD", b"Demo Group"),
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
     }
@@ -881,14 +951,14 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::NORMAL
             ),
             status_response(status::OK)
         );
         assert_eq!(
-            add_group(&mut sentry, b"GRiD", b"Payroll"),
+            add_group(&mut sentry, b"GRiD", b"Demo Group"),
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
     }
@@ -915,14 +985,14 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::NORMAL
             ),
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
         assert!(
-            db::find_user(&sentry.conn, "GRiD", "Demo", "CLERK")
+            db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
                 .unwrap()
                 .is_none()
         );
@@ -937,7 +1007,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::SYSTEM_ADMIN
             ),
@@ -954,7 +1024,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority(25)
             ),
@@ -990,7 +1060,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"",
                 Authority::NORMAL
             ),
@@ -1010,14 +1080,14 @@ mod tests {
                 &mut sentry,
                 b"grid",
                 b"demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::NORMAL
             ),
             status_response(status::OK)
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "CLERK")
+        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
             .unwrap()
             .expect("the created user should be stored");
         assert_eq!(account.company, "GRiD");
@@ -1038,7 +1108,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                "КЛЕРК".as_bytes(),
+                "Lénin".as_bytes(),
                 b"SECRET",
                 Authority::NORMAL
             ),
@@ -1055,14 +1125,14 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Nowhere",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::NORMAL
             ),
             status_response(STATUS_ACCOUNT_NOT_DEFINED)
         );
         assert_eq!(
-            add_group(&mut sentry, b"Nowhere", b"Payroll"),
+            add_group(&mut sentry, b"Nowhere", b"Demo Group"),
             status_response(STATUS_COMPANY_NOT_DEFINED)
         );
     }
@@ -1080,7 +1150,7 @@ mod tests {
                 &mut sentry,
                 b"GRiD",
                 b"Demo",
-                b"CLERK",
+                b"Lenin",
                 b"SECRET",
                 Authority::GROUP_ADMIN
             ),
@@ -1089,7 +1159,7 @@ mod tests {
 
         let account = crate::authenticate(
             &conn,
-            &crate::sign_on_properties(b"GRiD", b"Demo", b"CLERK", b"SECRET"),
+            &crate::sign_on_properties(b"GRiD", b"Demo", b"Lenin", b"SECRET"),
         )
         .expect("the created user should be able to sign on");
 
@@ -1106,12 +1176,12 @@ mod tests {
             &mut sentry,
             b"GRiD",
             b"Demo",
-            b"CLERK",
+            b"Lenin",
             b"SECRET",
             Authority::NORMAL,
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "CLERK")
+        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
             .unwrap()
             .expect("the created user should be stored");
         assert_eq!(account.password, "SECRET");
@@ -1132,7 +1202,7 @@ mod tests {
         let mut sentry = sentry();
 
         assert_eq!(
-            add_group(&mut sentry, b"MISSING", b"Payroll"),
+            add_group(&mut sentry, b"MISSING", b"Demo Group"),
             status_response(STATUS_COMPANY_NOT_DEFINED)
         );
     }
@@ -1141,22 +1211,23 @@ mod tests {
     fn a_created_company_accepts_groups() {
         let mut sentry = sentry();
 
-        add_company(&mut sentry, b"ACME");
+        add_company(&mut sentry, b"Test Company");
 
         assert_eq!(
-            add_group(&mut sentry, b"acme", b"Sales"),
+            add_group(&mut sentry, b"test company", b"Demo Group"),
             status_response(status::OK)
         );
         let directory = sentry.directory().unwrap();
-        let sales = directory.find(&[b"ACME", b"Sales"]).unwrap();
-        assert!(directory.rows[sales].is_group());
+        let group = directory.find(&[b"Test Company", b"Demo Group"]).unwrap();
+        assert!(directory.rows[group].is_group());
     }
 
     #[test]
     fn parses_add_user_fields() {
         let request = [
-            0x07, 0x04, b'A', b'C', b'M', b'E', // Company
-            0x09, 0x03, b'B', b'O', b'B', // User
+            0x07, 0x0c, b'T', b'e', b's', b't', b' ', b'C', b'o', b'm', b'p', b'a', b'n',
+            b'y', // Company
+            0x09, 0x05, b'L', b'e', b'n', b'i', b'n', // User
             0x1a, 0x02, 0x00, 0x28, // System administrator
             0x26, 0x04, 0xff, 0xff, 0xff, 0xff, // Unlimited
         ];
@@ -1165,9 +1236,9 @@ mod tests {
 
         assert_eq!(
             record(&records, property::COMPANY),
-            Some(b"ACME".as_slice())
+            Some(b"Test Company".as_slice())
         );
-        assert_eq!(record(&records, property::USER), Some(b"BOB".as_slice()));
+        assert_eq!(record(&records, property::USER), Some(b"Lenin".as_slice()));
         assert_eq!(record(&records, property::GROUP), None);
         assert_eq!(
             record(&records, TAG_AUTHORITY),
@@ -1186,7 +1257,7 @@ mod tests {
     fn ignores_unsupported_commands() {
         let mut sentry = sentry();
 
-        assert!(sentry.process(&[0x0e]).is_none());
+        assert!(sentry.process(&[0x7f]).is_none());
         assert!(sentry.process(&[]).is_none());
     }
 
@@ -1341,6 +1412,115 @@ mod tests {
         let response = sentry.process(&list_first(b"MISSING", b"", b"")).unwrap();
 
         assert_eq!(response, status_response(STATUS_END_OF_LISTING));
+    }
+
+    fn query(level: u8, names: &[(u8, &[u8])]) -> Vec<u8> {
+        let mut request = vec![COMMAND_QUERY];
+        request.extend(tagged(TAG_QUERY_LEVEL, &[level]));
+        for (tag, name) in names {
+            request.extend(tagged(*tag, name));
+        }
+        request
+    }
+
+    /// UserSentry's "Query User Information" sends the level and nothing else,
+    /// which asks about the account the session signed on as.
+    #[test]
+    fn answers_a_query_without_names_with_the_signed_on_account() {
+        let mut sentry = sentry();
+
+        let response = sentry.process(&query(QUERY_USER, &[])).unwrap();
+
+        let records = records(&response[1..]).unwrap();
+        assert_eq!(response[0], COMMAND_REPLY);
+        assert_eq!(
+            record(&records, property::COMPANY),
+            Some(b"GRiD".as_slice())
+        );
+        assert_eq!(
+            record(&records, property::GROUP),
+            Some(b"Systems".as_slice())
+        );
+        assert_eq!(
+            record(&records, property::USER),
+            Some(b"MANAGER".as_slice())
+        );
+        assert_eq!(record(&records, TAG_AUTHORITY), Some([40, 0].as_slice()));
+    }
+
+    #[test]
+    fn answers_a_query_for_each_level() {
+        let mut sentry = sentry();
+
+        let group = sentry
+            .process(&query(
+                QUERY_GROUP,
+                &[
+                    (property::COMPANY, b"GRiD"),
+                    (property::GROUP, b"Demo"),
+                    (property::USER, b"GUEST"),
+                ],
+            ))
+            .unwrap();
+        let group = records(&group[1..]).unwrap();
+        assert_eq!(record(&group, property::GROUP), Some(b"Demo".as_slice()));
+        assert_eq!(record(&group, property::USER), Some(b"Demo".as_slice()));
+
+        let company = sentry
+            .process(&query(QUERY_COMPANY, &[(property::COMPANY, b"grid")]))
+            .unwrap();
+        let company = records(&company[1..]).unwrap();
+        assert_eq!(
+            record(&company, property::COMPANY),
+            Some(b"GRiD".as_slice())
+        );
+        assert_eq!(record(&company, property::USER), Some(b"GRiD".as_slice()));
+    }
+
+    #[test]
+    fn reports_a_queried_record_that_is_not_defined() {
+        let mut sentry = sentry();
+
+        assert_eq!(
+            sentry
+                .process(&query(QUERY_COMPANY, &[(property::COMPANY, b"MISSING")]))
+                .unwrap(),
+            status_response(STATUS_COMPANY_NOT_DEFINED)
+        );
+        assert_eq!(
+            sentry
+                .process(&query(
+                    QUERY_USER,
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Demo"),
+                        (property::USER, b"NOBODY"),
+                    ],
+                ))
+                .unwrap(),
+            status_response(STATUS_ACCOUNT_NOT_DEFINED)
+        );
+    }
+
+    /// The query result feeds the same parser as a listing row, so it has to
+    /// carry the same eleven records.
+    #[test]
+    fn a_query_answers_with_the_records_of_a_listing_row() {
+        let mut sentry = sentry();
+
+        let queried = sentry.process(&query(QUERY_USER, &[])).unwrap();
+        let listed = sentry
+            .process(&list_first(b"GRiD", b"Systems", b"Systems"))
+            .unwrap();
+
+        let tags = |response: &[u8]| {
+            records(&response[1..])
+                .unwrap()
+                .iter()
+                .map(|entry| entry.tag)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tags(&queried), tags(&listed));
     }
 
     /// Every mandatory record must fit the destination the client allocates,

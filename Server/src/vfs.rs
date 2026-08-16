@@ -1,6 +1,7 @@
 use std::{collections::HashMap, io, num::NonZeroU16};
 
 use bstr::BStr;
+use log::{debug, warn};
 
 use std::io::Write;
 
@@ -586,6 +587,8 @@ impl Vfs {
         #[allow(dead_code)]
         let VfsRequest { header, body } = req;
 
+        debug!(target: "vfs", "received request {body:?} on connection {}", header.servers_conn_id);
+
         match body {
             VfsRequestBody::GetStatus(body) => self.get_status(&header, body),
             VfsRequestBody::Open(body) => self.open(&header, body),
@@ -705,6 +708,10 @@ impl Vfs {
             },
         };
 
+        if error != status::OK {
+            warn!(target: "vfs", "refused a write with error {error}");
+        }
+
         VfsResponse::Simple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Write as u16,
             servers_conn_id: header.servers_conn_id,
@@ -765,6 +772,10 @@ impl Vfs {
             }
         };
 
+        if error != status::OK {
+            warn!(target: "vfs", "refused a seek with error {error}");
+        }
+
         VfsResponse::Simple(VfsResponseHeader {
             response: 0x8000 | VfsRequestCode::Seek as u16,
             servers_conn_id: header.servers_conn_id,
@@ -793,7 +804,7 @@ impl Vfs {
 
     fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
         let Some(conn_id) = self.allocate_connection_id() else {
-            info!("vfs: refused attach, no free connection id");
+            warn!(target: "vfs", "refused attach, no free connection id");
 
             return VfsResponse::Simple(VfsResponseHeader {
                 response: 0x8000 | VfsRequestCode::Attach as u16,
@@ -856,8 +867,9 @@ impl Vfs {
     /// keeps a single unknown message from taking the server down: the client
     /// sees a failed request instead of a closed connection.
     fn unknown(&mut self, header: &VfsRequestHeader, body: &[u8]) -> VfsResponse {
-        info!(
-            "vfs: unsupported request {:#06x} with {} body bytes",
+        warn!(
+            target: "vfs",
+            "unsupported request {:#06x} with {} body bytes",
             header.request,
             body.len()
         );

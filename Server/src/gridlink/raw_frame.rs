@@ -1,5 +1,7 @@
 use std::io;
 
+use log::trace;
+
 use super::{
     error::FrameError,
     utils::{ReadExt, WriteExt},
@@ -31,6 +33,7 @@ impl RawFrame {
     /// Reads and unstuffs frame data from an I/O source.
     pub fn read_from_io(mut src: impl io::Read) -> Result<Self, FrameError> {
         let buffer = Self::read_unstuffed(&mut src)?;
+        trace!(target: "frame", "read data unstuffed: {buffer:02x?}");
         let buffer_crc = crc16(&buffer);
 
         let crc = src.read_u16()?;
@@ -107,7 +110,7 @@ impl RawFrame {
     }
 
     fn write_stuffed(mut dst: impl io::Write, data: &[u8], crc: u16) -> Result<(), FrameError> {
-        info!("write data stuffed: {data:02x?}");
+        trace!(target: "frame", "write data stuffed: {data:02x?}");
 
         dst.write_all(&[DLE, STX])?;
         dst.write_all(data)?;

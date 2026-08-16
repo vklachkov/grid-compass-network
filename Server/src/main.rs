@@ -3,12 +3,11 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     process::ExitCode,
     rc::Rc,
-    sync::OnceLock,
     thread,
-    time::Instant,
 };
 
 use bstr::BStr;
+use log::{debug, error, info, trace, warn};
 use rusqlite::Connection;
 
 use gridlink::*;
@@ -20,23 +19,10 @@ const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
 const STATUS_NOT_SIGNED_ON: u16 = 801; // eUserNotSignedON
 
-static STARTED_AT: OnceLock<Instant> = OnceLock::new();
-
-macro_rules! info {
-    ($($arg:tt)*) => {
-        println!("[{:>10.3}] {}", crate::STARTED_AT.get_or_init(std::time::Instant::now).elapsed().as_secs_f64(), format_args!($($arg)*))
-    };
-}
-
-macro_rules! error {
-    ($($arg:tt)*) => {
-        eprintln!("[{:>10.3}] {}", crate::STARTED_AT.get_or_init(std::time::Instant::now).elapsed().as_secs_f64(), format_args!($($arg)*))
-    };
-}
-
 mod broadcast;
 mod db;
 mod gridlink;
+mod logger;
 mod mail;
 mod protocol;
 mod sentry;
@@ -50,10 +36,12 @@ enum ProcessFrameResult {
 }
 
 fn main() -> ExitCode {
+    logger::init();
+
     match server() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            error!("Fatal error: {err}");
+            error!(target: "server", "fatal error: {err}");
             ExitCode::FAILURE
         }
     }
@@ -68,20 +56,20 @@ fn server() -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "env var DB_PATH not found"))?;
 
     db::open(&db_path).map_err(io::Error::other)?;
-    info!("Using account database {db_path}");
+    info!(target: "server", "using account database {db_path}");
 
     let listener = TcpListener::bind(&addr)?;
 
-    info!("Start GRiD Server at {addr}");
+    info!(target: "server", "start GRiD server at {addr}");
     loop {
         match listener.accept() {
             Ok((client, addr)) => {
-                info!("Accepted client {addr}");
+                info!(target: "server", "accepted client {addr}");
                 let db_path = db_path.clone();
                 thread::spawn(move || worker(client, addr, &db_path));
             }
             Err(err) => {
-                error!("Failed to accept client: {err}");
+                error!(target: "server", "failed to accept client: {err}");
             }
         };
     }
@@ -89,7 +77,7 @@ fn server() -> io::Result<()> {
 
 fn worker(client: TcpStream, addr: SocketAddr, db_path: &str) {
     if let Err(err) = try_worker(client, addr, db_path) {
-        error!("worker({addr}): fatal error: {err}");
+        error!(target: "server", "worker({addr}): fatal error: {err}");
     }
 }
 
@@ -112,12 +100,12 @@ fn try_worker(client: TcpStream, addr: SocketAddr, db_path: &str) -> io::Result<
             Ok(frame) => {
                 // println!("worker({addr}): received new frame");
                 if session.process_frame(frame)? == ProcessFrameResult::Disconnect {
-                    info!("worker({addr}): disconnect");
+                    info!(target: "server", "worker({addr}): disconnect");
                     return Ok(());
                 }
             }
             Err(FrameError::UnexpectedEof) => {
-                info!("worker({addr}): connection closed");
+                info!(target: "server", "worker({addr}): connection closed");
                 return Ok(());
             }
             Err(FrameError::Io(err)) => {
@@ -166,34 +154,44 @@ impl Session {
     fn process_frame_(&mut self, raw: RawFrame) -> Result<ProcessFrameResult, FrameError> {
         let frame = Frame::try_from_raw(&raw)?;
 
-        info!("session: received {frame:?}");
+        trace!(target: "session", "received {frame:?}");
 
         match frame.body {
-            FrameBody::Rfc(_) => {
+            FrameBody::Rfc(body) => {
+                debug!(
+                    target: "session",
+                    "requested a connection, version {:?}, seq={}",
+                    BStr::new(&body.version),
+                    self.last_seq_number,
+                );
                 self.recv_sequence = self.last_seq_number;
                 self.write_frame(Frame::rfc(self.connection_id, self.last_seq_number))?;
             }
             FrameBody::Ack(_) => {
-                // TODO
+                trace!(target: "session", "acknowledged seq={}", frame.seq_number);
             }
             FrameBody::Disc(_) => {
+                debug!(target: "session", "requested a link disconnect");
                 return Ok(ProcessFrameResult::Disconnect);
             }
             FrameBody::Ping(_) => {
+                trace!(target: "session", "pinged, seq={}", self.recv_sequence);
                 self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
             }
             FrameBody::Data(data) => {
                 let expected = self.recv_sequence.wrapping_add(1);
                 if frame.seq_number == self.recv_sequence {
-                    info!(
-                        "session: ignored duplicate data frame seq={}",
+                    trace!(
+                        target: "session",
+                        "ignored duplicate data frame seq={}",
                         frame.seq_number
                     );
                     return Ok(ProcessFrameResult::Continue);
                 }
                 if frame.seq_number != expected {
-                    info!(
-                        "session: ignored out-of-sequence data frame seq={}, expected={expected}",
+                    warn!(
+                        target: "session",
+                        "ignored out-of-sequence data frame seq={}, expected={expected}",
                         frame.seq_number
                     );
                     self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
@@ -213,7 +211,7 @@ impl Session {
     fn process_data_frame(&mut self, data: &[u8]) -> Result<(), FrameError> {
         let req = DataFrameRequest::try_from_slice(data)?;
 
-        info!("session: received request {req:?}");
+        debug!(target: "session", "received request {req:?}");
 
         match req {
             DataFrameRequest::Connect { header, path } => {
@@ -235,14 +233,14 @@ impl Session {
     }
 
     fn connect(&mut self, remote_path_id: u16, path: &BStr) -> Result<(), FrameError> {
-        info!("session: requested connect to {path}");
+        debug!(target: "session", "requested connect to {path}");
 
         // TODO: proper connect to resource.
 
         let status = if self.vipc.is_some() {
             status::OK
         } else {
-            info!("session: refused a connect before sign-on");
+            warn!(target: "session", "refused a connect before sign-on");
             STATUS_NOT_SIGNED_ON
         };
 
@@ -261,7 +259,7 @@ impl Session {
     }
 
     fn disconnect(&mut self, remote_path_id: u16, _reason: u16) -> Result<(), FrameError> {
-        info!("session: requested disconnect");
+        debug!(target: "session", "requested disconnect");
 
         // TODO: proper disconnect from resource.
 
@@ -283,7 +281,8 @@ impl Session {
             Ok(account) => {
                 let authority = Authority::from_stored(account.authority);
                 info!(
-                    "session: signed on as {}/{}/{}, authority {authority} ({})",
+                    target: "session",
+                    "signed on as {}/{}/{}, authority {authority} ({})",
                     account.company,
                     account.group,
                     account.user,
@@ -309,7 +308,7 @@ impl Session {
     }
 
     fn sign_off(&mut self) -> Result<(), FrameError> {
-        info!("session: requested sign off");
+        info!(target: "session", "requested sign off");
 
         // Dropping the servers is the whole of it: the open files, the mailbox
         // and the authority all belonged to the account that signed on, and the
@@ -324,7 +323,7 @@ impl Session {
             // There is no message-level status field to refuse through, and the
             // client cannot reach here on its own — it would have to have
             // ignored the refused connect — so the message is dropped.
-            info!("session: ignored a message before sign-on");
+            warn!(target: "session", "ignored a message before sign-on");
             return Ok(());
         };
 
@@ -414,8 +413,9 @@ fn authenticate(conn: &Connection, properties: &[SignOnProperty<'_>]) -> Result<
         property(property::PASSWORD),
     );
 
-    info!(
-        "session: sign on {:?}/{:?}/{:?}",
+    debug!(
+        target: "session",
+        "sign on {:?}/{:?}/{:?}",
         BStr::new(company),
         BStr::new(group),
         BStr::new(user),
@@ -434,24 +434,24 @@ fn authenticate(conn: &Connection, properties: &[SignOnProperty<'_>]) -> Result<
         str::from_utf8(group),
         str::from_utf8(user),
     ) else {
-        info!("session: unknown user {:?}", BStr::new(user));
+        warn!(target: "session", "refused the non-UTF-8 name {:?}", BStr::new(user));
         return Err(STATUS_UNKNOWN_USER);
     };
 
     let account = match db::find_user(conn, company, group, user) {
         Ok(Some(account)) => account,
         Ok(None) => {
-            info!("session: unknown user {user:?}");
+            warn!(target: "session", "unknown user {user:?}");
             return Err(STATUS_UNKNOWN_USER);
         }
         Err(err) => {
-            error!("session: failed to look up the account: {err}");
+            error!(target: "session", "failed to look up the account: {err}");
             return Err(status::AUTHORIZATION_FILE);
         }
     };
 
     if account.password.as_bytes() != password {
-        info!("session: wrong password for {user:?}");
+        warn!(target: "session", "wrong password for {user:?}");
         return Err(STATUS_INVALID_PASSWORD);
     }
 

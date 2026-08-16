@@ -1,6 +1,7 @@
 use std::{io::Write, rc::Rc};
 
 use bstr::BStr;
+use log::{debug, error, warn};
 use rusqlite::Connection;
 
 use crate::{
@@ -241,7 +242,7 @@ impl SentryServer {
         match self.try_process(payload) {
             Ok(response) => response,
             Err(err) => {
-                info!("sentry: failed to build a response: {err}");
+                error!(target: "sentry", "failed to build a response: {err}");
                 None
             }
         }
@@ -273,7 +274,7 @@ impl SentryServer {
                 Err(response) => response,
             },
             command => {
-                info!("sentry: ignored unsupported command {command:#04x} with {records:?}");
+                warn!(target: "sentry", "ignored unsupported command {command:#04x} with {records:?}");
                 return Ok(None);
             }
         };
@@ -287,8 +288,9 @@ impl SentryServer {
         let company = record(records, property::COMPANY).unwrap_or_default();
         let quota = quota(records);
 
-        info!(
-            "sentry: add company {:?}, quota={}, disk space={:?}",
+        debug!(
+            target: "sentry",
+            "add company {:?}, quota={}, disk space={:?}",
             BStr::new(company),
             quota_name(quota),
             BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
@@ -313,8 +315,9 @@ impl SentryServer {
         let group = record(records, property::GROUP).unwrap_or_default();
         let quota = quota(records);
 
-        info!(
-            "sentry: add group {:?} to company {:?}, quota={}, disk space={:?}",
+        debug!(
+            target: "sentry",
+            "add group {:?} to company {:?}, quota={}, disk space={:?}",
             BStr::new(group),
             BStr::new(company),
             quota_name(quota),
@@ -336,7 +339,7 @@ impl SentryServer {
         let company_id = match db::find_company(&self.conn, company) {
             Ok(Some(id)) => id,
             Ok(None) => {
-                info!("sentry: company {company:?} is not defined");
+                warn!(target: "sentry", "company {company:?} is not defined");
                 return status_response(STATUS_COMPANY_NOT_DEFINED);
             }
             Err(err) => return self.read_failed(&err),
@@ -355,13 +358,13 @@ impl SentryServer {
             .and_then(Authority::read)
             .unwrap_or(Authority::NORMAL);
 
-        info!(
-            "sentry: add user {:?} to {:?}/{:?}, password={:?}, authority={authority} ({}), \
+        debug!(
+            target: "sentry",
+            "add user {:?} to {:?}/{:?}, authority={authority} ({}), \
              quota={}, disk space={:?}",
             BStr::new(user),
             BStr::new(company),
             BStr::new(group),
-            BStr::new(password),
             authority.name(),
             quota_name(quota),
             BStr::new(record(records, TAG_DISK_SPACE_TEXT).unwrap_or_default()),
@@ -372,7 +375,7 @@ impl SentryServer {
         }
 
         if !authority.is_defined() {
-            info!("sentry: refused the undefined authority {authority}");
+            warn!(target: "sentry", "refused the undefined authority {authority}");
             return status_response(STATUS_INVALID_AUTHORITY);
         }
 
@@ -380,8 +383,9 @@ impl SentryServer {
         // it, which turns the whole threshold ladder into a single step.
         let actor = self.authority();
         if authority > actor {
-            info!(
-                "sentry: refused to grant {authority} ({}) from {actor} ({})",
+            warn!(
+                target: "sentry",
+                "refused to grant {authority} ({}) from {actor} ({})",
                 authority.name(),
                 actor.name(),
             );
@@ -399,7 +403,7 @@ impl SentryServer {
         let group_id = match db::find_group(&self.conn, company, group) {
             Ok(Some(id)) => id,
             Ok(None) => {
-                info!("sentry: group {group:?} is not defined");
+                warn!(target: "sentry", "group {group:?} is not defined");
                 return status_response(STATUS_ACCOUNT_NOT_DEFINED);
             }
             Err(err) => return self.read_failed(&err),
@@ -413,7 +417,7 @@ impl SentryServer {
     /// recreate accounts that are still there.
     fn directory(&self) -> Result<Directory, Vec<u8>> {
         Directory::load(&self.conn).map_err(|err| {
-            info!("sentry: failed to read the directory: {err}");
+            error!(target: "sentry", "failed to load the directory: {err}");
             status_response(status::AUTHORIZATION_FILE)
         })
     }
@@ -427,8 +431,9 @@ impl SentryServer {
             return None;
         }
 
-        info!(
-            "sentry: refused a command needing {required} ({}) from {actor} ({})",
+        warn!(
+            target: "sentry",
+            "refused a command needing {required} ({}) from {actor} ({})",
             required.name(),
             actor.name(),
         );
@@ -437,7 +442,7 @@ impl SentryServer {
     }
 
     fn read_failed(&self, err: &rusqlite::Error) -> Vec<u8> {
-        info!("sentry: failed to read the directory: {err}");
+        error!(target: "sentry", "failed to look up a directory record: {err}");
         status_response(status::AUTHORIZATION_FILE)
     }
 
@@ -447,10 +452,11 @@ impl SentryServer {
         match insert(&self.conn) {
             Ok(()) => status_response(status::OK),
             Err(err) => {
-                info!("sentry: failed to store the record: {err}");
                 if is_constraint_violation(&err) {
+                    warn!(target: "sentry", "failed to store the record: {err}");
                     status_response(STATUS_ALREADY_DEFINED)
                 } else {
+                    error!(target: "sentry", "failed to store the record: {err}");
                     status_response(status::AUTHORIZATION_FILE)
                 }
             }
@@ -485,12 +491,13 @@ fn seek(directory: &Directory, records: &[TlvEntry]) -> Option<usize> {
 /// enumeration with the status the client clears without complaining.
 fn listing_response(directory: &Directory, index: Option<usize>) -> Result<Vec<u8>, FrameError> {
     let Some((index, row)) = index.and_then(|index| Some((index, directory.get(index)?))) else {
-        info!("sentry: end of listing");
+        debug!(target: "sentry", "end of listing");
         return Ok(status_response(STATUS_END_OF_LISTING));
     };
 
-    info!(
-        "sentry: listing row {index}: company={:?}, group={:?}, user={:?}, authority={} ({})",
+    debug!(
+        target: "sentry",
+        "listing row {index}: company={:?}, group={:?}, user={:?}, authority={} ({})",
         BStr::new(&row.company),
         BStr::new(&row.group),
         BStr::new(&row.user),
@@ -541,7 +548,7 @@ fn ascii_names<'a>(fields: &[&'a [u8]]) -> Result<Vec<&'a str>, Vec<u8>> {
                 .ok()
                 .filter(|name| name.is_ascii())
                 .ok_or_else(|| {
-                    info!("sentry: refused the non-ASCII name {:?}", BStr::new(field));
+                    warn!(target: "sentry", "refused the non-ASCII name {:?}", BStr::new(field));
                     status_response(STATUS_INVALID_NAME)
                 })
         })

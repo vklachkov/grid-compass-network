@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use log::{debug, warn};
 use rusqlite::Connection;
 
 use crate::{
@@ -39,7 +40,7 @@ impl Vipc {
     pub fn process_message(&mut self, payload: &[u8]) -> Result<Vec<OutgoingMessage>, FrameError> {
         let message = IncomingMessage::try_from_slice(payload)?;
 
-        info!("session: received vipc message: {message:?}");
+        debug!(target: "vipc", "received vipc message: {message:?}");
 
         let responses = match message.body.ty {
             CLASS_VFS => {
@@ -51,7 +52,7 @@ impl Vipc {
                 if let Some(data) = self.vfs.take_finalized_mail()
                     && !self.mail.accept_outgoing(data)
                 {
-                    info!("session: discarded malformed outgoing mail object");
+                    warn!(target: "vipc", "discarded malformed outgoing mail object");
                 }
                 vec![OutgoingMessage {
                     note: message.note,
@@ -98,7 +99,10 @@ impl Vipc {
                 })
                 .into_iter()
                 .collect(),
-            _ => Vec::new(),
+            ty => {
+                warn!(target: "vipc", "ignored a message for the unknown class {ty:?}");
+                Vec::new()
+            }
         };
 
         Ok(responses)

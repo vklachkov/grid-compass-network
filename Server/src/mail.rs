@@ -1,5 +1,7 @@
 use std::io;
 
+use log::{debug, warn};
+
 use crate::{
     gridlink::{
         Tlv,
@@ -47,22 +49,26 @@ impl MailServer {
         };
         // TODO: fragment large Mail responses to the PDL payload limit instead of rejecting them.
         if !message.fits_vipc_payload() {
+            warn!(target: "mail", "refused a message too large for one VIPC payload");
             return false;
         }
         self.next_mail_id = self.next_mail_id.wrapping_add(1).max(2);
         self.messages.push(message);
+        debug!(target: "mail", "stored an outgoing message, {} in the mailbox", self.messages.len());
         true
     }
 
     pub fn process(&mut self, note: u16, payload: &[u8]) -> Option<Vec<MailResponse>> {
         let channel = note as usize;
         if channel >= self.fragments.len() {
+            warn!(target: "mail", "ignored a request on the unknown channel {note}");
             return None;
         }
 
         let fragment = match Fragment::parse(payload) {
             Some(fragment) if fragment.error == 0 => fragment,
             _ => {
+                warn!(target: "mail", "dropped a malformed fragment on channel {note}");
                 self.fragments[channel] = Pending::default();
                 return None;
             }
@@ -73,6 +79,7 @@ impl MailServer {
         }
         pending.connection_id = fragment.connection_id;
         if pending.data.len().saturating_add(fragment.data.len()) > MAX_REQUEST {
+            warn!(target: "mail", "dropped a request over {MAX_REQUEST} bytes on channel {note}");
             *pending = Pending::default();
             return None;
         }
@@ -117,8 +124,13 @@ impl MailServer {
             0x0e | 0x10 if pending.data.is_empty() => {
                 vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
             }
-            _ => return None,
+            _ => {
+                warn!(target: "mail", "ignored an unsupported request on channel {note}");
+                return None;
+            }
         };
+
+        debug!(target: "mail", "answered the request on channel {note}");
 
         Some(
             responses

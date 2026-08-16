@@ -1,3 +1,5 @@
+use log::{debug, warn};
+
 use crate::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
 
 /// Session frames use the same `0xfe` marker as Mail's channel 0.
@@ -20,12 +22,16 @@ impl BroadcastServer {
     /// is that the handshake now gets a reply.
     pub fn process(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
         let [flags, connection_id, 0, 0, data @ ..] = payload else {
+            warn!(target: "broadcast", "ignored a malformed frame");
             return None;
         };
 
         if flags & MORE != 0 || data != INITIALIZE {
+            warn!(target: "broadcast", "ignored an unsupported frame {data:02x?}");
             return None;
         }
+
+        debug!(target: "broadcast", "opened session {connection_id}");
 
         Some(transport(
             *connection_id,

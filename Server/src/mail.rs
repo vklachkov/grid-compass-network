@@ -1,16 +1,15 @@
 use std::io;
 
-use crate::gridlink::{
-    Tlv,
-    utils::{CursorExt, ReadExt, u16_len},
-    vipc::MessageType,
+use crate::{
+    gridlink::{
+        Tlv,
+        utils::{CursorExt, ReadExt, u16_len},
+    },
+    protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN},
 };
-
-pub const MESSAGE_TYPE: MessageType = MessageType(0x7444);
 
 const RECORD_MARKER: u8 = 0xfd;
 const TAG_BODY: u8 = b'n';
-const TAG_TERMINATOR: u8 = b'z';
 /// A three byte selector, a six byte mail id, then the tags the client wants back.
 const TAG_SELECT: u8 = b'S';
 const TAG_INITIALIZE: u8 = b'I';
@@ -18,8 +17,6 @@ const TAG_INITIALIZE: u8 = b'I';
 /// Walk unread mail rather than fetch one item by id.
 const READ_NEW_SELECTOR: [u8; 3] = [1, 0, 1];
 
-const MORE: u8 = 1;
-const TRANSPORT_HEADER_LEN: usize = 4;
 const MAX_REQUEST: usize = 64 * 1024;
 const MAX_TAG_VALUE: usize = u16::MAX as usize - 1;
 

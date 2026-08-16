@@ -1,27 +1,37 @@
+use std::rc::Rc;
+
+use rusqlite::Connection;
+
 use crate::{
-    broadcast::{self, BroadcastServer},
+    broadcast::BroadcastServer,
+    db,
     gridlink::{
         FrameError,
-        vipc::{IncomingMessage, OutgoingMessage, OutgoingMessageBody},
+        vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
     },
-    mail::{self, MailServer},
-    sentry::{self, SentryServer},
-    vfs::{self, Vfs, VfsRequest},
+    mail::MailServer,
+    sentry::SentryServer,
+    vfs::{Vfs, VfsRequest},
 };
 
+const CLASS_VFS: MessageType = MessageType(83);
+const CLASS_MAIL: MessageType = MessageType(0x7444);
+const CLASS_BROADCAST: MessageType = MessageType(0x7000);
+const CLASS_SENTRY: MessageType = MessageType(0xffff);
+
 pub struct Vipc {
-    vfs: Box<Vfs>,
+    vfs: Vfs,
     mail: MailServer,
     sentry: SentryServer,
     broadcast: BroadcastServer,
 }
 
 impl Vipc {
-    pub fn new(vfs: Box<Vfs>) -> Self {
+    pub fn new(conn: Rc<Connection>, actor: db::Account) -> Self {
         Self {
-            vfs,
+            vfs: Vfs::new(),
             mail: MailServer::new(),
-            sentry: SentryServer::new(),
+            sentry: SentryServer::new(conn, actor),
             broadcast: BroadcastServer::new(),
         }
     }
@@ -32,7 +42,7 @@ impl Vipc {
         info!("session: received vipc message: {message:?}");
 
         let responses = match message.body.ty {
-            vfs::MESSAGE_TYPE => {
+            CLASS_VFS => {
                 let request = VfsRequest::try_from_slice(message.body.payload)?;
                 let mut response = Vec::new();
                 self.vfs
@@ -46,12 +56,12 @@ impl Vipc {
                 vec![OutgoingMessage {
                     note: message.note,
                     body: OutgoingMessageBody {
-                        ty: vfs::MESSAGE_TYPE,
+                        ty: CLASS_VFS,
                         payload: response,
                     },
                 }]
             }
-            mail::MESSAGE_TYPE => self
+            CLASS_MAIL => self
                 .mail
                 .process(message.note, message.body.payload)
                 .unwrap_or_default()
@@ -59,30 +69,30 @@ impl Vipc {
                 .map(|response| OutgoingMessage {
                     note: 0x8000 | response.note,
                     body: OutgoingMessageBody {
-                        ty: mail::MESSAGE_TYPE,
+                        ty: CLASS_MAIL,
                         payload: response.payload,
                     },
                 })
                 .collect(),
-            sentry::MESSAGE_TYPE => self
+            CLASS_SENTRY => self
                 .sentry
                 .process(message.body.payload)
                 .into_iter()
                 .map(|payload| OutgoingMessage {
                     note: message.note,
                     body: OutgoingMessageBody {
-                        ty: sentry::MESSAGE_TYPE,
+                        ty: CLASS_SENTRY,
                         payload,
                     },
                 })
                 .collect(),
-            broadcast::MESSAGE_TYPE => self
+            CLASS_BROADCAST => self
                 .broadcast
                 .process(message.body.payload)
                 .map(|payload| OutgoingMessage {
                     note: 0x8000 | message.note,
                     body: OutgoingMessageBody {
-                        ty: broadcast::MESSAGE_TYPE,
+                        ty: CLASS_BROADCAST,
                         payload,
                     },
                 })
@@ -98,10 +108,20 @@ impl Vipc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+
+    fn vipc() -> Vipc {
+        let conn = Rc::new(db::open_in_memory());
+        let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
+            .expect("read the demo directory")
+            .expect("MANAGER should exist");
+
+        Vipc::new(conn, actor)
+    }
 
     #[test]
     fn serializes_mail_initialization_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [
             0x44, 0x74, 0, 0, 11, 0, 0, 5, 0, 0, 0xfe, 4, 0, b'a', 0x88, 0x2c, 1,
         ];
@@ -117,7 +137,7 @@ mod tests {
 
     #[test]
     fn serializes_broadcast_initialization_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [
             0x00, 0x70, 0, 0, 11, 0, 0, 1, 0, 0, 0xfe, 4, 0, b'a', 0xec, 0x2c, 1,
         ];
@@ -133,7 +153,7 @@ mod tests {
 
     #[test]
     fn ignores_unknown_broadcast_frames() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [0x00, 0x70, 0, 0, 4, 0, 0, 1, 0, 0];
 
         assert!(vipc.process_message(&request).unwrap().is_empty());
@@ -141,7 +161,7 @@ mod tests {
 
     #[test]
     fn serializes_initial_message_drain_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [0x44, 0x74, 0x10, 0, 4, 0, 0, 1, 0, 0];
 
         let responses = vipc.process_message(&request).unwrap();
@@ -155,7 +175,7 @@ mod tests {
 
     #[test]
     fn serializes_sentry_variant_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [0xff, 0xff, 0xff, 0xff, 1, 0, 4];
 
         let responses = vipc.process_message(&request).unwrap();
@@ -169,7 +189,7 @@ mod tests {
 
     #[test]
     fn serializes_sentry_add_user_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let payload = [
             6, 7, 4, b'G', b'R', b'i', b'D', 8, 4, b'D', b'e', b'm', b'o', 9, 3, b'B', b'O', b'B',
             0x0a, 2, b'P', b'W', 0x1a, 2, 0, 0, 0x26, 4, 0, 4, 0, 0,
@@ -197,7 +217,7 @@ mod tests {
 
     fn vfs_message(note: u16, payload: &[u8]) -> Vec<u8> {
         let mut data = Vec::new();
-        data.extend(vfs::MESSAGE_TYPE.0.to_le_bytes());
+        data.extend(CLASS_VFS.0.to_le_bytes());
         data.extend(note.to_le_bytes());
         data.extend((payload.len() as u16).to_le_bytes());
         data.extend_from_slice(payload);
@@ -206,7 +226,7 @@ mod tests {
 
     #[test]
     fn finalized_vfs_mail_appears_in_mail_list() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let path = b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~";
         let mut attach = vec![8, 0, 0, 0x7e, 0, 0, 4, 2];
         attach.extend([0; 17]);
@@ -246,7 +266,7 @@ mod tests {
 
     #[test]
     fn serializes_demo_mail_list_response() {
-        let mut vipc = Vipc::new(Box::new(Vfs::new()));
+        let mut vipc = vipc();
         let request = [
             0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 1, 0, 1, 0, 0, 0, 0, 0, 0,
         ];

@@ -2,16 +2,23 @@ use std::{
     io,
     net::{SocketAddr, TcpListener, TcpStream},
     process::ExitCode,
+    rc::Rc,
     sync::OnceLock,
     thread,
     time::Instant,
 };
 
 use bstr::BStr;
+use rusqlite::Connection;
 
 use gridlink::*;
-use vfs::Vfs;
+use protocol::{property, status};
+use sentry::Authority;
 use vipc::Vipc;
+
+const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
+const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
+const STATUS_NOT_SIGNED_ON: u16 = 801; // eUserNotSignedON
 
 static STARTED_AT: OnceLock<Instant> = OnceLock::new();
 
@@ -28,8 +35,10 @@ macro_rules! error {
 }
 
 mod broadcast;
+mod db;
 mod gridlink;
 mod mail;
+mod protocol;
 mod sentry;
 mod vfs;
 mod vipc;
@@ -55,6 +64,12 @@ fn server() -> io::Result<()> {
         io::Error::new(io::ErrorKind::InvalidInput, "env var LISTEN_ADDR not found")
     })?;
 
+    let db_path = std::env::var("DB_PATH")
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "env var DB_PATH not found"))?;
+
+    db::open(&db_path).map_err(io::Error::other)?;
+    info!("Using account database {db_path}");
+
     let listener = TcpListener::bind(&addr)?;
 
     info!("Start GRiD Server at {addr}");
@@ -62,7 +77,8 @@ fn server() -> io::Result<()> {
         match listener.accept() {
             Ok((client, addr)) => {
                 info!("Accepted client {addr}");
-                thread::spawn(move || worker(client, addr));
+                let db_path = db_path.clone();
+                thread::spawn(move || worker(client, addr, &db_path));
             }
             Err(err) => {
                 error!("Failed to accept client: {err}");
@@ -71,14 +87,14 @@ fn server() -> io::Result<()> {
     }
 }
 
-fn worker(client: TcpStream, addr: SocketAddr) {
-    if let Err(err) = try_worker(client, addr) {
+fn worker(client: TcpStream, addr: SocketAddr, db_path: &str) {
+    if let Err(err) = try_worker(client, addr, db_path) {
         error!("worker({addr}): fatal error: {err}");
     }
 }
 
-fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
-    let vfs = Box::new(Vfs::new());
+fn try_worker(client: TcpStream, addr: SocketAddr, db_path: &str) -> io::Result<()> {
+    let conn = Rc::new(db::open(db_path).map_err(io::Error::other)?);
 
     let mut session = Session {
         client,
@@ -86,7 +102,8 @@ fn try_worker(client: TcpStream, addr: SocketAddr) -> io::Result<()> {
         connection_id: 0x7B,
         last_seq_number: 0x1C,
         recv_sequence: 0x1C,
-        vipc: Box::new(Vipc::new(vfs)),
+        vipc: None,
+        conn,
         scratch: Scratch::default(),
     };
 
@@ -118,7 +135,11 @@ struct Session {
     connection_id: u8,
     last_seq_number: u8,
     recv_sequence: u8,
-    vipc: Box<Vipc>,
+    /// Built by sign-on and dropped by sign-off: every resource this server
+    /// offers is reached through it, so an unauthenticated link has nothing to
+    /// address at all.
+    vipc: Option<Box<Vipc>>,
+    conn: Rc<Connection>,
     /// Reused for serializing outgoing frames, one buffer per nesting level:
     /// the VIPC message, the data frame around it and the PDL frame around
     /// that. Frames are bounded by `MAX_FRAME_SIZE`, so after the first few
@@ -218,12 +239,19 @@ impl Session {
 
         // TODO: proper connect to resource.
 
+        let status = if self.vipc.is_some() {
+            status::OK
+        } else {
+            info!("session: refused a connect before sign-on");
+            STATUS_NOT_SIGNED_ON
+        };
+
         let body = DataFrameResponse::Connect {
             header: ConnectHeader {
                 local_path_id: 1,
                 remote_path_id,
             },
-            status: 0, // OK
+            status,
         };
 
         self.scratch.body.clear();
@@ -250,13 +278,27 @@ impl Session {
         self.write_response()
     }
 
-    fn sign_on(&mut self, _properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
-        info!("session: requested sign on");
+    fn sign_on(&mut self, properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
+        let status = match authenticate(&self.conn, &properties) {
+            Ok(account) => {
+                let authority = Authority::from_stored(account.authority);
+                info!(
+                    "session: signed on as {}/{}/{}, authority {authority} ({})",
+                    account.company,
+                    account.group,
+                    account.user,
+                    authority.name(),
+                );
 
-        // TODO: Check credentials.
+                self.vipc = Some(Box::new(Vipc::new(Rc::clone(&self.conn), account)));
+
+                status::OK
+            }
+            Err(status) => status,
+        };
 
         let body = DataFrameResponse::SignOn {
-            status: 0, // OK
+            status,
             server_name: BStr::new("vklachkov server"),
         };
 
@@ -269,13 +311,24 @@ impl Session {
     fn sign_off(&mut self) -> Result<(), FrameError> {
         info!("session: requested sign off");
 
-        // TODO: Sign off properly.
+        // Dropping the servers is the whole of it: the open files, the mailbox
+        // and the authority all belonged to the account that signed on, and the
+        // link is back to where it was before it ever did.
+        self.vipc = None;
 
         Ok(())
     }
 
     fn process_msg(&mut self, header: ConnectHeader, payload: &[u8]) -> Result<(), FrameError> {
-        for outgoing in self.vipc.process_message(payload)? {
+        let Some(vipc) = self.vipc.as_mut() else {
+            // There is no message-level status field to refuse through, and the
+            // client cannot reach here on its own — it would have to have
+            // ignored the refused connect — so the message is dropped.
+            info!("session: ignored a message before sign-on");
+            return Ok(());
+        };
+
+        for outgoing in vipc.process_message(payload)? {
             let Scratch { message, body, .. } = &mut self.scratch;
 
             message.clear();
@@ -314,5 +367,305 @@ impl Session {
         frame.write_into(&mut self.scratch.frame);
 
         RawFrame::write_data_to_io(&self.scratch.frame, &mut self.client)
+    }
+}
+
+#[cfg(test)]
+fn sign_on_properties<'a>(
+    company: &'a [u8],
+    group: &'a [u8],
+    user: &'a [u8],
+    password: &'a [u8],
+) -> Vec<SignOnProperty<'a>> {
+    vec![
+        SignOnProperty {
+            ty: property::COMPANY,
+            value: company,
+        },
+        SignOnProperty {
+            ty: property::GROUP,
+            value: group,
+        },
+        SignOnProperty {
+            ty: property::USER,
+            value: user,
+        },
+        SignOnProperty {
+            ty: property::PASSWORD,
+            value: password,
+        },
+    ]
+}
+
+/// The client shows any nonzero status as an error dialog, so the distinction
+/// between an unknown account and a wrong password is what the user sees.
+fn authenticate(conn: &Connection, properties: &[SignOnProperty<'_>]) -> Result<db::Account, u16> {
+    let property = |ty: u8| {
+        properties
+            .iter()
+            .find(|property| property.ty == ty)
+            .map_or(&[][..], |property| property.value)
+    };
+
+    let (company, group, user, password) = (
+        property(property::COMPANY),
+        property(property::GROUP),
+        property(property::USER),
+        property(property::PASSWORD),
+    );
+
+    info!(
+        "session: sign on {:?}/{:?}/{:?}",
+        BStr::new(company),
+        BStr::new(group),
+        BStr::new(user),
+    );
+
+    // An empty name would match the empty columns of a company or group row, so
+    // sign-on has to refuse it before it ever reaches the lookup.
+    if company.is_empty() || group.is_empty() || user.is_empty() {
+        return Err(status::PROPERTY_MISSING);
+    }
+
+    // Names are stored as ASCII text, so anything else cannot name an account
+    // that exists — the lookup would simply have missed.
+    let (Ok(company), Ok(group), Ok(user)) = (
+        str::from_utf8(company),
+        str::from_utf8(group),
+        str::from_utf8(user),
+    ) else {
+        info!("session: unknown user {:?}", BStr::new(user));
+        return Err(STATUS_UNKNOWN_USER);
+    };
+
+    let account = match db::find_user(conn, company, group, user) {
+        Ok(Some(account)) => account,
+        Ok(None) => {
+            info!("session: unknown user {user:?}");
+            return Err(STATUS_UNKNOWN_USER);
+        }
+        Err(err) => {
+            error!("session: failed to look up the account: {err}");
+            return Err(status::AUTHORIZATION_FILE);
+        }
+    };
+
+    if account.password.as_bytes() != password {
+        info!("session: wrong password for {user:?}");
+        return Err(STATUS_INVALID_PASSWORD);
+    }
+
+    Ok(account)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use super::*;
+
+    use super::sign_on_properties as properties;
+
+    /// The gate lives in the session, not in `authenticate`, so binding it takes
+    /// a real session — and a session answers into a socket. A loopback pair is
+    /// the cheapest way to give it one and still read back what it wrote.
+    fn loopback() -> (Session, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
+        let addr = listener.local_addr().expect("read the loopback address");
+        let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
+        let (client, _) = listener.accept().expect("accept the loopback connection");
+
+        let session = Session {
+            client,
+            connection_id: 0x7B,
+            last_seq_number: 0x1C,
+            recv_sequence: 0x1C,
+            vipc: None,
+            conn: Rc::new(db::open_in_memory()),
+            scratch: Scratch::default(),
+        };
+
+        (session, peer)
+    }
+
+    fn read_response(peer: &mut TcpStream) -> Vec<u8> {
+        let raw = RawFrame::read_from_io(peer).expect("read a response frame");
+        let frame = Frame::try_from_raw(&raw).expect("parse a response frame");
+
+        match frame.body {
+            FrameBody::Data(data) => data.to_vec(),
+            body => panic!("expected a data frame, got {body:?}"),
+        }
+    }
+
+    /// `<type:u16><local:u16><remote:u16><status:u16>`.
+    fn connect_status(session: &mut Session, peer: &mut TcpStream) -> u16 {
+        session
+            .connect(1, BStr::new(b"Sentry"))
+            .expect("answer the connect");
+
+        let body = read_response(peer);
+        u16::from_le_bytes([body[6], body[7]])
+    }
+
+    /// `<type:u16><status:u16><name>`.
+    fn sign_on_status(session: &mut Session, peer: &mut TcpStream, password: &[u8]) -> u16 {
+        session
+            .sign_on(properties(b"GRiD", b"Systems", b"MANAGER", password))
+            .expect("answer the sign on");
+
+        let body = read_response(peer);
+        u16::from_le_bytes([body[2], body[3]])
+    }
+
+    fn assert_silent(peer: &mut TcpStream) {
+        peer.set_nonblocking(true).expect("stop blocking on reads");
+
+        let read = peer.read(&mut [0; 1]);
+
+        peer.set_nonblocking(false).expect("block on reads again");
+
+        match read {
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+            other => panic!("expected no response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refuses_a_connect_before_sign_on() {
+        let (mut session, mut peer) = loopback();
+
+        assert_eq!(
+            connect_status(&mut session, &mut peer),
+            STATUS_NOT_SIGNED_ON
+        );
+    }
+
+    #[test]
+    fn refuses_a_connect_after_a_failed_sign_on() {
+        let (mut session, mut peer) = loopback();
+
+        assert_eq!(
+            sign_on_status(&mut session, &mut peer, b"WRONG"),
+            STATUS_INVALID_PASSWORD
+        );
+        assert_eq!(
+            connect_status(&mut session, &mut peer),
+            STATUS_NOT_SIGNED_ON
+        );
+    }
+
+    #[test]
+    fn accepts_a_connect_once_signed_on() {
+        let (mut session, mut peer) = loopback();
+
+        assert_eq!(
+            sign_on_status(&mut session, &mut peer, b"MANAGER"),
+            status::OK
+        );
+        assert_eq!(connect_status(&mut session, &mut peer), status::OK);
+    }
+
+    /// Signing off has to put the link back where it started, or an account
+    /// would keep its reach over a link somebody else can now sign on to.
+    #[test]
+    fn signing_off_closes_the_gate_again() {
+        let (mut session, mut peer) = loopback();
+
+        assert_eq!(
+            sign_on_status(&mut session, &mut peer, b"MANAGER"),
+            status::OK
+        );
+        session.sign_off().expect("sign off");
+
+        assert_eq!(
+            connect_status(&mut session, &mut peer),
+            STATUS_NOT_SIGNED_ON
+        );
+    }
+
+    /// A message carries no status field to refuse through, so the refusal can
+    /// only be silence — and silence is what has to be asserted.
+    #[test]
+    fn drops_a_message_before_sign_on() {
+        let (mut session, mut peer) = loopback();
+
+        let header = ConnectHeader {
+            local_path_id: 1,
+            remote_path_id: 1,
+        };
+
+        session
+            .process_msg(header, &[0xFF, 0xFF, 0, 0, 0, 0])
+            .expect("drop the message");
+
+        assert_silent(&mut peer);
+    }
+
+    #[test]
+    fn accepts_a_known_user_and_reports_their_authority() {
+        let conn = db::open_in_memory();
+
+        let account = authenticate(
+            &conn,
+            &properties(b"GRiD", b"Systems", b"MANAGER", b"MANAGER"),
+        )
+        .expect("MANAGER should be able to sign on");
+
+        assert_eq!(
+            Authority::from_stored(account.authority),
+            Authority::SYSTEM_ADMIN
+        );
+    }
+
+    /// The names the client sends need not match the stored case, so sign-on has
+    /// to compare them the way the client itself does.
+    #[test]
+    fn accepts_a_known_user_whatever_the_case_of_the_names() {
+        let conn = db::open_in_memory();
+
+        let account = authenticate(&conn, &properties(b"grid", b"demo", b"guest", b"GUEST"))
+            .expect("GUEST should be able to sign on whatever the case");
+
+        assert_eq!(account.user, "GUEST");
+        assert_eq!(Authority::from_stored(account.authority), Authority::NORMAL);
+    }
+
+    #[test]
+    fn rejects_a_wrong_password() {
+        let conn = db::open_in_memory();
+
+        let status = authenticate(
+            &conn,
+            &properties(b"GRiD", b"Systems", b"MANAGER", b"WRONG"),
+        )
+        .err()
+        .expect("a wrong password should be refused");
+
+        assert_eq!(status, STATUS_INVALID_PASSWORD);
+    }
+
+    #[test]
+    fn rejects_an_unknown_user() {
+        let conn = db::open_in_memory();
+
+        let status = authenticate(&conn, &properties(b"GRiD", b"Demo", b"NOBODY", b""))
+            .err()
+            .expect("an unknown user should be refused");
+
+        assert_eq!(status, STATUS_UNKNOWN_USER);
+    }
+
+    /// A group is not an account: its row has an empty user name, which would
+    /// match an empty property and answer with the group's own authority.
+    #[test]
+    fn refuses_to_sign_on_as_a_group() {
+        let conn = db::open_in_memory();
+
+        let status = authenticate(&conn, &properties(b"GRiD", b"Systems", b"", b""))
+            .err()
+            .expect("a group should not be an account");
+
+        assert_eq!(status, status::PROPERTY_MISSING);
     }
 }

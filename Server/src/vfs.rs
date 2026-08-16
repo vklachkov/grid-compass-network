@@ -4,12 +4,13 @@ use bstr::BStr;
 
 use std::io::Write;
 
-use crate::gridlink::{
-    FrameError,
-    utils::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
+use crate::{
+    gridlink::{
+        FrameError,
+        utils::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
+    },
+    protocol::status,
 };
-
-pub const MESSAGE_TYPE: crate::gridlink::vipc::MessageType = crate::gridlink::vipc::MessageType(83);
 
 #[derive(Clone, Debug)]
 pub struct VfsRequest<'a> {
@@ -24,7 +25,7 @@ pub struct VfsRequestHeader {
     pub servers_conn_id: u16,
 }
 
-#[derive(Clone, Copy, Debug, strum::FromRepr)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u16)]
 pub enum VfsRequestCode {
     GetStatus = 1,
@@ -39,6 +40,26 @@ pub enum VfsRequestCode {
     WriteDesc = 13,
     SetStatus = 20,
     ReadDirPage = 29,
+}
+
+impl VfsRequestCode {
+    pub fn from_repr(value: u16) -> Option<Self> {
+        Some(match value {
+            1 => Self::GetStatus,
+            2 => Self::Open,
+            3 => Self::Close,
+            4 => Self::Read,
+            5 => Self::Write,
+            6 => Self::Seek,
+            8 => Self::Attach,
+            9 => Self::Detach,
+            12 => Self::ReadDesc,
+            13 => Self::WriteDesc,
+            20 => Self::SetStatus,
+            29 => Self::ReadDirPage,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -95,7 +116,7 @@ pub struct VfsSetStatusRequest<'a> {
     pub actions: Vec<VfsSetStatusAction<'a>>,
 }
 
-#[derive(Clone, Copy, Debug, strum::FromRepr)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum VfsSetStatusType {
     SetDirection = 255,
@@ -112,6 +133,28 @@ pub enum VfsSetStatusType {
     SetIpcActivityTimeout = 244,
     GetGenericDeviceName = 243,
     GetDeviceName = 242,
+}
+
+impl VfsSetStatusType {
+    pub fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            255 => Self::SetDirection,
+            254 => Self::SetWildcard,
+            253 => Self::SetObjectMode,
+            252 => Self::SetGpibAddress,
+            251 => Self::SetDeviceMask,
+            250 => Self::SetNoteValue,
+            249 => Self::SetNumBuffers,
+            248 => Self::SetNameAttributes,
+            247 => Self::SetConsoleMode,
+            246 => Self::SetAccessRights,
+            245 => Self::SetSecureMode,
+            244 => Self::SetIpcActivityTimeout,
+            243 => Self::GetGenericDeviceName,
+            242 => Self::GetDeviceName,
+            _ => return None,
+        })
+    }
 }
 
 #[allow(dead_code)]
@@ -165,12 +208,23 @@ pub enum VfsSetStatusAction<'a> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::FromRepr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VfsObjectMode {
     Byte = 0,
     Directory = 1,
     CompleteDirectory = 2,
+}
+
+impl VfsObjectMode {
+    pub fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => Self::Byte,
+            1 => Self::Directory,
+            2 => Self::CompleteDirectory,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -485,11 +539,11 @@ const HARD_DISK: &[&str] = &[
 const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
 
 const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
-const VFS_OK: u16 = 0;
-const VFS_ERROR_FILE_NOT_OPEN: u16 = 205;
-const VFS_ERROR_BAD_CONNECTION: u16 = 221;
-const VFS_ERROR_BAD_PARAMETER: u16 = 225;
-const VFS_ERROR_DEVICE_FULL: u16 = 41;
+
+const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
+const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
+const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
+const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
 
 pub struct Vfs {
     connection_id: NonZeroU16,
@@ -642,7 +696,7 @@ impl Vfs {
                     }
                     file.data[file.position..end].copy_from_slice(body.data);
                     file.position = end;
-                    VFS_OK
+                    status::OK
                 }
                 _ => {
                     file.write_failed = true;
@@ -704,7 +758,7 @@ impl Vfs {
                 match position.filter(|position| *position <= MAX_MAIL_OBJECT_SIZE) {
                     Some(position) => {
                         file.position = position;
-                        VFS_OK
+                        status::OK
                     }
                     None => VFS_ERROR_BAD_PARAMETER,
                 }

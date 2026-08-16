@@ -1,0 +1,375 @@
+use anyhow::Context;
+use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite_migration::{M, Migrations};
+
+/// The wire form has no level field — the client tells a company from a group
+/// from a user by which of the three names repeat — so the level is
+/// reconstructed when rows are flattened for the listing.
+pub const LEVEL_COMPANY: i64 = 0;
+#[allow(dead_code)]
+pub const LEVEL_GROUP: i64 = 1;
+pub const LEVEL_USER: i64 = 2;
+
+/// `COLLATE NOCASE` is what makes the client's case insensitive view of names
+/// the database's own: it governs the unique indexes, the lookups and the
+/// listing order alike. It applies to `TEXT` only, which is why names are not
+/// `BLOB`.
+const MIGRATIONS: &[M<'_>] = &[M::up(
+    r#"
+CREATE TABLE companies (
+    id    INTEGER PRIMARY KEY,
+    name  TEXT    NOT NULL COLLATE NOCASE UNIQUE,
+    quota INTEGER NOT NULL,
+    used  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE groups (
+    id         INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name       TEXT    NOT NULL COLLATE NOCASE UNIQUE,
+    quota      INTEGER NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE users (
+    id        INTEGER PRIMARY KEY,
+    group_id  INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    name      TEXT    NOT NULL COLLATE NOCASE,
+    password  TEXT    NOT NULL,
+    authority INTEGER NOT NULL,
+    quota     INTEGER NOT NULL,
+    used      INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (group_id, name)
+);
+
+INSERT INTO companies (id, name, quota) VALUES (1, 'GRiD Systems', 4294967295);
+INSERT INTO groups (id, company_id, name, quota) VALUES (1, 1, 'Default Group', 4294967295);
+INSERT INTO users (group_id, name, password, authority, quota)
+    VALUES (1, 'Sysuser', 'Sysuser', 40, 4294967295);
+"#,
+)];
+
+/// One row of the flattened directory. The levels that do not apply are empty,
+/// unlike the wire form, where a company repeats its name at all three.
+pub struct Account {
+    pub level: i64,
+    pub company: String,
+    pub group: String,
+    pub user: String,
+    pub password: String,
+    pub authority: u16,
+    pub quota: u32,
+    pub used: u32,
+}
+
+/// WAL is what makes the frontend's own connection safe alongside the session
+/// threads: readers do not block the writer and vice versa. `busy_timeout`
+/// covers the remaining case of two writers meeting.
+pub fn open(path: &str) -> anyhow::Result<Connection> {
+    let mut conn = Connection::open(path).with_context(|| format!("open database {path}"))?;
+
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .context("enable WAL")?;
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .context("set busy timeout")?;
+    conn.pragma_update(None, "foreign_keys", true)
+        .context("enable foreign keys")?;
+
+    migrate(&mut conn)?;
+
+    Ok(conn)
+}
+
+pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
+    Migrations::new(MIGRATIONS.to_vec())
+        .to_latest(conn)
+        .context("apply database migrations")
+}
+
+/// The order is the one the client walks: a company, then each of its groups
+/// followed by that group's users. Sorting by the level within a group is what
+/// keeps the group's own row ahead of its users.
+///
+/// Only a user carries an authority of its own — the client sends none when it
+/// creates a company or a group — so the two upper levels report the fixed
+/// authority their level implies: 30 company administrator, 20 group.
+const LOAD_SQL: &str = r#"
+SELECT level, company, grp, usr, password, authority, quota, used FROM (
+    SELECT 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
+           30 AS authority, c.quota, c.used
+      FROM companies c
+    UNION ALL
+    SELECT 1, c.name, g.name, '', '', 20, g.quota, g.used
+      FROM groups g JOIN companies c ON c.id = g.company_id
+    UNION ALL
+    SELECT 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
+      FROM users u
+      JOIN groups g ON g.id = u.group_id
+      JOIN companies c ON c.id = g.company_id
+)
+ORDER BY company COLLATE NOCASE, grp COLLATE NOCASE, level, usr COLLATE NOCASE
+"#;
+
+pub fn load(conn: &Connection) -> rusqlite::Result<Vec<Account>> {
+    conn.prepare(LOAD_SQL)?
+        .query_map([], |row| {
+            Ok(Account {
+                level: row.get(0)?,
+                company: row.get(1)?,
+                group: row.get(2)?,
+                user: row.get(3)?,
+                password: row.get(4)?,
+                authority: row.get(5)?,
+                quota: row.get(6)?,
+                used: row.get(7)?,
+            })
+        })?
+        .collect()
+}
+
+pub fn find_user(
+    conn: &Connection,
+    company: &str,
+    group: &str,
+    user: &str,
+) -> rusqlite::Result<Option<Account>> {
+    conn.query_row(
+        "SELECT c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
+           FROM users u
+           JOIN groups g ON g.id = u.group_id
+           JOIN companies c ON c.id = g.company_id
+          WHERE c.name = ?1 AND g.name = ?2 AND u.name = ?3",
+        params![company, group, user],
+        |row| {
+            Ok(Account {
+                level: LEVEL_USER,
+                company: row.get(0)?,
+                group: row.get(1)?,
+                user: row.get(2)?,
+                password: row.get(3)?,
+                authority: row.get(4)?,
+                quota: row.get(5)?,
+                used: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub fn find_company(conn: &Connection, company: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id FROM companies WHERE name = ?1",
+        params![company],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn find_group(conn: &Connection, company: &str, group: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT g.id
+           FROM groups g JOIN companies c ON c.id = g.company_id
+          WHERE c.name = ?1 AND g.name = ?2",
+        params![company, group],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn insert_company(conn: &Connection, name: &str, quota: u32) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO companies (name, quota) VALUES (?1, ?2)",
+        params![name, quota],
+    )?;
+
+    Ok(())
+}
+
+pub fn insert_group(
+    conn: &Connection,
+    company_id: i64,
+    name: &str,
+    quota: u32,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO groups (company_id, name, quota) VALUES (?1, ?2, ?3)",
+        params![company_id, name, quota],
+    )?;
+
+    Ok(())
+}
+
+pub fn insert_user(
+    conn: &Connection,
+    group_id: i64,
+    name: &str,
+    password: &str,
+    authority: u16,
+    quota: u32,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO users (group_id, name, password, authority, quota)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![group_id, name, password, authority, quota],
+    )?;
+
+    Ok(())
+}
+
+/// The seeded administrator alone cannot exercise the listing walk, which needs
+/// a company holding more than one group and a group holding more than one user
+/// — so the tests replace the seed with a directory that has both.
+#[cfg(test)]
+pub fn open_in_memory() -> Connection {
+    let mut conn = Connection::open_in_memory().expect("open in-memory database");
+    migrate(&mut conn).expect("migrate in-memory database");
+
+    conn.execute_batch(
+        r#"
+DELETE FROM users;
+DELETE FROM groups;
+DELETE FROM companies;
+
+INSERT INTO companies (id, name, quota) VALUES (1, 'GRiD', 4294967295);
+INSERT INTO groups (id, company_id, name, quota) VALUES
+    (1, 1, 'Demo', 4294967295),
+    (2, 1, 'Systems', 4294967295);
+INSERT INTO users (group_id, name, password, authority, quota, used) VALUES
+    (1, 'GUEST', 'GUEST', 0, 1048576, 262144),
+    (1, 'OPERATOR', 'OPERATOR', 20, 4294967295, 1048576),
+    (2, 'MANAGER', 'MANAGER', 40, 4294967295, 4194304);
+"#,
+    )
+    .expect("seed the test directory");
+
+    conn
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrations_are_valid() {
+        Migrations::new(MIGRATIONS.to_vec())
+            .validate()
+            .expect("migrations should be valid");
+    }
+
+    /// A fresh database has to be one an administrator can sign on to: every
+    /// other account is created through the Sentry, which refuses every command
+    /// below `SYSTEM_ADMIN`.
+    #[test]
+    fn a_fresh_database_holds_only_the_seeded_administrator() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+
+        let rows: Vec<_> = load(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|account| (account.level, account.company, account.group, account.user))
+            .collect();
+
+        assert_eq!(
+            rows,
+            [
+                (
+                    LEVEL_COMPANY,
+                    "GRiD Systems".to_owned(),
+                    String::new(),
+                    String::new()
+                ),
+                (
+                    LEVEL_GROUP,
+                    "GRiD Systems".into(),
+                    "Default Group".into(),
+                    String::new()
+                ),
+                (
+                    LEVEL_USER,
+                    "GRiD Systems".into(),
+                    "Default Group".into(),
+                    "Sysuser".into()
+                ),
+            ]
+        );
+
+        let sysuser = find_user(&conn, "GRiD Systems", "Default Group", "Sysuser")
+            .unwrap()
+            .expect("the seeded administrator should be found");
+        assert_eq!(sysuser.password, "Sysuser");
+        assert_eq!(sysuser.authority, 40);
+    }
+
+    #[test]
+    fn loads_the_demo_directory_in_client_order() {
+        let conn = open_in_memory();
+
+        let names: Vec<_> = load(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|account| (account.level, account.group, account.user))
+            .collect();
+
+        assert_eq!(
+            names,
+            [
+                (LEVEL_COMPANY, String::new(), String::new()),
+                (LEVEL_GROUP, "Demo".into(), String::new()),
+                (LEVEL_USER, "Demo".into(), "GUEST".into()),
+                (LEVEL_USER, "Demo".into(), "OPERATOR".into()),
+                (LEVEL_GROUP, "Systems".into(), String::new()),
+                (LEVEL_USER, "Systems".into(), "MANAGER".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_a_user_ignoring_case() {
+        let conn = open_in_memory();
+
+        let account = find_user(&conn, "grid", "DEMO", "guest")
+            .unwrap()
+            .expect("GUEST should be found whatever the case");
+
+        assert_eq!(account.password, "GUEST");
+        assert_eq!(account.authority, 0);
+    }
+
+    #[test]
+    fn does_not_find_an_unknown_user() {
+        let conn = open_in_memory();
+
+        assert!(
+            find_user(&conn, "GRiD", "Demo", "NOBODY")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inserted_rows_appear_in_order() {
+        let conn = open_in_memory();
+        let group = find_group(&conn, "grid", "demo").unwrap().unwrap();
+
+        insert_user(&conn, group, "BOB", "PW", 0, 1024).unwrap();
+
+        let users: Vec<_> = load(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|account| account.group == "Demo" && account.level == LEVEL_USER)
+            .map(|account| account.user)
+            .collect();
+
+        assert_eq!(users, ["BOB", "GUEST", "OPERATOR"]);
+    }
+
+    #[test]
+    fn refuses_a_duplicate_whatever_the_case() {
+        let conn = open_in_memory();
+
+        assert!(insert_company(&conn, "grid", 1024).is_err());
+        assert!(insert_group(&conn, 1, "DEMO", 1024).is_err());
+        assert!(insert_user(&conn, 1, "guest", "PW", 0, 1024).is_err());
+    }
+}

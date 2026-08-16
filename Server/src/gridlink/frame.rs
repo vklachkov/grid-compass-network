@@ -16,7 +16,7 @@ pub struct Frame<'a> {
     pub body: FrameBody<'a>, // frameType combined with data
 }
 
-#[derive(Clone, Copy, Debug, strum::FromRepr)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 enum FrameType {
     Rfc = 1,
@@ -24,6 +24,19 @@ enum FrameType {
     Disc = 3,
     Ping = 4,
     Data = 5,
+}
+
+impl FrameType {
+    fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::Rfc,
+            2 => Self::Ack,
+            3 => Self::Disc,
+            4 => Self::Ping,
+            5 => Self::Data,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

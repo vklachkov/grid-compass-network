@@ -1,16 +1,7 @@
-use crate::gridlink::vipc::MessageType;
-
-// GRiDManager opens a second VIPC channel to `General~Broadcast~` right after signing on
-// and blocks until the server answers. Without a reply the client sits silent for roughly
-// 47 seconds and then closes the connection with reason 0x6191.
-pub const MESSAGE_TYPE: MessageType = MessageType(0x7000);
+use crate::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
 
 /// Session frames use the same `0xfe` marker as Mail's channel 0.
 const SESSION_MARKER: u8 = 0xfe;
-const TAG_TERMINATOR: u8 = b'z';
-
-const MORE: u8 = 1;
-const TRANSPORT_HEADER_LEN: usize = 4;
 
 /// The one frame the client sends: `0xfe`, length 4, then `'a'` and the word 11500.
 /// Byte for byte this is Mail's initialization frame with 11400 bumped to 11500,

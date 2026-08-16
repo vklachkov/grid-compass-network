@@ -7,7 +7,7 @@ use super::{
     utils::{self, CursorExt, ReadExt, WriteExt},
 };
 
-#[derive(Clone, Copy, Debug, strum::FromRepr)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u16)]
 enum DataFrameType {
     Msg = 0,                // VIPC_Px_Msg
@@ -19,6 +19,23 @@ enum DataFrameType {
     SignOnResponse = 6,     // VIPC_Px_SignonResponse
     SignOff = 7,            // VIPC_Px_Signoff
     Error = 100,            // VIPC_Px_Error
+}
+
+impl DataFrameType {
+    fn from_repr(value: u16) -> Option<Self> {
+        Some(match value {
+            0 => Self::Msg,
+            1 => Self::Connect,
+            2 => Self::ConnectResponse,
+            3 => Self::Disconnect,
+            4 => Self::DisconnectResponse,
+            19 => Self::SignOn,
+            6 => Self::SignOnResponse,
+            7 => Self::SignOff,
+            100 => Self::Error,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

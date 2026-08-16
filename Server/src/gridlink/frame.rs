@@ -1,6 +1,7 @@
 use std::io;
 
-use super::{error::FrameError, raw_frame::RawFrame, utils::ReadExt};
+use super::raw_frame::RawFrame;
+use crate::shared::{FrameError, io::ReadExt};
 
 /// End-of-message flag.
 pub const EOM_FLAG_ON: u8 = 1;
@@ -155,12 +156,6 @@ impl<'a> Frame<'a> {
                 dst.extend_from_slice(body);
             }
         }
-    }
-
-    pub fn into_raw(self) -> RawFrame {
-        let mut data = Vec::with_capacity(5);
-        self.write_into(&mut data);
-        RawFrame::new(data)
     }
 }
 

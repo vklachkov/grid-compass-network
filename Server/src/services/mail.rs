@@ -2,12 +2,10 @@ use std::io;
 
 use log::{debug, warn};
 
-use crate::{
-    gridlink::{
-        Tlv,
-        utils::{CursorExt, ReadExt, u16_len},
-    },
-    protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN},
+use super::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
+use crate::shared::{
+    Tlv,
+    io::{CursorExt, ReadExt, u16_len},
 };
 
 const RECORD_MARKER: u8 = 0xfd;

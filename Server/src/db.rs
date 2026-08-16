@@ -6,7 +6,9 @@ use rusqlite_migration::{M, Migrations};
 /// from a user by which of the three names repeat — so the level is
 /// reconstructed when rows are flattened for the listing.
 pub const LEVEL_COMPANY: i64 = 0;
-#[allow(dead_code)]
+/// A group row is the one level the server never has to recognise by number:
+/// it is whatever is neither a company nor a user.
+#[cfg(test)]
 pub const LEVEL_GROUP: i64 = 1;
 pub const LEVEL_USER: i64 = 2;
 

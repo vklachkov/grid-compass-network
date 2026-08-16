@@ -5,8 +5,8 @@
 use std::io;
 
 use super::{
-    error::FrameError,
-    utils::{CursorExt, ReadExt},
+    FrameError,
+    io::{CursorExt, ReadExt},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,10 +50,6 @@ impl<'a> Tlv<'a> {
 
     pub fn marker_u16(data: &'a [u8], marker: u8) -> Self {
         Self::new(data, TlvKind::MarkerU16 { marker })
-    }
-
-    pub fn position(&self) -> usize {
-        self.cursor.position() as usize
     }
 
     pub fn collect_all(self) -> Result<Vec<TlvEntry<'a>>, FrameError> {

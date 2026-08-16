@@ -3,17 +3,23 @@ use std::rc::Rc;
 use log::{debug, warn};
 use rusqlite::Connection;
 
+use broadcast::BroadcastServer;
+use mail::MailServer;
+use sentry::SentryServer;
+use vfs::{Vfs, VfsRequest};
+
 use crate::{
-    broadcast::BroadcastServer,
     db,
-    gridlink::{
-        FrameError,
-        vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
-    },
-    mail::MailServer,
-    sentry::SentryServer,
-    vfs::{Vfs, VfsRequest},
+    gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
+    shared::FrameError,
 };
+
+mod broadcast;
+mod mail;
+mod vfs;
+
+pub mod protocol;
+pub mod sentry;
 
 const CLASS_VFS: MessageType = MessageType(83);
 const CLASS_MAIL: MessageType = MessageType(0x7444);

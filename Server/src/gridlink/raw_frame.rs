@@ -2,9 +2,9 @@ use std::io;
 
 use log::trace;
 
-use super::{
-    error::FrameError,
-    utils::{ReadExt, WriteExt},
+use crate::shared::{
+    FrameError,
+    io::{ReadExt, WriteExt},
 };
 
 /// Data Link Escape. Used to prefix special commands or escape data bytes.
@@ -83,11 +83,6 @@ impl RawFrame {
         Ok(())
     }
 
-    /// Stuffs and writes frame data to an I/O destination.
-    pub fn write_to_io(&self, dst: impl io::Write) -> Result<(), FrameError> {
-        Self::write_data_to_io(&self.data, dst)
-    }
-
     /// Taking a slice lets a caller serialize a frame into a reused buffer and
     /// send it without wrapping it in an owned `RawFrame` first.
     pub fn write_data_to_io(data: &[u8], dst: impl io::Write) -> Result<(), FrameError> {
@@ -148,9 +143,7 @@ mod tests {
     fn accepts_maximum_unstuffed_frame() {
         let data = vec![DLE; MAX_FRAME_SIZE];
         let mut encoded = Vec::new();
-        RawFrame::new(data.clone())
-            .write_to_io(&mut encoded)
-            .unwrap();
+        RawFrame::write_data_to_io(&data, &mut encoded).unwrap();
 
         let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
         assert_eq!(decoded.data, data);
@@ -183,11 +176,12 @@ mod tests {
         data_frame.extend(1u16.to_le_bytes());
         data_frame.extend(vipc);
 
-        let frame = crate::gridlink::Frame::data(1, 54, &data_frame).into_raw();
-        assert_eq!(frame.data.len(), 528);
+        let mut frame = Vec::new();
+        crate::gridlink::Frame::data(1, 54, &data_frame).write_into(&mut frame);
+        assert_eq!(frame.len(), 528);
 
         let mut encoded = Vec::new();
-        frame.write_to_io(&mut encoded).unwrap();
+        RawFrame::write_data_to_io(&frame, &mut encoded).unwrap();
         let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
         let parsed = crate::gridlink::Frame::try_from_raw(&decoded).unwrap();
         let crate::gridlink::FrameBody::Data(data) = parsed.body else {

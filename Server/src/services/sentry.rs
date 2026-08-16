@@ -4,13 +4,13 @@ use bstr::BStr;
 use log::{debug, error, warn};
 use rusqlite::Connection;
 
+use super::protocol::{property, status};
 use crate::{
     db,
-    gridlink::{
+    shared::{
         FrameError, Tlv, TlvEntry,
-        utils::{WriteExt, u8_len},
+        io::{WriteExt, u8_len},
     },
-    protocol::{property, status},
 };
 
 /// Update and Delete are the two commands the client answers to with a bare

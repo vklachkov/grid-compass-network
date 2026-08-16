@@ -1,3 +1,9 @@
+mod db;
+mod gridlink;
+mod logger;
+mod services;
+mod shared;
+
 use std::{
     io,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -11,23 +17,16 @@ use log::{debug, error, info, trace, warn};
 use rusqlite::Connection;
 
 use gridlink::*;
-use protocol::{property, status};
-use sentry::Authority;
-use vipc::Vipc;
+use services::{
+    Vipc,
+    protocol::{property, status},
+    sentry::Authority,
+};
+use shared::FrameError;
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
 const STATUS_NOT_SIGNED_ON: u16 = 801; // eUserNotSignedON
-
-mod broadcast;
-mod db;
-mod gridlink;
-mod logger;
-mod mail;
-mod protocol;
-mod sentry;
-mod vfs;
-mod vipc;
 
 #[derive(PartialEq, Eq)]
 enum ProcessFrameResult {

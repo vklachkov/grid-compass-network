@@ -5,12 +5,10 @@ use log::{debug, warn};
 
 use std::io::Write;
 
-use crate::{
-    gridlink::{
-        FrameError,
-        utils::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
-    },
-    protocol::status,
+use super::protocol::status;
+use crate::shared::{
+    FrameError,
+    io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
 };
 
 #[derive(Clone, Debug)]
@@ -80,6 +78,8 @@ pub enum VfsRequestBody<'a> {
     Unknown(&'a [u8]),
 }
 
+/// Only the path steers the server so far; the rest of the request is decoded
+/// because it reaches the operator through the `Debug` line the dispatcher logs.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct VfsAttachRequest<'a> {
@@ -111,6 +111,9 @@ pub struct VfsWriteRequest<'a> {
     pub data: &'a [u8],
 }
 
+/// Set-status is answered with a bare acknowledgement, so the decoded actions
+/// only ever reach the log; they are kept because the shape of the request is
+/// what the reverse engineering established.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct VfsSetStatusRequest<'a> {
@@ -265,6 +268,8 @@ pub struct VfsShortDirEntry {
     pub name: Vec<u8>,
 }
 
+/// The full set of modes the client may ask for; the server answers every
+/// attach as a reader, so only `Read` is ever constructed here.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -584,7 +589,6 @@ impl Vfs {
     }
 
     pub fn process_request(&mut self, req: VfsRequest) -> VfsResponse {
-        #[allow(dead_code)]
         let VfsRequest { header, body } = req;
 
         debug!(target: "vfs", "received request {body:?} on connection {}", header.servers_conn_id);

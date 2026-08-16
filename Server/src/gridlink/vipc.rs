@@ -1,8 +1,8 @@
 use std::io::{self, Write};
 
-use super::{
-    error::FrameError,
-    utils::{CursorExt, ReadExt, WriteExt},
+use crate::shared::{
+    FrameError,
+    io::{CursorExt, ReadExt, WriteExt},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

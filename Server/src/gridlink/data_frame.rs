@@ -2,9 +2,9 @@ use std::io::{self, Write};
 
 use bstr::BStr;
 
-use super::{
-    error::FrameError,
-    utils::{self, CursorExt, ReadExt, WriteExt},
+use crate::shared::{
+    FrameError,
+    io::{self as wire, CursorExt, ReadExt, WriteExt},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -174,7 +174,7 @@ impl<'a> DataFrameRequest<'a> {
     }
 
     fn read_small_slice(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
-        utils::read_small_slice(cursor)
+        wire::read_small_slice(cursor)
     }
 }
 
@@ -224,7 +224,7 @@ impl DataFrameResponse<'_> {
     /// The length is checked rather than truncated: a silently shortened prefix
     /// would desynchronize the client's parser instead of failing here.
     fn write_nslice(dst: &mut Vec<u8>, value: &[u8]) -> Result<(), FrameError> {
-        dst.write_u8(utils::u8_len(value.len(), "data frame slice")?)?;
+        dst.write_u8(wire::u8_len(value.len(), "data frame slice")?)?;
         dst.write_all(value)?;
         Ok(())
     }

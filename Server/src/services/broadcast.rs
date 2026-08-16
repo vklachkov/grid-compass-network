@@ -1,6 +1,6 @@
 use log::{debug, warn};
 
-use crate::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
+use super::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
 
 /// Session frames use the same `0xfe` marker as Mail's channel 0.
 const SESSION_MARKER: u8 = 0xfe;

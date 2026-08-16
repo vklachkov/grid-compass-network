@@ -1,6 +1,6 @@
 use std::io;
 
-use super::error::FrameError;
+use super::FrameError;
 
 pub fn read_small_slice<'a>(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
     let length = cursor.read_u8()?;

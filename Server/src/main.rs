@@ -180,7 +180,7 @@ impl Session {
                 return Ok(ProcessFrameResult::Disconnect);
             }
             FrameBody::Ping(_) => {
-                self.write_frame(Frame::ack(self.connection_id, frame.seq_number))?;
+                self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
             }
             FrameBody::Data(data) => {
                 let expected = self.recv_sequence.wrapping_add(1);

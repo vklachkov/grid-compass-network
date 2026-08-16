@@ -176,6 +176,19 @@ pub fn find_group(conn: &Connection, company: &str, group: &str) -> rusqlite::Re
     .optional()
 }
 
+/// Groups and users are addressed by the whole name chain rather than by their
+/// own name alone, so the statements below reach them through a subquery instead
+/// of asking the caller to resolve an id first.
+const GROUP_ID: &str = "SELECT g.id
+      FROM groups g JOIN companies c ON c.id = g.company_id
+      WHERE c.name = ?1 AND g.name = ?2";
+
+const USER_ID: &str = "SELECT u.id
+      FROM users u
+      JOIN groups g ON g.id = u.group_id
+      JOIN companies c ON c.id = g.company_id
+      WHERE c.name = ?1 AND g.name = ?2 AND u.name = ?3";
+
 pub fn insert_company(conn: &Connection, name: &str, quota: u32) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO companies (name, quota) VALUES (?1, ?2)",
@@ -214,6 +227,92 @@ pub fn insert_user(
     )?;
 
     Ok(())
+}
+
+pub fn update_company(conn: &Connection, company: &str, quota: u32) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE companies SET quota = ?2 WHERE name = ?1",
+        params![company, quota],
+    )
+}
+
+pub fn update_group(
+    conn: &Connection,
+    company: &str,
+    group: &str,
+    quota: u32,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!("UPDATE groups SET quota = ?3 WHERE id = ({GROUP_ID})"),
+        params![company, group, quota],
+    )
+}
+
+pub fn update_user(
+    conn: &Connection,
+    company: &str,
+    group: &str,
+    user: &str,
+    authority: u16,
+    quota: u32,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!("UPDATE users SET authority = ?4, quota = ?5 WHERE id = ({USER_ID})"),
+        params![company, group, user, authority, quota],
+    )
+}
+
+pub fn set_password(
+    conn: &Connection,
+    company: &str,
+    group: &str,
+    user: &str,
+    password: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!("UPDATE users SET password = ?4 WHERE id = ({USER_ID})"),
+        params![company, group, user, password],
+    )
+}
+
+/// The cascade is spelled out instead of left to `ON DELETE CASCADE`: the pragma
+/// enabling it is set per connection, and a directory that half deletes itself
+/// because one connection forgot the pragma is worse than a redundant statement.
+pub fn delete_company(conn: &Connection, company: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM users WHERE group_id IN
+             (SELECT g.id FROM groups g JOIN companies c ON c.id = g.company_id
+               WHERE c.name = ?1)",
+        params![company],
+    )?;
+    conn.execute(
+        "DELETE FROM groups WHERE company_id IN (SELECT id FROM companies WHERE name = ?1)",
+        params![company],
+    )?;
+    conn.execute("DELETE FROM companies WHERE name = ?1", params![company])
+}
+
+pub fn delete_group(conn: &Connection, company: &str, group: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!("DELETE FROM users WHERE group_id = ({GROUP_ID})"),
+        params![company, group],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM groups WHERE id = ({GROUP_ID})"),
+        params![company, group],
+    )
+}
+
+pub fn delete_user(
+    conn: &Connection,
+    company: &str,
+    group: &str,
+    user: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!("DELETE FROM users WHERE id = ({USER_ID})"),
+        params![company, group, user],
+    )
 }
 
 /// The seeded administrator alone cannot exercise the listing walk, which needs

@@ -13,11 +13,17 @@ use crate::{
     protocol::{property, status},
 };
 
+/// Update and Delete are the two commands the client answers to with a bare
+/// acknowledgement; anything else it reads as the error path.
+const COMMAND_ACK: u8 = 0x01;
 const COMMAND_STATUS: u8 = 0x02;
 const COMMAND_REPLY: u8 = 0x03;
 const COMMAND_VARIANT_QUERY: u8 = 0x04;
+const COMMAND_CHANGE_PASSWORD: u8 = 0x05;
 const COMMAND_ADD_USER: u8 = 0x06;
 const COMMAND_QUERY: u8 = 0x0e;
+const COMMAND_DELETE: u8 = 0x12;
+const COMMAND_UPDATE: u8 = 0x16;
 const COMMAND_ADD_GROUP: u8 = 0x09;
 const COMMAND_ADD_COMPANY: u8 = 0x0a;
 const COMMAND_LIST_FIRST: u8 = 0x1e;
@@ -146,9 +152,8 @@ struct Row {
 }
 
 impl Row {
-    /// Expands a stored row back into the wire form, where the levels that do
-    /// not apply repeat the name above them: that repetition is how the client
-    /// tells a company from a group from a user.
+    /// Expands a stored row back into the wire form, repeating the name above
+    /// into the levels that do not apply.
     fn from_account(account: db::Account) -> Self {
         let company: Rc<[u8]> = Rc::from(account.company.into_bytes());
         let group: Rc<[u8]> = if account.level == db::LEVEL_COMPANY {
@@ -183,16 +188,32 @@ impl Row {
         [&self.company, &self.group, &self.user]
     }
 
-    /// A company row lists itself at all three levels, a group row at the last
-    /// two: that is how the client tells the levels apart when rendering.
-    #[cfg(test)]
-    fn is_company(&self) -> bool {
-        self.company == self.group && self.group == self.user
+    fn level(&self) -> Level {
+        if self.company == self.group && self.group == self.user {
+            Level::Company
+        } else if self.group == self.user {
+            Level::Group
+        } else {
+            Level::User
+        }
     }
+}
 
-    #[cfg(test)]
-    fn is_group(&self) -> bool {
-        self.company != self.group && self.group == self.user
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Level {
+    Company,
+    Group,
+    User,
+}
+
+impl Level {
+    /// The threshold a write at this level needs, matching the add commands.
+    fn required(self) -> Authority {
+        match self {
+            Self::Company => Authority::SYSTEM_ADMIN,
+            Self::Group => Authority::COMPANY_ADMIN,
+            Self::User => Authority::GROUP_ADMIN,
+        }
     }
 }
 
@@ -261,18 +282,12 @@ impl SentryServer {
             COMMAND_ADD_USER => self.add_user(&records),
             COMMAND_ADD_GROUP => self.add_group(&records),
             COMMAND_ADD_COMPANY => self.add_company(&records),
-            COMMAND_LIST_FIRST => match self.directory() {
-                Ok(directory) => {
-                    let index = seek(&directory, &records);
-                    listing_response(&directory, index)?
-                }
-                Err(response) => response,
-            },
-            COMMAND_LIST_NEXT => match self.directory() {
-                Ok(directory) => listing_response(&directory, resume(&records))?,
-                Err(response) => response,
-            },
+            COMMAND_LIST_FIRST => self.list(&records, seek)?,
+            COMMAND_LIST_NEXT => self.list(&records, |_, records| resume(records))?,
             COMMAND_QUERY => self.query(&records)?,
+            COMMAND_UPDATE => self.update(&records),
+            COMMAND_DELETE => self.delete(&records),
+            COMMAND_CHANGE_PASSWORD => self.change_password(&records),
             command => {
                 warn!(target: "sentry", "ignored unsupported command {command:#04x} with {records:?}");
                 return Ok(None);
@@ -337,11 +352,295 @@ impl SentryServer {
             return Ok(status_response(status));
         };
 
+        if let Some(denied) = self.deny_outside(&names) {
+            return Ok(denied);
+        }
+
         row_response(&directory, index)
     }
 
-    /// `sub_172C` sends the company name, an optional disk space text and the
-    /// quota, and reports `Complete` when the status word comes back zero.
+    /// Walking the directory is an administrator's business, and each step
+    /// skips the rows outside the walker's subtree rather than stopping at
+    /// them: the client starts from the very first row, so an administrator
+    /// whose own block sorts after somebody else's has to be carried past it.
+    fn list(
+        &self,
+        records: &[TlvEntry],
+        start: impl FnOnce(&Directory, &[TlvEntry]) -> Option<usize>,
+    ) -> Result<Vec<u8>, FrameError> {
+        if let Some(denied) = self.deny_below(Authority::GROUP_ADMIN) {
+            return Ok(denied);
+        }
+
+        let directory = match self.directory() {
+            Ok(directory) => directory,
+            Err(response) => return Ok(response),
+        };
+
+        let index = start(&directory, records).map(|index| {
+            (index..directory.rows.len()).find(|index| {
+                directory
+                    .get(*index)
+                    .is_some_and(|row| !self.outside(&row.names()))
+            })
+        });
+
+        listing_response(&directory, index.flatten())
+    }
+
+    /// The request carries no names, only the cursor of the preceding query, so
+    /// an update can never reach a row the client was not allowed to read.
+    fn update(&mut self, records: &[TlvEntry]) -> Vec<u8> {
+        let directory = match self.directory() {
+            Ok(directory) => directory,
+            Err(response) => return response,
+        };
+
+        let Some(row) = cursor(records).and_then(|index| directory.get(index)) else {
+            warn!(target: "sentry", "refused an update without a valid cursor");
+            return status_response(STATUS_ACCOUNT_NOT_DEFINED);
+        };
+
+        let authority = record(records, TAG_AUTHORITY)
+            .and_then(Authority::read)
+            .unwrap_or(row.authority);
+        let quota = quota_field(records).unwrap_or(row.quota);
+
+        debug!(
+            target: "sentry",
+            "update {:?}/{:?}/{:?} to authority={authority} ({}), quota={}",
+            BStr::new(&row.company),
+            BStr::new(&row.group),
+            BStr::new(&row.user),
+            authority.name(),
+            quota_name(quota),
+        );
+
+        if let Some(denied) = self.deny_write(row) {
+            return denied;
+        }
+
+        if !authority.is_defined() {
+            warn!(target: "sentry", "refused the undefined authority {authority}");
+            return status_response(STATUS_INVALID_AUTHORITY);
+        }
+
+        // The same escalation guard the add path has: an account that may edit a
+        // record must still not raise it above itself.
+        let actor = self.authority();
+        if authority > actor {
+            warn!(
+                target: "sentry",
+                "refused to grant {authority} ({}) from {actor} ({})",
+                authority.name(),
+                actor.name(),
+            );
+            return status_response(STATUS_INSUFFICIENT_AUTHORITY);
+        }
+
+        let names = row.names();
+        let Ok([company, group, user]) = stored_names(&names) else {
+            return status_response(status::AUTHORIZATION_FILE);
+        };
+
+        self.write(|conn| match row.level() {
+            Level::Company => db::update_company(conn, company, quota),
+            Level::Group => db::update_group(conn, company, group, quota),
+            Level::User => db::update_user(conn, company, group, user, authority.0, quota),
+        })
+    }
+
+    /// Addressed by the cursor alone, like [`Self::update`].
+    fn delete(&mut self, records: &[TlvEntry]) -> Vec<u8> {
+        let directory = match self.directory() {
+            Ok(directory) => directory,
+            Err(response) => return response,
+        };
+
+        let Some(row) = cursor(records).and_then(|index| directory.get(index)) else {
+            warn!(target: "sentry", "refused a delete without a valid cursor");
+            return status_response(STATUS_ACCOUNT_NOT_DEFINED);
+        };
+
+        debug!(
+            target: "sentry",
+            "delete {:?}/{:?}/{:?}",
+            BStr::new(&row.company),
+            BStr::new(&row.group),
+            BStr::new(&row.user),
+        );
+
+        if let Some(denied) = self.deny_write(row) {
+            return denied;
+        }
+
+        // Deleting the account this session signed on as would leave the session
+        // authenticated against a record that no longer exists.
+        if row.names() == self.actor_names() {
+            warn!(target: "sentry", "refused to delete the signed-on account");
+            return status_response(STATUS_INSUFFICIENT_AUTHORITY);
+        }
+
+        let names = row.names();
+        let Ok([company, group, user]) = stored_names(&names) else {
+            return status_response(status::AUTHORIZATION_FILE);
+        };
+
+        self.write(|conn| match row.level() {
+            Level::Company => db::delete_company(conn, company),
+            Level::Group => db::delete_group(conn, company, group),
+            Level::User => db::delete_user(conn, company, group, user),
+        })
+    }
+
+    /// The three names are optional and the password is not: the names an
+    /// account leaves out mean its own, which is how UserSentry changes the
+    /// password of the session without naming it.
+    fn change_password(&mut self, records: &[TlvEntry]) -> Vec<u8> {
+        let company = self.name_or_own(records, property::COMPANY, &self.actor.company);
+        let group = self.name_or_own(records, property::GROUP, &self.actor.group);
+        let user = self.name_or_own(records, property::USER, &self.actor.user);
+        let password = record(records, property::PASSWORD).unwrap_or_default();
+
+        debug!(
+            target: "sentry",
+            "change the password of {:?}/{:?}/{:?}",
+            BStr::new(company),
+            BStr::new(group),
+            BStr::new(user),
+        );
+
+        let names = match ascii_names(&[company, group, user, password]) {
+            Ok(names) => names,
+            Err(response) => return response,
+        };
+        let [company, group, user, password] = names[..] else {
+            unreachable!()
+        };
+
+        // Changing one's own password is the one operation every account may
+        // perform, so the gate applies only to somebody else's.
+        if [company.as_bytes(), group.as_bytes(), user.as_bytes()] != self.actor_names() {
+            if let Some(denied) = self.deny_below(Authority::GROUP_ADMIN) {
+                return denied;
+            }
+            if let Some(denied) =
+                self.deny_outside(&[company.as_bytes(), group.as_bytes(), user.as_bytes()])
+            {
+                return denied;
+            }
+        }
+
+        match db::set_password(&self.conn, company, group, user, password) {
+            Ok(0) => {
+                warn!(target: "sentry", "the account whose password to change is not defined");
+                status_response(STATUS_ACCOUNT_NOT_DEFINED)
+            }
+            Ok(_) => status_response(status::OK),
+            Err(err) => {
+                error!(target: "sentry", "failed to store the password: {err}");
+                status_response(status::AUTHORIZATION_FILE)
+            }
+        }
+    }
+
+    fn name_or_own<'a>(&self, records: &[TlvEntry<'a>], tag: u8, own: &'a str) -> &'a [u8] {
+        record(records, tag)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(own.as_bytes())
+    }
+
+    fn actor_names(&self) -> [&[u8]; 3] {
+        [
+            self.actor.company.as_bytes(),
+            self.actor.group.as_bytes(),
+            self.actor.user.as_bytes(),
+        ]
+    }
+
+    /// A write needs both the level's own threshold and the record being inside
+    /// the actor's scope; the two are separate because an account may well hold
+    /// the level and still be aiming at another company.
+    fn deny_write(&self, row: &Row) -> Option<Vec<u8>> {
+        let level = row.level();
+        if self.authority() < level.required() {
+            let actor = self.authority();
+            warn!(
+                target: "sentry",
+                "refused a write needing {} ({}) from {actor} ({})",
+                level.required(),
+                level.required().name(),
+                actor.name(),
+            );
+            return Some(status_response(STATUS_INSUFFICIENT_AUTHORITY));
+        }
+
+        self.deny_outside(&row.names())
+    }
+
+    /// How far an account may look: a system administrator over the whole
+    /// directory, a company administrator over its own company, a group
+    /// administrator over its own group, and an account without any of those
+    /// over nothing but its own record.
+    ///
+    /// An administrator is matched on as many names as its level covers, so the
+    /// company and group its subtree hangs from stay readable while a sibling
+    /// subtree does not. A normal user is matched on all three: its own row
+    /// already names its company and group, and the rows themselves carry a
+    /// quota and a disk usage that are not its business.
+    fn outside(&self, names: &[&[u8]; 3]) -> bool {
+        // `None` is an account that administers nothing and so has to match the
+        // record whole.
+        let scope = match self.authority() {
+            Authority::SYSTEM_ADMIN => Some(0),
+            Authority::COMPANY_ADMIN => Some(1),
+            Authority::GROUP_ADMIN => Some(2),
+            _ => None,
+        };
+
+        let depth = scope.map_or(3, |scope| depth(names).min(scope));
+        let own = self.actor_names();
+        !names
+            .iter()
+            .zip(own)
+            .take(depth)
+            .all(|(name, own)| name.eq_ignore_ascii_case(own))
+    }
+
+    fn deny_outside(&self, names: &[&[u8]; 3]) -> Option<Vec<u8>> {
+        if !self.outside(names) {
+            return None;
+        }
+
+        warn!(
+            target: "sentry",
+            "refused {} ({}) access to {:?}/{:?}/{:?}",
+            self.authority(),
+            self.authority().name(),
+            BStr::new(names[0]),
+            BStr::new(names[1]),
+            BStr::new(names[2]),
+        );
+
+        Some(status_response(STATUS_INSUFFICIENT_AUTHORITY))
+    }
+
+    /// Update and Delete want a bare acknowledgement rather than the status word
+    /// the add commands answer with.
+    fn write(&self, apply: impl FnOnce(&Connection) -> rusqlite::Result<usize>) -> Vec<u8> {
+        match apply(&self.conn) {
+            Ok(0) => {
+                warn!(target: "sentry", "the addressed record vanished before the write");
+                status_response(STATUS_ACCOUNT_NOT_DEFINED)
+            }
+            Ok(_) => vec![COMMAND_ACK],
+            Err(err) => {
+                error!(target: "sentry", "failed to write the record: {err}");
+                status_response(status::AUTHORIZATION_FILE)
+            }
+        }
+    }
+
     fn add_company(&mut self, records: &[TlvEntry]) -> Vec<u8> {
         let company = record(records, property::COMPANY).unwrap_or_default();
         let quota = quota(records);
@@ -367,7 +666,6 @@ impl SentryServer {
         self.store(|conn| db::insert_company(conn, company, quota))
     }
 
-    /// `sub_121C` sends the same records as `add_company` plus the group name.
     fn add_group(&mut self, records: &[TlvEntry]) -> Vec<u8> {
         let company = record(records, property::COMPANY).unwrap_or_default();
         let group = record(records, property::GROUP).unwrap_or_default();
@@ -567,7 +865,7 @@ fn listing_response(directory: &Directory, index: Option<usize>) -> Result<Vec<u
 }
 
 /// The eleven records a directory row carries. Listing and query share it
-/// because the client parses both replies through the same `sub_41F3`, where a
+/// because the client parses both replies with the same routine, where a
 /// missing tag raises its own error dialog, 5001 through 5011.
 fn row_response(directory: &Directory, index: usize) -> Result<Vec<u8>, FrameError> {
     let Some(row) = directory.get(index) else {
@@ -676,6 +974,38 @@ fn status_response(status: u16) -> Vec<u8> {
     payload
 }
 
+/// How many of the three names actually address something, given that the wire
+/// form pads the unused levels by repeating the name above them.
+fn depth(names: &[&[u8]; 3]) -> usize {
+    match names {
+        [company, group, _] if company.eq_ignore_ascii_case(group) => 1,
+        [_, group, user] if group.eq_ignore_ascii_case(user) => 2,
+        _ => 3,
+    }
+}
+
+/// The cursor a query handed out, which is the index of the row in the loaded
+/// directory.
+fn cursor(records: &[TlvEntry]) -> Option<usize> {
+    std::str::from_utf8(record(records, TAG_CURSOR)?)
+        .ok()?
+        .parse()
+        .ok()
+}
+
+/// Names come back out of the store, so one that is not UTF-8 means the store
+/// holds something this server never wrote.
+fn stored_names<'a>(names: &[&'a [u8]; 3]) -> Result<[&'a str; 3], ()> {
+    let mut text = [""; 3];
+    for (slot, name) in text.iter_mut().zip(names) {
+        *slot = str::from_utf8(name).map_err(|err| {
+            error!(target: "sentry", "the directory holds a name that is not text: {err}");
+        })?;
+    }
+
+    Ok(text)
+}
+
 /// One name out of the `0x1e` filter triple.
 enum Filter<'a> {
     /// Zero filled: the listing has not started yet.
@@ -708,9 +1038,15 @@ fn filter<'a>(records: &[TlvEntry<'a>], tag: u8) -> Filter<'a> {
 
 /// The quota is the only numeric field the client writes little endian.
 fn quota(records: &[TlvEntry]) -> u32 {
+    quota_field(records).unwrap_or(0)
+}
+
+/// Update has to tell "leave the quota alone" from "set it to zero", which the
+/// add commands never need to.
+fn quota_field(records: &[TlvEntry]) -> Option<u32> {
     record(records, TAG_QUOTA)
         .and_then(|value| <[u8; 4]>::try_from(value).ok())
-        .map_or(0, u32::from_le_bytes)
+        .map(u32::from_le_bytes)
 }
 
 /// `0x1f` continues a user listing by echoing the cursor of the previous row.
@@ -864,7 +1200,7 @@ mod tests {
         let rows = names(&mut sentry);
         assert_eq!(rows.last().unwrap().0, b"Test Company");
         let directory = sentry.directory().unwrap();
-        assert!(directory.rows.last().unwrap().is_company());
+        assert_eq!(directory.rows.last().unwrap().level(), Level::Company);
     }
 
     #[test]
@@ -1219,7 +1555,7 @@ mod tests {
         );
         let directory = sentry.directory().unwrap();
         let group = directory.find(&[b"Test Company", b"Demo Group"]).unwrap();
-        assert!(directory.rows[group].is_group());
+        assert_eq!(directory.rows[group].level(), Level::Group);
     }
 
     #[test]
@@ -1523,8 +1859,477 @@ mod tests {
         assert_eq!(tags(&queried), tags(&listed));
     }
 
+    /// Update and delete address a record by the cursor of a preceding query,
+    /// so a test has to walk the same two steps the client does.
+    fn cursor_of(sentry: &mut SentryServer, level: u8, names: &[(u8, &[u8])]) -> Vec<u8> {
+        let response = sentry.process(&query(level, names)).unwrap();
+        assert_eq!(response[0], COMMAND_REPLY, "the query should find the row");
+        let records = records(&response[1..]).unwrap();
+        record(&records, TAG_CURSOR).unwrap().to_vec()
+    }
+
+    fn update(cursor: &[u8], authority: Authority, quota: u32) -> Vec<u8> {
+        let mut request = vec![COMMAND_UPDATE];
+        request.extend(tagged(TAG_CURSOR, cursor));
+        request.extend(tagged(TAG_AUTHORITY, &authority.0.to_be_bytes()));
+        request.extend(tagged(TAG_QUOTA, &quota.to_le_bytes()));
+        request
+    }
+
+    fn delete(cursor: &[u8]) -> Vec<u8> {
+        let mut request = vec![COMMAND_DELETE];
+        request.extend(tagged(TAG_CURSOR, cursor));
+        request
+    }
+
+    fn change_password(names: &[(u8, &[u8])], password: &[u8]) -> Vec<u8> {
+        let mut request = vec![COMMAND_CHANGE_PASSWORD];
+        for (tag, name) in names {
+            request.extend(tagged(*tag, name));
+        }
+        request.extend(tagged(property::PASSWORD, password));
+        request
+    }
+
+    #[test]
+    fn updates_the_record_the_cursor_addresses() {
+        let mut sentry = sentry();
+        let cursor = cursor_of(
+            &mut sentry,
+            QUERY_USER,
+            &[
+                (property::COMPANY, b"GRiD"),
+                (property::GROUP, b"Demo"),
+                (property::USER, b"GUEST"),
+            ],
+        );
+
+        let response = sentry
+            .process(&update(&cursor, Authority::GROUP_ADMIN, MEGABYTE))
+            .unwrap();
+
+        assert_eq!(response, [COMMAND_ACK]);
+        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.authority, Authority::GROUP_ADMIN.0);
+        assert_eq!(account.quota, MEGABYTE);
+    }
+
+    /// A company and a group carry no authority of their own, so the update
+    /// reaches nothing but the quota.
+    #[test]
+    fn updates_the_quota_of_a_group() {
+        let mut sentry = sentry();
+        let cursor = cursor_of(
+            &mut sentry,
+            QUERY_GROUP,
+            &[(property::COMPANY, b"GRiD"), (property::GROUP, b"Demo")],
+        );
+
+        assert_eq!(
+            sentry
+                .process(&update(&cursor, Authority::GROUP_ADMIN, MEGABYTE))
+                .unwrap(),
+            [COMMAND_ACK]
+        );
+
+        let directory = sentry.directory().unwrap();
+        let group = directory.find(&[b"GRiD", b"Demo", b"Demo"]).unwrap();
+        assert_eq!(directory.get(group).unwrap().quota, MEGABYTE);
+    }
+
+    #[test]
+    fn deletes_the_record_the_cursor_addresses() {
+        let mut sentry = sentry();
+        let cursor = cursor_of(
+            &mut sentry,
+            QUERY_USER,
+            &[
+                (property::COMPANY, b"GRiD"),
+                (property::GROUP, b"Demo"),
+                (property::USER, b"GUEST"),
+            ],
+        );
+
+        assert_eq!(sentry.process(&delete(&cursor)).unwrap(), [COMMAND_ACK]);
+
+        assert!(
+            db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A group is deleted with everything under it, so the users it held do not
+    /// outlive the group they belong to.
+    #[test]
+    fn deleting_a_group_takes_its_users_with_it() {
+        let mut sentry = sentry();
+        let cursor = cursor_of(
+            &mut sentry,
+            QUERY_GROUP,
+            &[(property::COMPANY, b"GRiD"), (property::GROUP, b"Demo")],
+        );
+
+        assert_eq!(sentry.process(&delete(&cursor)).unwrap(), [COMMAND_ACK]);
+
+        let rows = names(&mut sentry);
+        assert!(rows.iter().all(|(_, group, _)| group != b"Demo"));
+    }
+
+    /// The session holds the account it signed on as, so deleting that account
+    /// would leave the session pointing at nothing.
+    #[test]
+    fn refuses_to_delete_the_signed_on_account() {
+        let mut sentry = sentry();
+        let cursor = cursor_of(&mut sentry, QUERY_USER, &[]);
+
+        assert_eq!(
+            sentry.process(&delete(&cursor)).unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+        assert!(
+            db::find_user(&sentry.conn, "GRiD", "Systems", "MANAGER")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn refuses_an_update_or_delete_without_a_valid_cursor() {
+        let mut sentry = sentry();
+
+        assert_eq!(
+            sentry
+                .process(&update(b"99", Authority::NORMAL, MEGABYTE))
+                .unwrap(),
+            status_response(STATUS_ACCOUNT_NOT_DEFINED)
+        );
+        assert_eq!(
+            sentry.process(&[COMMAND_DELETE]).unwrap(),
+            status_response(STATUS_ACCOUNT_NOT_DEFINED)
+        );
+    }
+
+    /// The group row above the users is out of reach for want of the level,
+    /// even though it is on the administrator's own path.
+    #[test]
+    fn a_group_administrator_may_edit_only_its_own_group() {
+        let mut admin = sentry_as(Authority::GROUP_ADMIN);
+        let guest = cursor_of(
+            &mut admin,
+            QUERY_USER,
+            &[
+                (property::COMPANY, b"GRiD"),
+                (property::GROUP, b"Demo"),
+                (property::USER, b"GUEST"),
+            ],
+        );
+
+        assert_eq!(
+            admin
+                .process(&update(&guest, Authority::NORMAL, MEGABYTE))
+                .unwrap(),
+            [COMMAND_ACK]
+        );
+
+        let group = cursor_of(
+            &mut admin,
+            QUERY_GROUP,
+            &[(property::COMPANY, b"GRiD"), (property::GROUP, b"Demo")],
+        );
+        assert_eq!(
+            admin
+                .process(&update(&group, Authority::NORMAL, MEGABYTE))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+    }
+
+    /// The scope check is what keeps an administrator inside its own subtree:
+    /// the level alone would let a group administrator reach a sibling group.
+    #[test]
+    fn refuses_to_read_or_write_outside_the_own_subtree() {
+        let mut sentry = sentry();
+        add_group(&mut sentry, b"GRiD", b"Demo Group");
+        add_user(
+            &mut sentry,
+            b"GRiD",
+            b"Demo Group",
+            b"Lenin",
+            b"SECRET",
+            Authority::GROUP_ADMIN,
+        );
+
+        let actor = db::find_user(&sentry.conn, "GRiD", "Demo Group", "Lenin")
+            .unwrap()
+            .unwrap();
+        let mut admin = SentryServer::new(sentry.conn.clone(), actor);
+
+        assert_eq!(
+            admin
+                .process(&query(
+                    QUERY_USER,
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Demo"),
+                        (property::USER, b"GUEST"),
+                    ],
+                ))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+    }
+
+    /// A normal user may look at its own record and at nothing else — not even
+    /// the company and group rows it sits under, which carry a quota and a disk
+    /// usage of their own. Its own row names them anyway.
+    #[test]
+    fn a_normal_user_may_query_only_its_own_record() {
+        let mut sentry = sentry_as(Authority::NORMAL);
+
+        let response = sentry.process(&query(QUERY_USER, &[])).unwrap();
+        assert_eq!(response[0], COMMAND_REPLY);
+        let records = records(&response[1..]).unwrap();
+        assert_eq!(record(&records, property::COMPANY).unwrap(), b"GRiD");
+        assert_eq!(record(&records, property::GROUP).unwrap(), b"Demo");
+
+        assert_eq!(
+            sentry
+                .process(&query(QUERY_COMPANY, &[(property::COMPANY, b"GRiD")]))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+        assert_eq!(
+            sentry
+                .process(&query(
+                    QUERY_GROUP,
+                    &[(property::COMPANY, b"GRiD"), (property::GROUP, b"Demo")],
+                ))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+        assert_eq!(
+            sentry
+                .process(&query(
+                    QUERY_USER,
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Systems"),
+                        (property::USER, b"MANAGER"),
+                    ],
+                ))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+    }
+
+    /// The listing is how AdministratorSentry fills its account browser, and it
+    /// hands out every row whole — authority, quota, disk usage. An account with
+    /// nothing to administer has no business walking it.
+    #[test]
+    fn refuses_the_listing_to_an_account_that_administers_nothing() {
+        let mut sentry = sentry_as(Authority::NORMAL);
+
+        assert_eq!(
+            sentry.process(&list_first(b"", b"", b"")).unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+        assert_eq!(
+            sentry.process(&[COMMAND_LIST_NEXT]).unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+    }
+
+    /// Walking from the very start is the client's own first step, so the skip
+    /// has to happen inside the walk rather than by refusing the request.
+    #[test]
+    fn the_listing_shows_an_administrator_only_its_own_subtree() {
+        let mut sentry = sentry();
+        add_company(&mut sentry, b"Test Company");
+        add_group(&mut sentry, b"Test Company", b"Demo Group");
+        add_user(
+            &mut sentry,
+            b"Test Company",
+            b"Demo Group",
+            b"Lenin",
+            b"SECRET",
+            Authority::GROUP_ADMIN,
+        );
+
+        let actor = db::find_user(&sentry.conn, "Test Company", "Demo Group", "Lenin")
+            .unwrap()
+            .unwrap();
+        let mut admin = SentryServer::new(sentry.conn.clone(), actor);
+
+        // The company and the group the actor hangs from stay in the listing —
+        // they are its own path, and the browser needs them to draw the tree —
+        // while the demo company beside them is gone entirely.
+        let rows = names(&mut admin);
+        assert!(
+            rows.iter().all(|(company, ..)| company == b"Test Company"),
+            "the listing leaked rows outside the company: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .all(|(_, group, _)| group == b"Test Company" || group == b"Demo Group"),
+            "the listing leaked rows outside the group: {rows:?}"
+        );
+        assert!(rows.iter().any(|(.., user)| user == b"Lenin"));
+    }
+
+    #[test]
+    fn refuses_an_update_that_grants_more_than_the_actor_holds() {
+        let mut admin = sentry_as(Authority::GROUP_ADMIN);
+        let cursor = cursor_of(
+            &mut admin,
+            QUERY_USER,
+            &[
+                (property::COMPANY, b"GRiD"),
+                (property::GROUP, b"Demo"),
+                (property::USER, b"GUEST"),
+            ],
+        );
+
+        assert_eq!(
+            admin
+                .process(&update(&cursor, Authority::SYSTEM_ADMIN, MEGABYTE))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+    }
+
+    /// UserSentry sends no names at all, meaning the account of the session.
+    #[test]
+    fn every_account_may_change_its_own_password() {
+        let mut sentry = sentry_as(Authority::NORMAL);
+
+        assert_eq!(
+            sentry.process(&change_password(&[], b"NEW")).unwrap(),
+            status_response(status::OK)
+        );
+
+        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.password, "NEW");
+    }
+
+    #[test]
+    fn an_administrator_may_change_the_password_of_another_account() {
+        let mut sentry = sentry();
+
+        assert_eq!(
+            sentry
+                .process(&change_password(
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Demo"),
+                        (property::USER, b"GUEST"),
+                    ],
+                    b"NEW",
+                ))
+                .unwrap(),
+            status_response(status::OK)
+        );
+
+        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.password, "NEW");
+    }
+
+    #[test]
+    fn refuses_to_change_the_password_of_another_account_without_the_authority() {
+        let mut sentry = sentry_as(Authority::NORMAL);
+
+        assert_eq!(
+            sentry
+                .process(&change_password(
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Systems"),
+                        (property::USER, b"MANAGER"),
+                    ],
+                    b"NEW",
+                ))
+                .unwrap(),
+            status_response(STATUS_INSUFFICIENT_AUTHORITY)
+        );
+
+        let account = db::find_user(&sentry.conn, "GRiD", "Systems", "MANAGER")
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.password, "MANAGER");
+    }
+
+    #[test]
+    fn reports_a_password_change_for_an_account_that_is_not_defined() {
+        let mut sentry = sentry();
+
+        assert_eq!(
+            sentry
+                .process(&change_password(
+                    &[
+                        (property::COMPANY, b"GRiD"),
+                        (property::GROUP, b"Demo"),
+                        (property::USER, b"NOBODY"),
+                    ],
+                    b"NEW",
+                ))
+                .unwrap(),
+            status_response(STATUS_ACCOUNT_NOT_DEFINED)
+        );
+    }
+
+    #[test]
+    fn refuses_a_password_change_with_an_empty_password() {
+        let mut sentry = sentry();
+
+        assert_eq!(
+            sentry.process(&change_password(&[], b"")).unwrap(),
+            status_response(status::PROPERTY_MISSING)
+        );
+    }
+
+    /// The password the Sentry stores is the one sign-on then compares against,
+    /// so a change has to carry through to the next sign-on.
+    #[test]
+    fn a_changed_password_is_the_one_sign_on_accepts() {
+        let conn = Rc::new(db::open_in_memory());
+        let actor = signed_on(&conn, Authority::SYSTEM_ADMIN);
+        let mut sentry = SentryServer::new(conn.clone(), actor);
+
+        sentry
+            .process(&change_password(
+                &[
+                    (property::COMPANY, b"GRiD"),
+                    (property::GROUP, b"Demo"),
+                    (property::USER, b"GUEST"),
+                ],
+                b"NEW",
+            ))
+            .unwrap();
+
+        assert!(
+            crate::authenticate(
+                &conn,
+                &crate::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"GUEST"),
+            )
+            .is_err()
+        );
+        assert!(
+            crate::authenticate(
+                &conn,
+                &crate::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"NEW"),
+            )
+            .is_ok()
+        );
+    }
+
     /// Every mandatory record must fit the destination the client allocates,
-    /// otherwise `sub_3332` silently truncates the value.
+    /// which silently truncates anything longer.
     #[test]
     fn listing_records_fit_the_client_buffers() {
         let mut sentry = sentry();

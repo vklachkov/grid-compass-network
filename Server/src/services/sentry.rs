@@ -1493,9 +1493,9 @@ mod tests {
             status_response(status::OK)
         );
 
-        let account = crate::authenticate(
+        let account = crate::gridserver::authenticate(
             &conn,
-            &crate::sign_on_properties(b"GRiD", b"Demo", b"Lenin", b"SECRET"),
+            &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"Lenin", b"SECRET"),
         )
         .expect("the created user should be able to sign on");
 
@@ -2313,16 +2313,16 @@ mod tests {
             .unwrap();
 
         assert!(
-            crate::authenticate(
+            crate::gridserver::authenticate(
                 &conn,
-                &crate::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"GUEST"),
+                &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"GUEST"),
             )
             .is_err()
         );
         assert!(
-            crate::authenticate(
+            crate::gridserver::authenticate(
                 &conn,
-                &crate::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"NEW"),
+                &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"NEW"),
             )
             .is_ok()
         );

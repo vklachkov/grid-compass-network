@@ -53,6 +53,9 @@ INSERT INTO users (group_id, name, password, authority, quota)
 /// One row of the flattened directory. The levels that do not apply are empty,
 /// unlike the wire form, where a company repeats its name at all three.
 pub struct Account {
+    /// The row id of the level this account stands for, which is what the
+    /// tables keyed by an account — the mailbox above all — reference.
+    pub id: i64,
     pub level: i64,
     pub company: String,
     pub group: String,
@@ -71,15 +74,15 @@ pub struct Account {
 /// creates a company or a group — so the two upper levels report the fixed
 /// authority their level implies: 30 company administrator, 20 group.
 const LOAD_SQL: &str = r#"
-SELECT level, company, grp, usr, password, authority, quota, used FROM (
-    SELECT 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
+SELECT id, level, company, grp, usr, password, authority, quota, used FROM (
+    SELECT c.id AS id, 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
            30 AS authority, c.quota, c.used
       FROM companies c
     UNION ALL
-    SELECT 1, c.name, g.name, '', '', 20, g.quota, g.used
+    SELECT g.id, 1, c.name, g.name, '', '', 20, g.quota, g.used
       FROM groups g JOIN companies c ON c.id = g.company_id
     UNION ALL
-    SELECT 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
+    SELECT u.id, 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
       FROM users u
       JOIN groups g ON g.id = u.group_id
       JOIN companies c ON c.id = g.company_id
@@ -91,16 +94,16 @@ ORDER BY company COLLATE NOCASE, grp COLLATE NOCASE, level, usr COLLATE NOCASE
 /// wire order is the client's business, but a reader wants the directory in the
 /// order it grew.
 const LOAD_BY_AGE_SQL: &str = r#"
-SELECT level, company, grp, usr, password, authority, quota, used FROM (
-    SELECT 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
+SELECT id, level, company, grp, usr, password, authority, quota, used FROM (
+    SELECT c.id AS id, 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
            30 AS authority, c.quota, c.used,
            c.id AS company_id, 0 AS group_id, 0 AS user_id
       FROM companies c
     UNION ALL
-    SELECT 1, c.name, g.name, '', '', 20, g.quota, g.used, c.id, g.id, 0
+    SELECT g.id, 1, c.name, g.name, '', '', 20, g.quota, g.used, c.id, g.id, 0
       FROM groups g JOIN companies c ON c.id = g.company_id
     UNION ALL
-    SELECT 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used,
+    SELECT u.id, 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used,
            c.id, g.id, u.id
       FROM users u
       JOIN groups g ON g.id = u.group_id
@@ -121,14 +124,15 @@ fn query_accounts(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<Account>
     conn.prepare(sql)?
         .query_map([], |row| {
             Ok(Account {
-                level: row.get(0)?,
-                company: row.get(1)?,
-                group: row.get(2)?,
-                user: row.get(3)?,
-                password: row.get(4)?,
-                authority: row.get(5)?,
-                quota: row.get(6)?,
-                used: row.get(7)?,
+                id: row.get(0)?,
+                level: row.get(1)?,
+                company: row.get(2)?,
+                group: row.get(3)?,
+                user: row.get(4)?,
+                password: row.get(5)?,
+                authority: row.get(6)?,
+                quota: row.get(7)?,
+                used: row.get(8)?,
             })
         })?
         .collect()
@@ -141,7 +145,7 @@ pub fn find_user(
     user: &str,
 ) -> rusqlite::Result<Option<Account>> {
     conn.query_row(
-        "SELECT c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
+        "SELECT u.id, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used
            FROM users u
            JOIN groups g ON g.id = u.group_id
            JOIN companies c ON c.id = g.company_id
@@ -149,14 +153,15 @@ pub fn find_user(
         params![company, group, user],
         |row| {
             Ok(Account {
+                id: row.get(0)?,
                 level: LEVEL_USER,
-                company: row.get(0)?,
-                group: row.get(1)?,
-                user: row.get(2)?,
-                password: row.get(3)?,
-                authority: row.get(4)?,
-                quota: row.get(5)?,
-                used: row.get(6)?,
+                company: row.get(1)?,
+                group: row.get(2)?,
+                user: row.get(3)?,
+                password: row.get(4)?,
+                authority: row.get(5)?,
+                quota: row.get(6)?,
+                used: row.get(7)?,
             })
         },
     )

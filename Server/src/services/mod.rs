@@ -37,7 +37,7 @@ impl Vipc {
     pub fn new(conn: Rc<Connection>, actor: db::Account) -> Self {
         Self {
             vfs: Vfs::new(),
-            mail: MailServer::new(),
+            mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
             sentry: SentryServer::new(conn, actor),
             broadcast: BroadcastServer::new(),
         }
@@ -247,7 +247,7 @@ mod tests {
         vipc.process_message(&vfs_message(2, &[2, 0, 0, 0x7e, 1, 0, 1]))
             .unwrap();
 
-        let mut outgoing = tagged(b't', b"User");
+        let mut outgoing = tagged(b't', b"MANAGER");
         outgoing.extend(tagged(b's', b"Sent through VFS"));
         outgoing.extend(tagged(b'n', b"Stored body"));
         outgoing.extend(tagged(b'z', b""));
@@ -262,20 +262,19 @@ mod tests {
             0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0,
         ];
         let responses = vipc.process_message(&request).unwrap();
-        assert_eq!(responses.len(), 2);
-        let first = responses[0].to_bytes();
-        let second = responses[1].to_bytes();
-        assert_eq!(first[6] & 1, 1);
-        assert_eq!(second[6] & 1, 0);
+
+        assert_eq!(responses.len(), 1);
+        let listed = responses[0].to_bytes();
+        assert_eq!(listed[6] & 1, 0);
         assert!(
-            second
+            listed
                 .windows(b"Sent through VFS".len())
                 .any(|bytes| bytes == b"Sent through VFS")
         );
     }
 
     #[test]
-    fn serializes_demo_mail_list_response() {
+    fn serializes_empty_mail_list_response() {
         let mut vipc = vipc();
         let request = [
             0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 1, 0, 1, 0, 0, 0, 0, 0, 0,
@@ -286,12 +285,7 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert_eq!(
             responses[0].to_bytes(),
-            [
-                0x44, 0x74, 7, 0x80, 56, 0, 0, 5, 0, 0, 0xfd, 12, 0, b'b', 1, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 1, 0xfd, 17, 0, b'k', b'G', b'R', b'i', b'D', b' ', b'M', b'a', b'i', b'l',
-                b' ', b'S', b'e', b'r', b'v', b'e', b'r', 0xfd, 10, 0, b's', b'D', b'e', b'm',
-                b'o', b' ', b'm', b'a', b'i', b'l', 0xfd, 1, 0, b'z',
-            ]
+            [0x44, 0x74, 7, 0x80, 8, 0, 0, 5, 0, 0, 0xfd, 1, 0, b'z']
         );
     }
 }

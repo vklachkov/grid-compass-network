@@ -1,11 +1,15 @@
-use std::io;
+use std::{io, rc::Rc};
 
-use log::{debug, warn};
+use log::{debug, error, warn};
+use rusqlite::Connection;
 
 use super::protocol::app::{MORE, TAG_TERMINATOR, TRANSPORT_HEADER_LEN};
-use crate::shared::{
-    Tlv,
-    io::{CursorExt, ReadExt, u16_len},
+use crate::{
+    db::mailbox::{self, Message, NewMessage},
+    shared::{
+        Tlv,
+        io::{CursorExt, ReadExt, u16_len},
+    },
 };
 
 const RECORD_MARKER: u8 = 0xfd;
@@ -22,8 +26,15 @@ const MAX_TAG_VALUE: usize = u16::MAX as usize - 1;
 
 pub struct MailServer {
     fragments: Vec<Pending>,
-    messages: Vec<MailMessage>,
-    next_mail_id: u32,
+    conn: Rc<Connection>,
+    /// The mailbox every request in this session reads and writes, and the
+    /// sender of everything it writes: mail is stored per account, so a session
+    /// can only ever reach the one it signed on to.
+    owner_id: i64,
+    /// The name the owner appears under in the mail it sends. It is held here
+    /// rather than read back per message because the size of a response has to
+    /// be known before the message is stored.
+    owner_name: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -33,27 +44,92 @@ pub struct MailResponse {
 }
 
 impl MailServer {
-    pub fn new() -> Self {
+    pub fn new(conn: Rc<Connection>, owner_id: i64, owner_name: String) -> Self {
         Self {
             fragments: vec![Pending::default(); 17],
-            messages: vec![MailMessage::demo()],
-            next_mail_id: 2,
+            conn,
+            owner_id,
+            owner_name,
         }
     }
 
     pub fn accept_outgoing(&mut self, data: Vec<u8>) -> bool {
-        let Some(message) = MailMessage::from_outgoing(mail_id(self.next_mail_id), data) else {
+        let Some(outgoing) = Outgoing::parse(&data) else {
             return false;
         };
         // TODO: fragment large Mail responses to the PDL payload limit instead of rejecting them.
-        if !message.fits_vipc_payload() {
+        if !outgoing.fits_vipc_payload(&self.owner_name) {
             warn!(target: "mail", "refused a message too large for one VIPC payload");
             return false;
         }
-        self.next_mail_id = self.next_mail_id.wrapping_add(1).max(2);
-        self.messages.push(message);
-        debug!(target: "mail", "stored an outgoing message, {} in the mailbox", self.messages.len());
-        true
+
+        let recipient_id = match mailbox::find_recipient(
+            &self.conn,
+            self.owner_id,
+            outgoing.recipient,
+        ) {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                warn!(target: "mail", "refused a message to the unknown recipient {}", outgoing.recipient);
+                return false;
+            }
+            Err(err) => {
+                error!(target: "mail", "failed to look up a recipient: {err}");
+                return false;
+            }
+        };
+
+        match mailbox::insert(
+            &self.conn,
+            &outgoing.as_new_message(self.owner_id, recipient_id),
+        ) {
+            Ok(mail_id) => {
+                debug!(target: "mail", "stored an outgoing message as mail {mail_id}");
+                true
+            }
+            Err(err) => {
+                error!(target: "mail", "failed to store an outgoing message: {err}");
+                false
+            }
+        }
+    }
+
+    /// A failed read is answered with nothing at all rather than an empty
+    /// mailbox: the client would take the latter for a definite answer, and a
+    /// database that is momentarily unreadable has said nothing definite.
+    fn select(&mut self, request: SRequest) -> Option<Vec<(u8, Vec<u8>)>> {
+        let responses = match request {
+            SRequest::List => mailbox_list(&self.read(mailbox::list)?),
+            SRequest::Detail(id) => {
+                let message = match mail_id_value(id) {
+                    Some(id) => self.read(|conn, owner| mailbox::find(conn, owner, id))?,
+                    None => None,
+                };
+                vec![(0, detail_or_empty(message.as_ref()))]
+            }
+            SRequest::ReadNew => {
+                let message = self.read(mailbox::first_unread)?;
+                if let Some(message) = &message
+                    && let Err(err) = mailbox::mark_read(&self.conn, message.id)
+                {
+                    error!(target: "mail", "failed to mark mail {} read: {err}", message.mail_id);
+                    return None;
+                }
+                vec![(0, detail_or_empty(message.as_ref()))]
+            }
+        };
+
+        Some(responses)
+    }
+
+    fn read<T>(&self, query: impl FnOnce(&Connection, i64) -> rusqlite::Result<T>) -> Option<T> {
+        match query(&self.conn, self.owner_id) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                error!(target: "mail", "failed to read the mailbox: {err}");
+                None
+            }
+        }
     }
 
     pub fn process(&mut self, note: u16, payload: &[u8]) -> Option<Vec<MailResponse>> {
@@ -93,28 +169,7 @@ impl MailServer {
             }
             4 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
             6 if valid_tagged_request(&pending.data) => vec![(0, app_frame(RECORD_MARKER, b"T"))],
-            7 => match SRequest::parse(&pending.data)? {
-                SRequest::List => mailbox_list(&self.messages),
-                SRequest::Detail(id) => vec![(
-                    0,
-                    self.messages
-                        .iter()
-                        .find(|message| message.id == id)
-                        .map(mail_detail)
-                        .unwrap_or_else(empty_mail_result),
-                )],
-                SRequest::ReadNew => vec![(
-                    0,
-                    self.messages
-                        .iter_mut()
-                        .find(|message| !message.read)
-                        .map(|message| {
-                            message.read = true;
-                            mail_detail(message)
-                        })
-                        .unwrap_or_else(empty_mail_result),
-                )],
-            },
+            7 => self.select(SRequest::parse(&pending.data)?)?,
             8 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
             0x0d if valid_i_request(&pending.data) => {
                 vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
@@ -232,60 +287,66 @@ fn app_frame(marker: u8, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-const DEMO_MAIL_ID: [u8; 6] = [1, 0, 0, 0, 0, 0];
-const DEMO_MAIL_BODY: &[u8] =
-    b"Welcome to GRiD Mail. This is a demo message from the local server.";
-const SERVER_NAME: &[u8] = b"GRiD Mail Server";
-
-struct MailMessage {
-    id: [u8; 6],
-    recipient: Vec<u8>,
-    sender: Vec<u8>,
-    subject: Vec<u8>,
-    body: Vec<u8>,
-    read: bool,
+/// An outgoing mail object as the client wrote it, before it is given a mail id
+/// and stored.
+struct Outgoing<'a> {
+    recipient: &'a str,
+    subject: &'a str,
+    body: &'a str,
 }
 
-impl MailMessage {
-    fn demo() -> Self {
-        Self {
-            id: DEMO_MAIL_ID,
-            recipient: b"Demo User".to_vec(),
-            sender: SERVER_NAME.to_vec(),
-            subject: b"Demo mail".to_vec(),
-            body: DEMO_MAIL_BODY.to_vec(),
-            read: false,
-        }
-    }
-
-    fn from_outgoing(id: [u8; 6], original: Vec<u8>) -> Option<Self> {
-        let recipient = tagged_value(&original, b't')?.to_vec();
-        let subject = tagged_value(&original, b's')?.to_vec();
-        let body = outgoing_body(&original)?.to_vec();
+impl<'a> Outgoing<'a> {
+    fn parse(original: &'a [u8]) -> Option<Self> {
         Some(Self {
-            id,
-            recipient,
-            sender: b"User".to_vec(),
-            subject,
-            body,
-            read: false,
+            recipient: text(tagged_value(original, b't')?)?,
+            subject: text(tagged_value(original, b's')?)?,
+            body: text(outgoing_body(original)?)?,
         })
     }
 
-    fn fits_vipc_payload(&self) -> bool {
-        self.recipient.len() <= MAX_TAG_VALUE
-            && self.sender.len() <= MAX_TAG_VALUE
-            && self.subject.len() <= MAX_TAG_VALUE
-            && self.body.len() <= MAX_TAG_VALUE
-            && mail_detail_len(self)
+    fn as_new_message(&self, sender_id: i64, recipient_id: i64) -> NewMessage<'_> {
+        NewMessage {
+            sender_id,
+            recipient_id,
+            subject: self.subject,
+            body: self.body,
+            // TODO: store the attachment the `a` and `g` tags describe once
+            // their grammar is recovered.
+            attachment_path: None,
+        }
+    }
+
+    fn fits_vipc_payload(&self, sender: &str) -> bool {
+        let lengths = [
+            self.recipient.len(),
+            sender.len(),
+            self.subject.len(),
+            self.body.len(),
+        ];
+
+        lengths.iter().all(|&length| length <= MAX_TAG_VALUE)
+            && detail_len(self.recipient, sender, self.subject, self.body)
                 .checked_add(TRANSPORT_HEADER_LEN)
                 .is_some_and(|length| length <= u16::MAX as usize)
     }
 }
 
-fn mail_id(value: u32) -> [u8; 6] {
+/// GRiD text is ASCII, which every byte the client sends should already satisfy;
+/// anything above it is not text this server can store and the message is
+/// refused rather than mangled.
+fn text(value: &[u8]) -> Option<&str> {
+    value.is_ascii().then(|| str::from_utf8(value).ok())?
+}
+
+/// The wire form of a mail id is six bytes of which the client only ever fills
+/// the lower four, so a query naming the upper two addresses no stored message.
+fn mail_id_bytes(value: u32) -> [u8; 6] {
     let bytes = value.to_le_bytes();
     [bytes[0], bytes[1], bytes[2], bytes[3], 0, 0]
+}
+
+fn mail_id_value(id: [u8; 6]) -> Option<u32> {
+    (id[4] == 0 && id[5] == 0).then(|| u32::from_le_bytes([id[0], id[1], id[2], id[3]]))
 }
 
 fn tagged_value(data: &[u8], wanted: u8) -> Option<&[u8]> {
@@ -306,15 +367,15 @@ fn outgoing_body(data: &[u8]) -> Option<&[u8]> {
         .map(|pair| pair[0].value)
 }
 
-fn mail_header(message: &MailMessage) -> Vec<u8> {
+fn mail_header(message: &Message) -> Vec<u8> {
     let mut value = Vec::with_capacity(12);
     value.push(b'b');
-    value.extend(message.id);
+    value.extend(mail_id_bytes(message.mail_id));
     value.extend([0, 0, 0, 0, 1]);
     app_frame(RECORD_MARKER, &value)
 }
 
-fn mailbox_list(messages: &[MailMessage]) -> Vec<(u8, Vec<u8>)> {
+fn mailbox_list(messages: &[Message]) -> Vec<(u8, Vec<u8>)> {
     if messages.is_empty() {
         return vec![(0, empty_mail_result())];
     }
@@ -325,12 +386,8 @@ fn mailbox_list(messages: &[MailMessage]) -> Vec<(u8, Vec<u8>)> {
         .enumerate()
         .map(|(index, message)| {
             let mut data = mail_header(message);
-            let mut sender = vec![b'k'];
-            sender.extend_from_slice(&message.sender);
-            data.extend(app_frame(RECORD_MARKER, &sender));
-            let mut subject = vec![b's'];
-            subject.extend_from_slice(&message.subject);
-            data.extend(app_frame(RECORD_MARKER, &subject));
+            data.extend(tagged_record(b'k', &message.sender));
+            data.extend(tagged_record(b's', &message.subject));
             data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
             let flags = if index == last { 0 } else { MORE };
@@ -343,13 +400,19 @@ fn empty_mail_result() -> Vec<u8> {
     app_frame(RECORD_MARKER, &[TAG_TERMINATOR])
 }
 
-fn mail_detail_len(message: &MailMessage) -> usize {
+fn tagged_record(tag: u8, value: &str) -> Vec<u8> {
+    let mut record = vec![tag];
+    record.extend_from_slice(value.as_bytes());
+    app_frame(RECORD_MARKER, &record)
+}
+
+fn detail_len(recipient: &str, sender: &str, subject: &str, body: &str) -> usize {
     let tagged_records = [
-        message.recipient.len(),
-        message.sender.len(),
-        message.sender.len(),
-        message.subject.len(),
-        message.body.len(),
+        recipient.len(),
+        sender.len(),
+        sender.len(),
+        subject.len(),
+        body.len(),
     ];
 
     // `b` header, five tagged fields, `z`, then the raw body drained by GRiDMail.
@@ -358,28 +421,34 @@ fn mail_detail_len(message: &MailMessage) -> usize {
         .map(|length| 4 + length)
         .sum::<usize>()
         + 4
-        + message.body.len()
+        + body.len()
 }
 
-fn mail_detail(message: &MailMessage) -> Vec<u8> {
-    debug_assert!(message.fits_vipc_payload());
-    let mut data = Vec::with_capacity(mail_detail_len(message));
+fn detail_or_empty(message: Option<&Message>) -> Vec<u8> {
+    message.map_or_else(empty_mail_result, mail_detail)
+}
+
+fn mail_detail(message: &Message) -> Vec<u8> {
+    let mut data = Vec::with_capacity(detail_len(
+        &message.recipient,
+        &message.sender,
+        &message.subject,
+        &message.body,
+    ));
     data.extend(mail_header(message));
     for (tag, value) in [
-        (b't', message.recipient.as_slice()),
-        (b'f', message.sender.as_slice()),
-        (b'k', message.sender.as_slice()),
-        (b's', message.subject.as_slice()),
-        (b'n', message.body.as_slice()),
+        (b't', &message.recipient),
+        (b'f', &message.sender),
+        (b'k', &message.sender),
+        (b's', &message.subject),
+        (b'n', &message.body),
     ] {
-        let mut record = vec![tag];
-        record.extend_from_slice(value);
-        data.extend(app_frame(RECORD_MARKER, &record));
+        data.extend(tagged_record(tag, value));
     }
     data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
     // After parsing `z`, GRiDMail directly drains the remaining response stream.
-    data.extend_from_slice(&message.body);
+    data.extend_from_slice(message.body.as_bytes());
     data
 }
 
@@ -394,12 +463,48 @@ fn transport(flags: u8, connection_id: u8, data: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn demo_mail_list() -> Vec<(u8, Vec<u8>)> {
-        mailbox_list(&[MailMessage::demo()])
+    use crate::db;
+
+    const STORED_BODY: &str = "Stored body";
+
+    fn mail_server() -> MailServer {
+        let conn = Rc::new(db::open_in_memory());
+        let owner = db::find_user(&conn, "GRiD", "Demo", "GUEST")
+            .expect("read the demo directory")
+            .expect("GUEST should exist");
+
+        MailServer::new(conn, owner.id, owner.user)
     }
 
-    fn demo_mail_detail() -> Vec<u8> {
-        mail_detail(&MailMessage::demo())
+    /// Every test that reads a mailbox has to fill it first: a fresh database
+    /// holds no mail at all.
+    fn with_one_message() -> MailServer {
+        let mut mail = mail_server();
+        assert!(mail.accept_outgoing(outgoing("Stored subject", STORED_BODY)));
+        mail
+    }
+
+    /// GUEST addresses itself: a recipient has to be an account of the sender's
+    /// own group, and the mailbox the tests then read is the sender's.
+    fn outgoing(subject: &str, body: &str) -> Vec<u8> {
+        let mut data = app_frame(RECORD_MARKER, b"tGUEST");
+        data.extend(tagged_record(b's', subject));
+        data.extend(tagged_record(b'n', body));
+        data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
+        data
+    }
+
+    fn stored_message(mail: &MailServer, mail_id: u32) -> Message {
+        mailbox::find(&mail.conn, mail.owner_id, mail_id)
+            .expect("read the mailbox")
+            .expect("the message should be stored")
+    }
+
+    fn detail_query(mail_id: u32) -> Vec<u8> {
+        let mut query = vec![0xfd, 27, 0, b'S', 7, 0, 0];
+        query.extend(mail_id_bytes(mail_id));
+        query.extend(b"kuvspoftcandgbzxy");
+        query
     }
 
     fn request(more: bool, data: &[u8]) -> Vec<u8> {
@@ -417,7 +522,7 @@ mod tests {
 
     #[test]
     fn initializes_session_from_observed_payload() {
-        let mut mail = MailServer::new();
+        let mut mail = mail_server();
         assert_eq!(
             mail.process(0, &[0, 5, 0, 0, 0xfe, 4, 0, b'a', 0x88, 0x2c, 1]),
             Some(response(0, 0xfe, b"z"))
@@ -426,7 +531,7 @@ mod tests {
 
     #[test]
     fn assembles_transport_fragments() {
-        let mut mail = MailServer::new();
+        let mut mail = mail_server();
         assert_eq!(
             mail.process(6, &request(true, &[0xfd, 2, 0, b't', b'x'])),
             None
@@ -439,7 +544,7 @@ mod tests {
 
     #[test]
     fn drops_interleaved_connection() {
-        let mut mail = MailServer::new();
+        let mut mail = mail_server();
         assert_eq!(
             mail.process(6, &request(true, &[0xfd, 2, 0, b't', b'x'])),
             None
@@ -449,7 +554,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_commands() {
-        let mut mail = MailServer::new();
+        let mut mail = mail_server();
         assert_eq!(mail.process(7, &request(false, &[])), None);
         assert_eq!(mail.process(8, &request(false, b"x")), None);
         assert_eq!(
@@ -460,7 +565,7 @@ mod tests {
 
     #[test]
     fn completes_initial_server_message_drain() {
-        let mut mail = MailServer::new();
+        let mut mail = mail_server();
         assert_eq!(
             mail.process(0x10, &[0, 1, 0, 0]),
             Some(vec![MailResponse {
@@ -471,10 +576,25 @@ mod tests {
     }
 
     #[test]
-    fn returns_demo_mail_list() {
-        let mut mail = MailServer::new();
+    fn an_empty_mailbox_lists_nothing() {
+        let mut mail = mail_server();
         let query = [0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0];
-        let [(flags, data)] = demo_mail_list().try_into().unwrap();
+        assert_eq!(
+            mail.process(7, &request(false, &query)),
+            Some(vec![MailResponse {
+                note: 7,
+                payload: transport(0, 5, &empty_mail_result()),
+            }])
+        );
+    }
+
+    #[test]
+    fn returns_the_stored_mail_list() {
+        let mut mail = with_one_message();
+        let query = [0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0];
+        let [(flags, data)] = mailbox_list(&[stored_message(&mail, 1)])
+            .try_into()
+            .unwrap();
         assert_eq!(
             mail.process(7, &request(false, &query)),
             Some(vec![MailResponse {
@@ -484,15 +604,17 @@ mod tests {
         );
     }
 
-    fn assert_detail_response(query: &[u8]) {
-        let responses = MailServer::new()
-            .process(7, &request(false, query))
-            .unwrap();
+    #[test]
+    fn returns_complete_mail_for_detail_query() {
+        let mut mail = with_one_message();
+        let expected = mail_detail(&stored_message(&mail, 1));
+
+        let responses = mail.process(7, &request(false, &detail_query(1))).unwrap();
         let [response] = responses.as_slice() else {
             panic!("detail query returned more than one response");
         };
         assert_eq!(response.note, 7);
-        assert_eq!(response.payload, transport(0, 5, &demo_mail_detail()));
+        assert_eq!(response.payload, transport(0, 5, &expected));
 
         let tagged_end = response
             .payload
@@ -500,16 +622,26 @@ mod tests {
             .position(|bytes| bytes == [0xfd, 1, 0, b'z'])
             .unwrap()
             + 4;
-        assert_eq!(&response.payload[tagged_end..], DEMO_MAIL_BODY);
+        assert_eq!(&response.payload[tagged_end..], STORED_BODY.as_bytes());
         assert_eq!(response.payload[0] & MORE, 0);
     }
 
+    /// The upper two bytes of a mail id are always zero, so a query that sets
+    /// them addresses no message the server could have handed out.
     #[test]
-    fn returns_complete_demo_mail_for_detail_query() {
+    fn a_detail_query_for_an_unknown_id_returns_nothing() {
+        let mut mail = with_one_message();
         let mut query = vec![0xfd, 27, 0, b'S', 7, 0, 0];
-        query.extend(DEMO_MAIL_ID);
+        query.extend([1, 0, 0, 0, 1, 0]);
         query.extend(b"kuvspoftcandgbzxy");
-        assert_detail_response(&query);
+
+        assert_eq!(
+            mail.process(7, &request(false, &query)),
+            Some(vec![MailResponse {
+                note: 7,
+                payload: transport(0, 5, &empty_mail_result()),
+            }])
+        );
     }
 
     fn read_new_query() -> Vec<u8> {
@@ -520,15 +652,16 @@ mod tests {
     }
 
     #[test]
-    fn returns_demo_mail_once_for_read_new_query() {
-        let mut mail = MailServer::new();
+    fn returns_stored_mail_once_for_read_new_query() {
+        let mut mail = with_one_message();
         let query = read_new_query();
+        let expected = mail_detail(&stored_message(&mail, 1));
 
         assert_eq!(
             mail.process(7, &request(false, &query)),
             Some(vec![MailResponse {
                 note: 7,
-                payload: transport(0, 5, &demo_mail_detail()),
+                payload: transport(0, 5, &expected),
             }])
         );
         assert_eq!(
@@ -542,32 +675,23 @@ mod tests {
 
     #[test]
     fn read_new_state_does_not_hide_mail_from_normal_detail_query() {
-        let mut mail = MailServer::new();
-        let read_new = read_new_query();
-        mail.process(7, &request(false, &read_new)).unwrap();
+        let mut mail = with_one_message();
+        let expected = mail_detail(&stored_message(&mail, 1));
+        mail.process(7, &request(false, &read_new_query())).unwrap();
 
-        let mut detail = vec![0xfd, 27, 0, b'S', 7, 0, 0];
-        detail.extend(DEMO_MAIL_ID);
-        detail.extend(b"kuvspoftcandgbzxy");
         assert_eq!(
-            mail.process(7, &request(false, &detail)),
+            mail.process(7, &request(false, &detail_query(1))),
             Some(vec![MailResponse {
                 note: 7,
-                payload: transport(0, 5, &demo_mail_detail()),
+                payload: transport(0, 5, &expected),
             }])
         );
     }
 
     #[test]
     fn returns_each_mailbox_item_in_its_own_response() {
-        let mut outgoing = Vec::new();
-        outgoing.extend(app_frame(0xfd, b"tUser"));
-        outgoing.extend(app_frame(0xfd, b"sSecond"));
-        outgoing.extend(app_frame(0xfd, b"nSecond body"));
-        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
-
-        let mut mail = MailServer::new();
-        assert!(mail.accept_outgoing(outgoing));
+        let mut mail = with_one_message();
+        assert!(mail.accept_outgoing(outgoing("Second", "Second body")));
 
         let query = [0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0];
         let responses = mail.process(7, &request(false, &query)).unwrap();
@@ -595,24 +719,20 @@ mod tests {
 
     #[test]
     fn accepts_outgoing_mail_and_selects_it_by_id() {
-        let mut outgoing = Vec::new();
-        outgoing.extend(app_frame(0xfd, b"tUser"));
-        outgoing.extend(app_frame(0xfd, b"sSent subject"));
-        outgoing.extend(app_frame(0xfd, b"DDemo attachment nnoise"));
-        outgoing.extend(app_frame(0xfd, b"nSent body"));
-        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
+        let mut data = app_frame(RECORD_MARKER, b"tGUEST");
+        data.extend(app_frame(RECORD_MARKER, b"sSent subject"));
+        data.extend(app_frame(RECORD_MARKER, b"DDemo attachment nnoise"));
+        data.extend(app_frame(RECORD_MARKER, b"nSent body"));
+        data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
-        let mut mail = MailServer::new();
-        assert!(mail.accept_outgoing(outgoing));
-        assert_eq!(mail.messages.len(), 2);
-        assert_eq!(mail.messages[1].id, [2, 0, 0, 0, 0, 0]);
-        assert_eq!(mail.messages[1].subject, b"Sent subject");
-        assert_eq!(mail.messages[1].body, b"Sent body");
+        let mut mail = with_one_message();
+        assert!(mail.accept_outgoing(data));
 
-        let mut detail = vec![0xfd, 27, 0, b'S', 7, 0, 0];
-        detail.extend(mail.messages[1].id);
-        detail.extend(b"kuvspoftcandgbzxy");
-        let responses = mail.process(7, &request(false, &detail)).unwrap();
+        let stored = stored_message(&mail, 2);
+        assert_eq!(stored.subject, "Sent subject");
+        assert_eq!(stored.body, "Sent body");
+
+        let responses = mail.process(7, &request(false, &detail_query(2))).unwrap();
         let [response] = responses.as_slice() else {
             panic!("detail query returned more than one response");
         };
@@ -627,56 +747,65 @@ mod tests {
 
     #[test]
     fn accepts_outgoing_mail_with_a_stale_tail() {
-        let mut outgoing = Vec::new();
-        outgoing.extend(app_frame(RECORD_MARKER, b"tUser"));
-        outgoing.extend(app_frame(RECORD_MARKER, b"sShort"));
-        outgoing.extend(app_frame(RECORD_MARKER, b"nShort body"));
-        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
-        outgoing.extend_from_slice(b" leftovers of a longer object");
+        let mut data = outgoing("Short", "Short body");
+        data.extend_from_slice(b" leftovers of a longer object");
 
-        let mut mail = MailServer::new();
-        assert!(mail.accept_outgoing(outgoing));
-        assert_eq!(mail.messages[1].subject, b"Short");
-        assert_eq!(mail.messages[1].body, b"Short body");
+        let mut mail = mail_server();
+        assert!(mail.accept_outgoing(data));
+
+        let stored = stored_message(&mail, 1);
+        assert_eq!(stored.subject, "Short");
+        assert_eq!(stored.body, "Short body");
     }
 
     #[test]
     fn read_new_iterates_all_mail_then_terminates() {
-        let mut mail = MailServer::new();
-        let mut outgoing = Vec::new();
-        outgoing.extend(app_frame(0xfd, b"tUser"));
-        outgoing.extend(app_frame(0xfd, b"sSecond"));
-        outgoing.extend(app_frame(0xfd, b"nSecond body"));
-        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
-        assert!(mail.accept_outgoing(outgoing));
+        let mut mail = with_one_message();
+        assert!(mail.accept_outgoing(outgoing("Second", "Second body")));
 
         let query = read_new_query();
         let first = mail.process(7, &request(false, &query)).unwrap();
         let second = mail.process(7, &request(false, &query)).unwrap();
         let third = mail.process(7, &request(false, &query)).unwrap();
-        assert!(first[0].payload.ends_with(DEMO_MAIL_BODY));
+        assert!(first[0].payload.ends_with(STORED_BODY.as_bytes()));
         assert!(second[0].payload.ends_with(b"Second body"));
         assert_eq!(third[0].payload, transport(0, 5, &empty_mail_result()));
     }
 
     #[test]
     fn rejects_mail_that_cannot_fit_in_one_vipc_response() {
-        let body = vec![b'x'; 40_000];
-        let mut outgoing = Vec::new();
-        outgoing.extend(app_frame(0xfd, b"tUser"));
-        outgoing.extend(app_frame(0xfd, b"sLarge"));
-        let mut body_record = vec![b'n'];
-        body_record.extend(body);
-        outgoing.extend(app_frame(0xfd, &body_record));
-        outgoing.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
+        let mut mail = mail_server();
 
-        let mut mail = MailServer::new();
-        assert!(!mail.accept_outgoing(outgoing));
-        assert_eq!(mail.messages.len(), 1);
+        assert!(!mail.accept_outgoing(outgoing("Large", &"x".repeat(40_000))));
+        assert!(mailbox::list(&mail.conn, mail.owner_id).unwrap().is_empty());
+    }
+
+    /// The mailbox belongs to the account that signed on, so a message stored
+    /// by one session is invisible to a session signed on as somebody else.
+    #[test]
+    fn a_mailbox_is_not_shared_between_accounts() {
+        let mail = with_one_message();
+        let other = db::find_user(&mail.conn, "GRiD", "Systems", "MANAGER")
+            .unwrap()
+            .unwrap();
+        let mut other_mail = MailServer::new(mail.conn.clone(), other.id, other.user);
+
+        assert!(
+            mailbox::list(&other_mail.conn, other.id)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            other_mail.process(7, &request(false, &detail_query(1))),
+            Some(vec![MailResponse {
+                note: 7,
+                payload: transport(0, 5, &empty_mail_result()),
+            }])
+        );
     }
 
     #[test]
     fn rejects_transport_error() {
-        assert_eq!(MailServer::new().process(0, &[0, 5, 1, 0]), None);
+        assert_eq!(mail_server().process(0, &[0, 5, 1, 0]), None);
     }
 }

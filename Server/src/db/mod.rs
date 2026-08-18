@@ -1,3 +1,4 @@
+pub mod mailbox;
 pub mod users;
 
 use anyhow::Context;
@@ -10,7 +11,7 @@ pub use users::*;
 /// contributes its own steps, and the order here is the order they are applied,
 /// so a module's steps may only depend on those of the modules ahead of it.
 fn migrations() -> Vec<M<'static>> {
-    users::MIGRATIONS.to_vec()
+    [users::MIGRATIONS, mailbox::MIGRATIONS].concat()
 }
 
 /// WAL is what makes the frontend's own connection safe alongside the session

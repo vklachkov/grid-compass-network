@@ -138,6 +138,7 @@ fn users(conn: &rusqlite::Connection) -> Result<minijinja::Value> {
 
     Ok(context! {
         title => "Users",
+        nav => "users",
         poll_interval_ms => POLL_INTERVAL_MS,
         refreshed_at => clock_time(),
         accounts => rows,
@@ -184,6 +185,7 @@ fn mailbox(conn: &rusqlite::Connection, account_query: &AccountQuery) -> Result<
 
     let base = context! {
         title => "Mailbox",
+        nav => "mailbox",
         company => company,
         group => group,
         user => user,
@@ -232,6 +234,7 @@ fn message(conn: &rusqlite::Connection, query: &MessageQuery) -> Result<minijinj
 
     Ok(context! {
         title => "Message",
+        nav => "mailbox",
         mailbox_href => account.mailbox_href(),
         message => context! {
             mail_id => message.mail_id,

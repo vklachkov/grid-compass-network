@@ -29,6 +29,11 @@
         margin-bottom: 8px;
       }
 
+      .nav .here, .nav .here A {
+        background: #f7aa00;
+        color: #000000;
+      }
+
       .bar {
         margin: 0 0 6px 0;
       }
@@ -118,7 +123,10 @@
   </HEAD>
   <BODY>
     <IMG SRC="/GRiD.png" WIDTH="185" HEIGHT="55" ALT="GRiD" CLASS="logo">
-    <DIV CLASS="nav">[ <A HREF="/users">Users</A> ] [ <A HREF="/mailbox">Mailbox</A> ]</DIV>
+    <DIV CLASS="nav">
+      <SPAN CLASS="{% if nav == 'users' %}here{% endif %}">[ <A HREF="/users">Users</A> ]</SPAN>
+      <SPAN CLASS="{% if nav == 'mailbox' %}here{% endif %}">[ <A HREF="/mailbox">Mailbox</A> ]</SPAN>
+    </DIV>
     {% block body %}{% endblock %}
   </BODY>
 </HTML>

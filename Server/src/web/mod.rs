@@ -10,9 +10,7 @@ use minijinja::{Environment, context};
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::{db, db::mailbox, shared};
-
-const POLL_INTERVAL_MS: u32 = 5000;
+use crate::{db, db::mailbox, services::sentry::Authority, shared};
 
 /// Templates are compiled in so a missing file fails the build rather than
 /// every page at runtime.
@@ -25,11 +23,8 @@ fn environment() -> Result<Environment<'static>> {
     env.set_lstrip_blocks(true);
 
     env.add_template("layout.html", include_str!("templates/layout.html"))?;
-    env.add_template(
-        "users_table.html",
-        include_str!("templates/users_table.html"),
-    )?;
     env.add_template("users.html", include_str!("templates/users.html"))?;
+    env.add_template("new_user.html", include_str!("templates/new_user.html"))?;
     env.add_template("mailbox.html", include_str!("templates/mailbox.html"))?;
     env.add_template("message.html", include_str!("templates/message.html"))?;
 
@@ -68,16 +63,29 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 
-fn handle(request: Request, env: &Environment<'_>, db_path: &str) -> Result<()> {
+fn handle(mut request: Request, env: &Environment<'_>, db_path: &str) -> Result<()> {
     let url = request.url().to_owned();
     let mut parts = url.splitn(2, '?');
     let path = parts.next().unwrap_or("");
     let raw_query = parts.next().unwrap_or("");
+    let posted = request.method() == &tiny_http::Method::Post;
 
     match path {
         "/" => respond(request, redirect("/users")),
         "/users" => respond(request, page(env, db_path, "users.html", users)),
-        "/users/table" => respond(request, page(env, db_path, "users_table.html", users)),
+        "/users/new" if posted => {
+            let form = read_body(&mut request);
+            respond(
+                request,
+                page(env, db_path, "new_user.html", |conn| {
+                    create_user(conn, &query(&form))
+                }),
+            )
+        }
+        "/users/new" => respond(
+            request,
+            page(env, db_path, "new_user.html", |_| Ok(new_user_form())),
+        ),
         "/mailbox" => respond(
             request,
             page(env, db_path, "mailbox.html", |conn| {
@@ -101,7 +109,14 @@ fn logo() -> Response<std::io::Cursor<Vec<u8>>> {
     let content_type = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..])
         .expect("a constant header should parse");
 
-    Response::from_data(LOGO).with_header(content_type)
+    // Long enough that the logo is not refetched on every page, short enough
+    // that replacing it does not leave the old one cached.
+    let cache = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=3600"[..])
+        .expect("a constant header should parse");
+
+    Response::from_data(LOGO)
+        .with_header(content_type)
+        .with_header(cache)
 }
 
 fn page(
@@ -139,7 +154,6 @@ fn users(conn: &rusqlite::Connection) -> Result<minijinja::Value> {
     Ok(context! {
         title => "Users",
         nav => "users",
-        poll_interval_ms => POLL_INTERVAL_MS,
         refreshed_at => clock_time(),
         accounts => rows,
     })
@@ -171,6 +185,126 @@ fn row(account: &db::Account) -> minijinja::Value {
         quota => quota(account.quota),
         used => account.used,
     }
+}
+
+#[derive(Default, Deserialize)]
+struct NewUser {
+    #[serde(default)]
+    company: String,
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    password: String,
+    /// A browser that follows the form sends one of the offered levels, so an
+    /// unparsable value is already a caller that went around the page — it is
+    /// carried through as a number and refused by name below.
+    #[serde(default)]
+    authority: u16,
+}
+
+/// The quota the Sentry gives an account it is not told a size for. The page
+/// asks for no quota of its own, so every user it creates starts unlimited and
+/// is narrowed from the client if that is wanted.
+const NEW_USER_QUOTA: u32 = u32::MAX;
+
+fn new_user_form() -> minijinja::Value {
+    form_context(&NewUser::default(), context! {})
+}
+
+fn form_context(form: &NewUser, extra: minijinja::Value) -> minijinja::Value {
+    let authorities: Vec<_> = Authority::LEVELS
+        .iter()
+        .map(|level| context! { value => level.stored(), name => level.name() })
+        .collect();
+
+    context! {
+        title => "New user",
+        nav => "users",
+        authorities => authorities,
+        company => &form.company,
+        group => &form.group,
+        user => &form.user,
+        password => &form.password,
+        authority => form.authority,
+        ..extra
+    }
+}
+
+/// Every check the page makes is made here rather than in the browser: the form
+/// is only a convenience, and the same POST can arrive without ever having been
+/// drawn.
+fn create_user(conn: &rusqlite::Connection, form: &NewUser) -> Result<minijinja::Value> {
+    if let Some(error) = validate_new_user(conn, form)? {
+        return Ok(form_context(form, context! { alert => error }));
+    }
+
+    let group_id = db::find_group(conn, &form.company, &form.group)
+        .context("read the directory")?
+        .context("the group should still exist")?;
+
+    db::insert_user(
+        conn,
+        group_id,
+        &form.user,
+        &form.password,
+        form.authority,
+        NEW_USER_QUOTA,
+    )
+    .context("create the user")?;
+
+    info!(target: "web", "created user {}/{}/{}", form.company, form.group, form.user);
+
+    Ok(form_context(
+        &NewUser::default(),
+        context! {
+            alert => format!(
+                "Created the user {}/{}/{}.",
+                form.company, form.group, form.user
+            ),
+        },
+    ))
+}
+
+fn validate_new_user(conn: &rusqlite::Connection, form: &NewUser) -> Result<Option<String>> {
+    if form.user.is_empty() {
+        return Ok(Some("The user name is empty.".to_owned()));
+    }
+
+    if form.password.is_empty() {
+        return Ok(Some("The password is empty.".to_owned()));
+    }
+
+    if !Authority::from_stored(form.authority).is_defined() {
+        return Ok(Some(format!(
+            "{} is not an authority level.",
+            form.authority
+        )));
+    }
+
+    if db::find_company(conn, &form.company)
+        .context("read the directory")?
+        .is_none()
+    {
+        return Ok(Some(format!("No such company: {}.", form.company)));
+    }
+
+    if db::find_group(conn, &form.company, &form.group)
+        .context("read the directory")?
+        .is_none()
+    {
+        return Ok(Some(format!("No such group: {}.", form.group)));
+    }
+
+    if db::find_user(conn, &form.company, &form.group, &form.user)
+        .context("read the directory")?
+        .is_some()
+    {
+        return Ok(Some(format!("The user {} already exists.", form.user)));
+    }
+
+    Ok(None)
 }
 
 /// The account whose mailbox is shown is named the way the Sentry names one, by
@@ -297,6 +431,19 @@ struct MessageQuery {
 /// the empty search form rather than an error page.
 fn query<T: Default + serde::de::DeserializeOwned>(query: &str) -> T {
     serde_urlencoded::from_str(query).unwrap_or_default()
+}
+
+/// A body that cannot be read is answered as an empty form, which the validation
+/// below refuses by the same path as a form left blank.
+fn read_body(request: &mut Request) -> String {
+    let mut body = String::new();
+
+    if let Err(err) = request.as_reader().read_to_string(&mut body) {
+        warn!(target: "web", "failed to read a request body: {err}");
+        body.clear();
+    }
+
+    body
 }
 
 /// The directory spells "no limit" as a saturated field rather than as a flag

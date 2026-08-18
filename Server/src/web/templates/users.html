@@ -1,59 +1,30 @@
 {% extends "layout.html" %}
 
 {% block body %}
-<DIV ID="rows">{% include "users_table.html" %}</DIV>
+<P CLASS="bar">Updated at {{ refreshed_at }} <SPAN CLASS="gap"><A HREF="/users/new">New user</A></SPAN></P>
 
-{# The table is swapped through a wrapping DIV because IE makes innerHTML
-   read-only on TABLE, TBODY and TR, and assigning to it raises "unknown runtime
-   error": https://stackoverflow.com/questions/2324782/how-to-use-createelement-to-create-a-new-table
-   Without XHR the page just stays as the server rendered it. #}
-<SCRIPT TYPE="text/javascript" LANGUAGE="JavaScript">
-<!--
-  function open_request() {
-    if (window.XMLHttpRequest) {
-      return new XMLHttpRequest();
-    }
-
-    if (window.ActiveXObject) {
-      try {
-        return new ActiveXObject("Microsoft.XMLHTTP");
-      } catch (e) {
-        return null;
-      }
-    }
-
-    return null;
-  }
-
-  function poll() {
-    var request = open_request();
-
-    if (!request) {
-      return;
-    }
-
-    // A cache-busting parameter, since IE serves a repeated GET from its cache.
-    // https://learn.microsoft.com/en-us/archive/blogs/ieinternals/ie8s-native-xmlhttprequest-object-restrictions-bugs-and-notes
-    request.open("GET", "/users/table?t=" + (new Date()).getTime(), true);
-
-    request.onreadystatechange = function () {
-      if (request.readyState != 4) {
-        return;
-      }
-
-      if (request.status == 200) {
-        document.getElementById("rows").innerHTML = request.responseText;
-      }
-
-      window.setTimeout(poll, {{ poll_interval_ms }});
-    };
-
-    request.send(null);
-  }
-
-  if (document.getElementById) {
-    window.setTimeout(poll, {{ poll_interval_ms }});
-  }
-// -->
-</SCRIPT>
+<TABLE ID="users" WIDTH="100%">
+  <TR>
+    <TH>Level</TH>
+    <TH>Company</TH>
+    <TH>Group</TH>
+    <TH>User</TH>
+    <TH>Password</TH>
+    <TH>Authority</TH>
+    <TH>Quota</TH>
+    <TH>Used</TH>
+  </TR>
+  {% for account in accounts %}
+  <TR CLASS="{{ account.level }}">
+    <TD>{{ account.level }}</TD>
+    <TD>{{ account.company }}</TD>
+    <TD>{{ account.group }}</TD>
+    <TD>{{ account.user }}</TD>
+    <TD>{{ account.password }}</TD>
+    <TD>{{ account.authority }}</TD>
+    <TD CLASS="num">{{ account.quota }}</TD>
+    <TD CLASS="num">{{ account.used }}</TD>
+  </TR>
+  {% endfor %}
+</TABLE>
 {% endblock %}

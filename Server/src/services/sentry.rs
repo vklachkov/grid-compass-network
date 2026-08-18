@@ -76,7 +76,7 @@ impl Authority {
     pub const COMPANY_ADMIN: Self = Self(30);
     pub const SYSTEM_ADMIN: Self = Self(40);
 
-    const LEVELS: [Self; 4] = [
+    pub const LEVELS: [Self; 4] = [
         Self::NORMAL,
         Self::GROUP_ADMIN,
         Self::COMPANY_ADMIN,
@@ -90,8 +90,12 @@ impl Authority {
     /// Anything outside the four defined levels would compare against the
     /// thresholds in ways the client never intends — `0xffff` outranks a system
     /// administrator — so an unknown value is refused rather than stored.
-    fn is_defined(self) -> bool {
+    pub fn is_defined(self) -> bool {
         Self::LEVELS.contains(&self)
+    }
+
+    pub fn stored(self) -> u16 {
+        self.0
     }
 
     pub fn name(self) -> &'static str {

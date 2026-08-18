@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block body %}
+<P CLASS="bar">[ <A HREF="/users">Back to the users</A> ]</P>
+
+<FORM ACTION="/users/new" METHOD="POST">
+  <TABLE CLASS="plain">
+    <TR>
+      <TH>Company</TH>
+      <TD><INPUT TYPE="TEXT" CLASS="text" NAME="company" VALUE="{{ company }}" SIZE="24"></TD>
+    </TR>
+    <TR>
+      <TH>Group</TH>
+      <TD><INPUT TYPE="TEXT" CLASS="text" NAME="group" VALUE="{{ group }}" SIZE="24"></TD>
+    </TR>
+    <TR>
+      <TH>User</TH>
+      <TD><INPUT TYPE="TEXT" CLASS="text" NAME="user" VALUE="{{ user }}" SIZE="24"></TD>
+    </TR>
+    <TR>
+      <TH>Authority</TH>
+      <TD>
+        <SELECT NAME="authority">
+          {% for level in authorities %}
+          <OPTION VALUE="{{ level.value }}"{% if level.value == authority %} SELECTED{% endif %}>{{ level.name }}</OPTION>
+          {% endfor %}
+        </SELECT>
+      </TD>
+    </TR>
+    <TR>
+      <TH>Password</TH>
+      {# TYPE="TEXT" rather than PASSWORD on purpose: the directory shows every
+         password in the clear anyway, so masking it here would hide nothing and
+         only cost the operator a typo they cannot see. #}
+      <TD><INPUT TYPE="TEXT" CLASS="text" NAME="password" VALUE="{{ password }}" SIZE="24"></TD>
+    </TR>
+  </TABLE>
+  <P><INPUT TYPE="SUBMIT" VALUE="Create"></P>
+</FORM>
+
+{% if alert %}
+<SCRIPT TYPE="text/javascript">
+  window.alert({{ alert|tojson }});
+</SCRIPT>
+{% endif %}
+{% endblock %}

@@ -1,6 +1,5 @@
-use anyhow::Context;
 use rusqlite::{Connection, OptionalExtension, params};
-use rusqlite_migration::{M, Migrations};
+use rusqlite_migration::M;
 
 /// The wire form has no level field — the client tells a company from a group
 /// from a user by which of the three names repeat — so the level is
@@ -16,7 +15,7 @@ pub const LEVEL_USER: i64 = 2;
 /// the database's own: it governs the unique indexes, the lookups and the
 /// listing order alike. It applies to `TEXT` only, which is why names are not
 /// `BLOB`.
-const MIGRATIONS: &[M<'_>] = &[M::up(
+pub const MIGRATIONS: &[M<'static>] = &[M::up(
     r#"
 CREATE TABLE companies (
     id    INTEGER PRIMARY KEY,
@@ -62,30 +61,6 @@ pub struct Account {
     pub authority: u16,
     pub quota: u32,
     pub used: u32,
-}
-
-/// WAL is what makes the frontend's own connection safe alongside the session
-/// threads: readers do not block the writer and vice versa. `busy_timeout`
-/// covers the remaining case of two writers meeting.
-pub fn open(path: &str) -> anyhow::Result<Connection> {
-    let mut conn = Connection::open(path).with_context(|| format!("open database {path}"))?;
-
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .context("enable WAL")?;
-    conn.pragma_update(None, "busy_timeout", 5000)
-        .context("set busy timeout")?;
-    conn.pragma_update(None, "foreign_keys", true)
-        .context("enable foreign keys")?;
-
-    migrate(&mut conn)?;
-
-    Ok(conn)
-}
-
-pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
-    Migrations::new(MIGRATIONS.to_vec())
-        .to_latest(conn)
-        .context("apply database migrations")
 }
 
 /// The order is the one the client walks: a company, then each of its groups
@@ -353,7 +328,7 @@ pub fn delete_user(
 #[cfg(test)]
 pub fn open_in_memory() -> Connection {
     let mut conn = Connection::open_in_memory().expect("open in-memory database");
-    migrate(&mut conn).expect("migrate in-memory database");
+    super::migrate(&mut conn).expect("migrate in-memory database");
 
     conn.execute_batch(
         r#"
@@ -380,20 +355,13 @@ INSERT INTO users (group_id, name, password, authority, quota, used) VALUES
 mod tests {
     use super::*;
 
-    #[test]
-    fn migrations_are_valid() {
-        Migrations::new(MIGRATIONS.to_vec())
-            .validate()
-            .expect("migrations should be valid");
-    }
-
     /// A fresh database has to be one an administrator can sign on to: every
     /// other account is created through the Sentry, which refuses every command
     /// below `SYSTEM_ADMIN`.
     #[test]
     fn a_fresh_database_holds_only_the_seeded_administrator() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate(&mut conn).unwrap();
+        super::super::migrate(&mut conn).unwrap();
 
         let rows: Vec<_> = load(&conn)
             .unwrap()

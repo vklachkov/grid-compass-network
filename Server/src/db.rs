@@ -112,8 +112,38 @@ SELECT level, company, grp, usr, password, authority, quota, used FROM (
 ORDER BY company COLLATE NOCASE, grp COLLATE NOCASE, level, usr COLLATE NOCASE
 "#;
 
+/// The same walk as `LOAD_SQL`, ordered by the ids instead of the names: the
+/// wire order is the client's business, but a reader wants the directory in the
+/// order it grew.
+const LOAD_BY_AGE_SQL: &str = r#"
+SELECT level, company, grp, usr, password, authority, quota, used FROM (
+    SELECT 0 AS level, c.name AS company, '' AS grp, '' AS usr, '' AS password,
+           30 AS authority, c.quota, c.used,
+           c.id AS company_id, 0 AS group_id, 0 AS user_id
+      FROM companies c
+    UNION ALL
+    SELECT 1, c.name, g.name, '', '', 20, g.quota, g.used, c.id, g.id, 0
+      FROM groups g JOIN companies c ON c.id = g.company_id
+    UNION ALL
+    SELECT 2, c.name, g.name, u.name, u.password, u.authority, u.quota, u.used,
+           c.id, g.id, u.id
+      FROM users u
+      JOIN groups g ON g.id = u.group_id
+      JOIN companies c ON c.id = g.company_id
+)
+ORDER BY company_id, group_id, level, user_id
+"#;
+
 pub fn load(conn: &Connection) -> rusqlite::Result<Vec<Account>> {
-    conn.prepare(LOAD_SQL)?
+    query_accounts(conn, LOAD_SQL)
+}
+
+pub fn load_by_age(conn: &Connection) -> rusqlite::Result<Vec<Account>> {
+    query_accounts(conn, LOAD_BY_AGE_SQL)
+}
+
+fn query_accounts(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<Account>> {
+    conn.prepare(sql)?
         .query_map([], |row| {
             Ok(Account {
                 level: row.get(0)?,

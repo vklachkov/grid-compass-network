@@ -1,0 +1,90 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+  <HEAD>
+    <TITLE>{{ title }} - GRiD Server</TITLE>
+    <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+    <STYLE TYPE="text/css">
+    <!--
+      BODY {
+        background: #000000;
+        color: #f7aa00;
+        font-family: monospace;
+        font-size: 13px;
+        margin: 16px;
+      }
+
+      A {
+        color: #f7aa00;
+      }
+
+      .logo {
+        display: block;
+        border: 0;
+        margin: 0 0 14px 0;
+        width: 10%;
+        min-width: 90px;
+      }
+
+      .nav {
+        margin-bottom: 8px;
+      }
+
+      .bar {
+        margin: 0 0 6px 0;
+      }
+
+      INPUT {
+        background: #000000;
+        color: #f7aa00;
+        border: 1px solid #f7aa00;
+        font-family: monospace;
+        font-size: 13px;
+        padding: 1px 8px;
+        cursor: pointer;
+      }
+
+      INPUT:hover {
+        background: #f7aa00;
+        color: #000000;
+      }
+
+      INPUT:active {
+        background: #f7aa00;
+        color: #000000;
+        border-style: inset;
+      }
+
+      TABLE {
+        border-collapse: collapse;
+        border: 1px solid #f7aa00;
+      }
+
+      TH, TD {
+        border: 1px solid #f7aa00;
+        color: #f7aa00;
+        font-family: monospace;
+        font-size: 13px;
+        padding: 1px 6px;
+        text-align: left;
+      }
+
+      TH {
+        font-weight: bold;
+      }
+
+      TD.num {
+        text-align: right;
+      }
+
+      TR.company TD {
+        font-weight: bold;
+      }
+    -->
+    </STYLE>
+  </HEAD>
+  <BODY>
+    <IMG SRC="/GRiD.png" WIDTH="185" HEIGHT="55" ALT="GRiD" CLASS="logo">
+    <DIV CLASS="nav">[ <A HREF="/users">Users</A> ]</DIV>
+    {% block body %}{% endblock %}
+  </BODY>
+</HTML>

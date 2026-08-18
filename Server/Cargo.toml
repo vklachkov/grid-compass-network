@@ -8,5 +8,13 @@ anyhow = "1.0.102"
 bstr = { version = "1.12.1", default-features = false }
 env_filter = { version = "2.0.0", default-features = false, features = ["std"] }
 log = "0.4.33"
+minijinja = "2.24.0"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 rusqlite_migration = "2.6"
+tiny_http = "0.12.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

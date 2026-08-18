@@ -4,6 +4,7 @@
 
 mod error;
 
+pub mod env;
 pub mod io;
 pub mod tlv;
 

@@ -7,9 +7,10 @@ use std::{
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 use minijinja::{Environment, context};
+use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::{db, shared};
+use crate::{db, db::mailbox, shared};
 
 const POLL_INTERVAL_MS: u32 = 5000;
 
@@ -29,6 +30,8 @@ fn environment() -> Result<Environment<'static>> {
         include_str!("templates/users_table.html"),
     )?;
     env.add_template("users.html", include_str!("templates/users.html"))?;
+    env.add_template("mailbox.html", include_str!("templates/mailbox.html"))?;
+    env.add_template("message.html", include_str!("templates/message.html"))?;
 
     Ok(env)
 }
@@ -67,12 +70,26 @@ pub fn serve() -> Result<()> {
 
 fn handle(request: Request, env: &Environment<'_>, db_path: &str) -> Result<()> {
     let url = request.url().to_owned();
-    let path = url.split('?').next().unwrap_or("");
+    let mut parts = url.splitn(2, '?');
+    let path = parts.next().unwrap_or("");
+    let raw_query = parts.next().unwrap_or("");
 
     match path {
         "/" => respond(request, redirect("/users")),
-        "/users" => respond(request, page(env, db_path, "users.html")),
-        "/users/table" => respond(request, page(env, db_path, "users_table.html")),
+        "/users" => respond(request, page(env, db_path, "users.html", users)),
+        "/users/table" => respond(request, page(env, db_path, "users_table.html", users)),
+        "/mailbox" => respond(
+            request,
+            page(env, db_path, "mailbox.html", |conn| {
+                mailbox(conn, &query(raw_query))
+            }),
+        ),
+        "/mailbox/message" => respond(
+            request,
+            page(env, db_path, "message.html", |conn| {
+                message(conn, &query(raw_query))
+            }),
+        ),
         "/GRiD.png" => request.respond(logo()).context("write the response"),
         _ => respond(request, not_found()),
     }
@@ -91,8 +108,9 @@ fn page(
     env: &Environment<'_>,
     db_path: &str,
     template: &str,
+    build: impl FnOnce(&rusqlite::Connection) -> Result<minijinja::Value>,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
-    match render(env, db_path, template) {
+    match render(env, db_path, template, build) {
         Ok(html) => html_response(200, html),
         Err(err) => {
             warn!(target: "web", "failed to render {template}: {err}");
@@ -101,20 +119,29 @@ fn page(
     }
 }
 
-fn render(env: &Environment<'_>, db_path: &str, template: &str) -> Result<String> {
+fn render(
+    env: &Environment<'_>,
+    db_path: &str,
+    template: &str,
+    build: impl FnOnce(&rusqlite::Connection) -> Result<minijinja::Value>,
+) -> Result<String> {
     // A connection per request instead of one behind a lock: WAL lets these
     // reads run alongside the session threads' writes.
     let conn = db::open(db_path)?;
-    let accounts = db::load_by_age(&conn).context("read the account directory")?;
 
+    Ok(env.get_template(template)?.render(build(&conn)?)?)
+}
+
+fn users(conn: &rusqlite::Connection) -> Result<minijinja::Value> {
+    let accounts = db::load_by_age(conn).context("read the account directory")?;
     let rows: Vec<_> = accounts.iter().map(row).collect();
 
-    Ok(env.get_template(template)?.render(context! {
+    Ok(context! {
         title => "Users",
         poll_interval_ms => POLL_INTERVAL_MS,
         refreshed_at => clock_time(),
         accounts => rows,
-    })?)
+    })
 }
 
 fn row(account: &db::Account) -> minijinja::Value {
@@ -143,6 +170,130 @@ fn row(account: &db::Account) -> minijinja::Value {
         quota => quota(account.quota),
         used => account.used,
     }
+}
+
+/// The account whose mailbox is shown is named the way the Sentry names one, by
+/// the whole company/group/user chain, because a bare user name is only unique
+/// within its group.
+fn mailbox(conn: &rusqlite::Connection, account_query: &AccountQuery) -> Result<minijinja::Value> {
+    let AccountQuery {
+        company,
+        group,
+        user,
+    } = account_query;
+
+    let base = context! {
+        title => "Mailbox",
+        company => company,
+        group => group,
+        user => user,
+    };
+
+    if account_query.is_empty() {
+        return Ok(base);
+    }
+
+    let Some(account) = db::find_user(conn, company, group, user).context("read the directory")?
+    else {
+        return Ok(context! { error => "No such user.", ..base });
+    };
+
+    let messages: Vec<_> = mailbox::list(conn, account.id)
+        .context("read the mailbox")?
+        .iter()
+        .map(|message| {
+            context! {
+                mail_id => message.mail_id,
+                sender => &message.sender,
+                subject => &message.subject,
+                attachment => message.attachment_path.as_deref().unwrap_or("None"),
+                read => yes_no(message.is_read),
+                href => account_query.message_href(message.mail_id),
+            }
+        })
+        .collect();
+
+    Ok(context! {
+        account => format!("{company}/{group}/{user}"),
+        messages => messages,
+        ..base
+    })
+}
+
+fn message(conn: &rusqlite::Connection, query: &MessageQuery) -> Result<minijinja::Value> {
+    let MessageQuery { account, id } = query;
+
+    let owner = db::find_user(conn, &account.company, &account.group, &account.user)
+        .context("read the directory")?
+        .context("the named user should exist")?;
+    let message = mailbox::find(conn, owner.id, *id)
+        .context("read the mailbox")?
+        .context("the named message should exist")?;
+
+    Ok(context! {
+        title => "Message",
+        mailbox_href => account.mailbox_href(),
+        message => context! {
+            mail_id => message.mail_id,
+            sender => message.sender,
+            recipient => message.recipient,
+            subject => message.subject,
+            body => message.body,
+            attachment => message.attachment_path,
+            read => yes_no(message.is_read),
+        },
+    })
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
+}
+
+/// The account a mailbox page is addressed by. A field the request omits reads
+/// as empty rather than as an error: the page is reached with no query at all
+/// before anything is searched for.
+#[derive(Default, Deserialize, Serialize)]
+struct AccountQuery {
+    #[serde(default)]
+    company: String,
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    user: String,
+}
+
+impl AccountQuery {
+    fn is_empty(&self) -> bool {
+        self.company.is_empty() && self.group.is_empty() && self.user.is_empty()
+    }
+
+    fn mailbox_href(&self) -> String {
+        format!(
+            "/mailbox?{}",
+            serde_urlencoded::to_string(self).unwrap_or_default()
+        )
+    }
+
+    fn message_href(&self, mail_id: u32) -> String {
+        format!(
+            "/mailbox/message?{}&id={mail_id}",
+            serde_urlencoded::to_string(self).unwrap_or_default()
+        )
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct MessageQuery {
+    #[serde(flatten)]
+    account: AccountQuery,
+    #[serde(default)]
+    id: u32,
+}
+
+/// A query that does not parse is answered as though it named nothing, which is
+/// the empty search form rather than an error page.
+fn query<T: Default + serde::de::DeserializeOwned>(query: &str) -> T {
+    serde_urlencoded::from_str(query).unwrap_or_default()
 }
 
 /// The directory spells "no limit" as a saturated field rather than as a flag

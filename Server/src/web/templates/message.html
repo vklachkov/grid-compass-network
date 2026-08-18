@@ -1,0 +1,28 @@
+{% extends "layout.html" %}
+
+{% block body %}
+<P>[ <A HREF="{{ mailbox_href }}">Back to the mailbox</A> ]</P>
+
+<TABLE WIDTH="100%">
+  <TR><TH>Id</TH><TD>{{ message.mail_id }}</TD></TR>
+  <TR><TH>From</TH><TD>{{ message.sender }}</TD></TR>
+  <TR><TH>To</TH><TD>{{ message.recipient }}</TD></TR>
+  <TR><TH>Subject</TH><TD>{{ message.subject }}</TD></TR>
+  <TR><TH>Read</TH><TD>{{ message.read }}</TD></TR>
+  <TR>
+    <TH>Attachment</TH>
+    {# The link is dead until attachments are actually written to disk: the
+       column is filled by nothing yet, so there is no file to serve. #}
+    <TD>
+      {% if message.attachment %}
+      <SPAN CLASS="disabled">{{ message.attachment }} (download not available yet)</SPAN>
+      {% else %}
+      None
+      {% endif %}
+    </TD>
+  </TR>
+</TABLE>
+
+<P>Body</P>
+<PRE CLASS="body">{{ message.body }}</PRE>
+{% endblock %}

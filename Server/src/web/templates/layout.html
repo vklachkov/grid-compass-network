@@ -79,12 +79,46 @@
       TR.company TD {
         font-weight: bold;
       }
+
+      TR.clickable {
+        cursor: pointer;
+      }
+
+      TR.clickable:hover TD {
+        background: #f7aa00;
+        color: #000000;
+      }
+
+      TR.clickable:hover TD A {
+        color: #000000;
+      }
+
+      .disabled {
+        color: #7d5600;
+      }
+
+      PRE.body {
+        border: 1px solid #f7aa00;
+        font-family: monospace;
+        font-size: 13px;
+        margin: 0;
+        padding: 6px;
+      }
+
+      INPUT.text {
+        cursor: text;
+      }
+
+      INPUT.text:hover {
+        background: #000000;
+        color: #f7aa00;
+      }
     -->
     </STYLE>
   </HEAD>
   <BODY>
     <IMG SRC="/GRiD.png" WIDTH="185" HEIGHT="55" ALT="GRiD" CLASS="logo">
-    <DIV CLASS="nav">[ <A HREF="/users">Users</A> ]</DIV>
+    <DIV CLASS="nav">[ <A HREF="/users">Users</A> ] [ <A HREF="/mailbox">Mailbox</A> ]</DIV>
     {% block body %}{% endblock %}
   </BODY>
 </HTML>

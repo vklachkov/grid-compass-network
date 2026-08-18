@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+
+{% block body %}
+<FORM ACTION="/mailbox" METHOD="GET" CLASS="bar">
+  <P>
+    Company <INPUT TYPE="TEXT" CLASS="text" NAME="company" VALUE="{{ company }}" SIZE="16">
+    Group <INPUT TYPE="TEXT" CLASS="text" NAME="group" VALUE="{{ group }}" SIZE="16">
+    User <INPUT TYPE="TEXT" CLASS="text" NAME="user" VALUE="{{ user }}" SIZE="16">
+    <INPUT TYPE="SUBMIT" VALUE="Search">
+  </P>
+</FORM>
+
+{% if error %}
+<P>{{ error }}</P>
+{% elif account %}
+<P>User {{ account }} mailbox</P>
+{% if messages %}
+<TABLE ID="mailbox" WIDTH="100%">
+  <TR>
+    <TH>Id</TH>
+    <TH>From</TH>
+    <TH>Subject</TH>
+    <TH>Attachment</TH>
+    <TH>Read</TH>
+  </TR>
+  {% for message in messages %}
+  <TR ONCLICK="window.location = '{{ message.href }}'" CLASS="clickable">
+    <TD CLASS="num"><A HREF="{{ message.href }}">{{ message.mail_id }}</A></TD>
+    <TD>{{ message.sender }}</TD>
+    <TD>{{ message.subject }}</TD>
+    <TD>{{ message.attachment }}</TD>
+    <TD>{{ message.read }}</TD>
+  </TR>
+  {% endfor %}
+</TABLE>
+{% else %}
+<P>The mailbox is empty.</P>
+{% endif %}
+{% endif %}
+{% endblock %}

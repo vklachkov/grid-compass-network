@@ -11,6 +11,8 @@ log = "0.4.33"
 minijinja = "2.24.0"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 rusqlite_migration = "2.6"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_urlencoded = "0.7.1"
 tiny_http = "0.12.0"
 
 [profile.release]

@@ -386,7 +386,7 @@ fn mailbox_list(messages: &[Message]) -> Vec<(u8, Vec<u8>)> {
         .enumerate()
         .map(|(index, message)| {
             let mut data = mail_header(message);
-            data.extend(tagged_record(b'k', &message.sender));
+            data.extend(tagged_record(b'k', &message.sender.name));
             data.extend(tagged_record(b's', &message.subject));
             data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
@@ -430,16 +430,16 @@ fn detail_or_empty(message: Option<&Message>) -> Vec<u8> {
 
 fn mail_detail(message: &Message) -> Vec<u8> {
     let mut data = Vec::with_capacity(detail_len(
-        &message.recipient,
-        &message.sender,
+        &message.recipient.name,
+        &message.sender.name,
         &message.subject,
         &message.body,
     ));
     data.extend(mail_header(message));
     for (tag, value) in [
-        (b't', &message.recipient),
-        (b'f', &message.sender),
-        (b'k', &message.sender),
+        (b't', &message.recipient.name),
+        (b'f', &message.sender.name),
+        (b'k', &message.sender.name),
         (b's', &message.subject),
         (b'n', &message.body),
     ] {

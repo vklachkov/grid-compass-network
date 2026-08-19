@@ -28,15 +28,39 @@ CREATE TABLE messages (
 "#,
 )];
 
+/// Both correspondents are carried as the whole company/group/user chain the
+/// Sentry names an account by: a bare name is only unique within its group, so
+/// a listing gathered across groups cannot tell two of them apart without it.
+pub struct Correspondent {
+    pub company: String,
+    pub group: String,
+    pub name: String,
+}
+
+impl Correspondent {
+    pub fn path(&self) -> String {
+        format!("{}/{}/{}", self.company, self.group, self.name)
+    }
+}
+
 pub struct Message {
     pub id: i64,
     pub mail_id: u32,
-    pub sender: String,
-    pub recipient: String,
+    pub sender: Correspondent,
+    pub recipient: Correspondent,
     pub subject: String,
     pub body: String,
     pub attachment_path: Option<String>,
     pub is_read: bool,
+}
+
+/// The names a mailbox listing is narrowed by. An empty field matches every
+/// name at its level, so the three together range from one account to the whole
+/// directory.
+pub struct Filter<'a> {
+    pub company: &'a str,
+    pub group: &'a str,
+    pub user: &'a str,
 }
 
 pub struct NewMessage<'a> {
@@ -50,10 +74,17 @@ pub struct NewMessage<'a> {
 }
 
 const SELECT: &str = r#"
-SELECT m.id, m.mail_id, s.name, r.name, m.subject, m.body, m.attachment_path, m.is_read
+SELECT m.id, m.mail_id,
+       sc.name, sg.name, s.name,
+       rc.name, rg.name, r.name,
+       m.subject, m.body, m.attachment_path, m.is_read
   FROM messages m
   JOIN users s ON s.id = m.sender_id
+  JOIN groups sg ON sg.id = s.group_id
+  JOIN companies sc ON sc.id = sg.company_id
   JOIN users r ON r.id = m.recipient_id
+  JOIN groups rg ON rg.id = r.group_id
+  JOIN companies rc ON rc.id = rg.company_id
 "#;
 
 /// A message may only be addressed to an account the sender shares a group with:
@@ -104,6 +135,22 @@ pub fn list(conn: &Connection, recipient_id: i64) -> rusqlite::Result<Vec<Messag
     .collect()
 }
 
+/// An empty name is compared against itself rather than dropped from the
+/// statement, so one prepared query serves every combination of the three
+/// fields. The comparisons inherit `COLLATE NOCASE` from the name columns, which
+/// is what makes the search as case blind as the directory it reads.
+pub fn search(conn: &Connection, filter: &Filter<'_>) -> rusqlite::Result<Vec<Message>> {
+    conn.prepare(&format!(
+        "{SELECT}
+         WHERE (?1 = '' OR rc.name = ?1)
+           AND (?2 = '' OR rg.name = ?2)
+           AND (?3 = '' OR r.name = ?3)
+         ORDER BY rc.name, rg.name, r.name, m.mail_id"
+    ))?
+    .query_map(params![filter.company, filter.group, filter.user], read_message)?
+    .collect()
+}
+
 pub fn find(
     conn: &Connection,
     recipient_id: i64,
@@ -134,11 +181,19 @@ fn read_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     Ok(Message {
         id: row.get(0)?,
         mail_id: row.get(1)?,
-        sender: row.get(2)?,
-        recipient: row.get(3)?,
-        subject: row.get(4)?,
-        body: row.get(5)?,
-        attachment_path: row.get(6)?,
-        is_read: row.get(7)?,
+        sender: Correspondent {
+            company: row.get(2)?,
+            group: row.get(3)?,
+            name: row.get(4)?,
+        },
+        recipient: Correspondent {
+            company: row.get(5)?,
+            group: row.get(6)?,
+            name: row.get(7)?,
+        },
+        subject: row.get(8)?,
+        body: row.get(9)?,
+        attachment_path: row.get(10)?,
+        is_read: row.get(11)?,
     })
 }

@@ -10,15 +10,14 @@
   </P>
 </FORM>
 
-{% if error %}
-<P>{{ error }}</P>
-{% elif account %}
-<P>User {{ account }} mailbox</P>
+{% if searched %}
+<P CLASS="bar">Updated at {{ refreshed_at }}</P>
 {% if messages %}
 <TABLE ID="mailbox" WIDTH="100%">
   <TR>
     <TH>Id</TH>
     <TH>From</TH>
+    <TH>To</TH>
     <TH>Subject</TH>
     <TH>Attachment</TH>
     <TH>Read</TH>
@@ -27,6 +26,7 @@
   <TR ONCLICK="window.location = '{{ message.href }}'" CLASS="clickable">
     <TD CLASS="num"><A HREF="{{ message.href }}">{{ message.mail_id }}</A></TD>
     <TD>{{ message.sender }}</TD>
+    <TD>{{ message.recipient }}</TD>
     <TD>{{ message.subject }}</TD>
     <TD>{{ message.attachment }}</TD>
     <TD>{{ message.read }}</TD>
@@ -34,7 +34,7 @@
   {% endfor %}
 </TABLE>
 {% else %}
-<P>The mailbox is empty.</P>
+<P>No messages match.</P>
 {% endif %}
 {% endif %}
 {% endblock %}

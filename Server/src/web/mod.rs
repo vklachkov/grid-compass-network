@@ -307,9 +307,10 @@ fn validate_new_user(conn: &rusqlite::Connection, form: &NewUser) -> Result<Opti
     Ok(None)
 }
 
-/// The account whose mailbox is shown is named the way the Sentry names one, by
-/// the whole company/group/user chain, because a bare user name is only unique
-/// within its group.
+/// The three names narrow the listing rather than address one account: a field
+/// left blank matches every name at its level, so the same page shows one
+/// mailbox, a whole group, a whole company, or every namesake across the
+/// directory.
 fn mailbox(conn: &rusqlite::Connection, account_query: &AccountQuery) -> Result<minijinja::Value> {
     let AccountQuery {
         company,
@@ -329,28 +330,39 @@ fn mailbox(conn: &rusqlite::Connection, account_query: &AccountQuery) -> Result<
         return Ok(base);
     }
 
-    let Some(account) = db::find_user(conn, company, group, user).context("read the directory")?
-    else {
-        return Ok(context! { error => "No such user.", ..base });
+    let filter = mailbox::Filter {
+        company,
+        group,
+        user,
     };
 
-    let messages: Vec<_> = mailbox::list(conn, account.id)
+    let messages: Vec<_> = mailbox::search(conn, &filter)
         .context("read the mailbox")?
         .iter()
         .map(|message| {
+            // The link addresses the message's own recipient rather than the
+            // search, which may stand for many mailboxes at once.
+            let owner = AccountQuery {
+                company: message.recipient.company.clone(),
+                group: message.recipient.group.clone(),
+                user: message.recipient.name.clone(),
+            };
+
             context! {
                 mail_id => message.mail_id,
-                sender => &message.sender,
+                sender => message.sender.path(),
+                recipient => message.recipient.path(),
                 subject => &message.subject,
                 attachment => message.attachment_path.as_deref().unwrap_or("None"),
                 read => yes_no(message.is_read),
-                href => account_query.message_href(message.mail_id),
+                href => owner.message_href(message.mail_id),
             }
         })
         .collect();
 
     Ok(context! {
-        account => format!("{company}/{group}/{user}"),
+        searched => true,
+        refreshed_at => clock_time(),
         messages => messages,
         ..base
     })
@@ -372,8 +384,8 @@ fn message(conn: &rusqlite::Connection, query: &MessageQuery) -> Result<minijinj
         mailbox_href => account.mailbox_href(),
         message => context! {
             mail_id => message.mail_id,
-            sender => message.sender,
-            recipient => message.recipient,
+            sender => message.sender.path(),
+            recipient => message.recipient.path(),
             subject => message.subject,
             body => message.body,
             attachment => message.attachment_path,

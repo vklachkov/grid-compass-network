@@ -13,16 +13,43 @@ use crate::{
 };
 
 const RECORD_MARKER: u8 = 0xfd;
+const SESSION_MARKER: u8 = 0xfe;
+
+const TAG_HEADER: u8 = b'b';
+const TAG_RECIPIENT: u8 = b't';
+const TAG_SENDER: u8 = b'f';
+const TAG_DISPLAY_SENDER: u8 = b'k';
+const TAG_SUBJECT: u8 = b's';
 const TAG_BODY: u8 = b'n';
 /// A three byte selector, a six byte mail id, then the tags the client wants back.
 const TAG_SELECT: u8 = b'S';
 const TAG_INITIALIZE: u8 = b'I';
+const TAG_REQUEST_ACCEPTED: u8 = b'T';
+
+const CHANNEL_SESSION: u16 = 0;
+const CHANNEL_CLOSE: u16 = 4;
+const CHANNEL_TAGGED_REQUEST: u16 = 6;
+const CHANNEL_SELECT: u16 = 7;
+const CHANNEL_FLUSH: u16 = 8;
+const CHANNEL_INITIALIZE: u16 = 0x0d;
+const CHANNEL_FINALIZE: u16 = 0x0e;
+const CHANNEL_DRAIN: u16 = 0x10;
+const CHANNEL_COUNT: usize = CHANNEL_DRAIN as usize + 1;
+
+const SESSION_INITIALIZE_REQUEST: [u8; 7] = [SESSION_MARKER, 4, 0, b'a', 0x88, 0x2c, 1];
+const SESSION_INITIALIZE_RESPONSE: &[u8] = b"z";
+const MAIL_HEADER_TRAILER: [u8; 5] = [0, 0, 0, 0, 1];
+const TRANSPORT_SUCCESS: [u8; 2] = [0, 0];
 
 /// Walk unread mail rather than fetch one item by id.
 const READ_NEW_SELECTOR: [u8; 3] = [1, 0, 1];
 
+const MAIL_ID_LEN: usize = 6;
+const MAIL_HEADER_VALUE_LEN: usize = 1 + MAIL_ID_LEN + MAIL_HEADER_TRAILER.len();
+const RECORD_HEADER_LEN: usize = 3;
+const TAG_LEN: usize = 1;
 const MAX_REQUEST: usize = 64 * 1024;
-const MAX_TAG_VALUE: usize = u16::MAX as usize - 1;
+const MAX_TAG_VALUE: usize = u16::MAX as usize - TAG_LEN;
 
 pub struct MailServer {
     fragments: Vec<Pending>,
@@ -46,7 +73,7 @@ pub struct MailResponse {
 impl MailServer {
     pub fn new(conn: Rc<Connection>, owner_id: i64, owner_name: String) -> Self {
         Self {
-            fragments: vec![Pending::default(); 17],
+            fragments: vec![Pending::default(); CHANNEL_COUNT],
             conn,
             owner_id,
             owner_name,
@@ -164,18 +191,20 @@ impl MailServer {
 
         let pending = std::mem::take(pending);
         let responses = match note {
-            0 if pending.data == [0xfe, 4, 0, b'a', 0x88, 0x2c, 1] => {
-                vec![(0, app_frame(0xfe, b"z"))]
+            CHANNEL_SESSION if pending.data == SESSION_INITIALIZE_REQUEST => {
+                vec![(0, app_frame(SESSION_MARKER, SESSION_INITIALIZE_RESPONSE))]
             }
-            4 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
-            6 if valid_tagged_request(&pending.data) => vec![(0, app_frame(RECORD_MARKER, b"T"))],
-            7 => self.select(SRequest::parse(&pending.data)?)?,
-            8 if pending.data.is_empty() => vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))],
-            0x0d if valid_i_request(&pending.data) => {
-                vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
+            CHANNEL_CLOSE if pending.data.is_empty() => vec![(0, empty_mail_result())],
+            CHANNEL_TAGGED_REQUEST if valid_tagged_request(&pending.data) => {
+                vec![(0, app_frame(RECORD_MARKER, &[TAG_REQUEST_ACCEPTED]))]
             }
-            0x0e | 0x10 if pending.data.is_empty() => {
-                vec![(0, app_frame(RECORD_MARKER, &[TAG_TERMINATOR]))]
+            CHANNEL_SELECT => self.select(SRequest::parse(&pending.data)?)?,
+            CHANNEL_FLUSH if pending.data.is_empty() => vec![(0, empty_mail_result())],
+            CHANNEL_INITIALIZE if valid_i_request(&pending.data) => {
+                vec![(0, empty_mail_result())]
+            }
+            CHANNEL_FINALIZE | CHANNEL_DRAIN if pending.data.is_empty() => {
+                vec![(0, empty_mail_result())]
             }
             _ => {
                 warn!(target: "mail", "ignored an unsupported request on channel {note}");
@@ -273,7 +302,7 @@ fn valid_i_request(data: &[u8]) -> bool {
 }
 
 fn app_frame(marker: u8, payload: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(payload.len() + 3);
+    let mut frame = Vec::with_capacity(payload.len() + RECORD_HEADER_LEN);
     frame.push(marker);
     // Every caller builds the payload from fields already checked against
     // `MAX_TAG_VALUE`, so an oversized one is a bug here rather than something
@@ -298,8 +327,8 @@ struct Outgoing<'a> {
 impl<'a> Outgoing<'a> {
     fn parse(original: &'a [u8]) -> Option<Self> {
         Some(Self {
-            recipient: text(tagged_value(original, b't')?)?,
-            subject: text(tagged_value(original, b's')?)?,
+            recipient: text(tagged_value(original, TAG_RECIPIENT)?)?,
+            subject: text(tagged_value(original, TAG_SUBJECT)?)?,
             body: text(outgoing_body(original)?)?,
         })
     }
@@ -368,10 +397,10 @@ fn outgoing_body(data: &[u8]) -> Option<&[u8]> {
 }
 
 fn mail_header(message: &Message) -> Vec<u8> {
-    let mut value = Vec::with_capacity(12);
-    value.push(b'b');
+    let mut value = Vec::with_capacity(MAIL_HEADER_VALUE_LEN);
+    value.push(TAG_HEADER);
     value.extend(mail_id_bytes(message.mail_id));
-    value.extend([0, 0, 0, 0, 1]);
+    value.extend(MAIL_HEADER_TRAILER);
     app_frame(RECORD_MARKER, &value)
 }
 
@@ -386,8 +415,8 @@ fn mailbox_list(messages: &[Message]) -> Vec<(u8, Vec<u8>)> {
         .enumerate()
         .map(|(index, message)| {
             let mut data = mail_header(message);
-            data.extend(tagged_record(b'k', &message.sender.name));
-            data.extend(tagged_record(b's', &message.subject));
+            data.extend(tagged_record(TAG_DISPLAY_SENDER, &message.sender.name));
+            data.extend(tagged_record(TAG_SUBJECT, &message.subject));
             data.extend(app_frame(RECORD_MARKER, &[TAG_TERMINATOR]));
 
             let flags = if index == last { 0 } else { MORE };
@@ -415,12 +444,16 @@ fn detail_len(recipient: &str, sender: &str, subject: &str, body: &str) -> usize
         body.len(),
     ];
 
-    // `b` header, five tagged fields, `z`, then the raw body drained by GRiDMail.
-    15 + tagged_records
-        .iter()
-        .map(|length| 4 + length)
-        .sum::<usize>()
-        + 4
+    let header_record_len = RECORD_HEADER_LEN + MAIL_HEADER_VALUE_LEN;
+    let tagged_record_overhead = RECORD_HEADER_LEN + TAG_LEN;
+    let terminator_record_len = RECORD_HEADER_LEN + TAG_LEN;
+
+    header_record_len
+        + tagged_records
+            .iter()
+            .map(|length| tagged_record_overhead + length)
+            .sum::<usize>()
+        + terminator_record_len
         + body.len()
 }
 
@@ -437,11 +470,11 @@ fn mail_detail(message: &Message) -> Vec<u8> {
     ));
     data.extend(mail_header(message));
     for (tag, value) in [
-        (b't', &message.recipient.name),
-        (b'f', &message.sender.name),
-        (b'k', &message.sender.name),
-        (b's', &message.subject),
-        (b'n', &message.body),
+        (TAG_RECIPIENT, &message.recipient.name),
+        (TAG_SENDER, &message.sender.name),
+        (TAG_DISPLAY_SENDER, &message.sender.name),
+        (TAG_SUBJECT, &message.subject),
+        (TAG_BODY, &message.body),
     ] {
         data.extend(tagged_record(tag, value));
     }
@@ -454,7 +487,8 @@ fn mail_detail(message: &Message) -> Vec<u8> {
 
 fn transport(flags: u8, connection_id: u8, data: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(data.len() + TRANSPORT_HEADER_LEN);
-    payload.extend([flags, connection_id, 0, 0]);
+    payload.extend([flags, connection_id]);
+    payload.extend(TRANSPORT_SUCCESS);
     payload.extend_from_slice(data);
     payload
 }

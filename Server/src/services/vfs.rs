@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, num::NonZeroU16};
+use std::{collections::HashMap, io, mem::size_of, num::NonZeroU16};
 
 use bstr::BStr;
 use log::{debug, warn};
@@ -10,6 +10,28 @@ use crate::shared::{
     FrameError,
     io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
 };
+
+const VFS_RESPONSE_BIT: u16 = 0x8000;
+const VFS_PASSWORD_LEN: usize = 17;
+const VFS_DESCRIPTOR_LEN: usize = 198;
+const VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET: usize = 164;
+const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 = 9;
+const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
+
+const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
+const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
+const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
+const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
+const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
+
+const RESOURCES: &[&str] = &["Hard Disk~FS~"];
+const HARD_DISK: &[&str] = &[
+    "Folder 1~Subject~",
+    "Folder 3~Subject~",
+    "Folder 2~Subject~",
+];
+const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
+const READ_STUB: &[u8] = b"Read stub";
 
 #[derive(Clone, Debug)]
 pub struct VfsRequest<'a> {
@@ -27,38 +49,34 @@ pub struct VfsRequestHeader {
 #[derive(Clone, Copy, Debug)]
 #[repr(u16)]
 pub enum VfsRequestCode {
+    Initialize = 0,
     GetStatus = 1,
     Open = 2,
     Close = 3,
     Read = 4,
     Write = 5,
     Seek = 6,
+    Truncate = 7,
     Attach = 8,
     Detach = 9,
+    Rename = 10,
+    Delete = 11,
     ReadDesc = 12,
     WriteDesc = 13,
+    Flush = 14,
+    WaitSrq = 15,
+    SelfTest = 16,
+    Format = 17,
     SetStatus = 20,
+    Deactivate = 21,
+    TrackFormat = 22,
+    ControllerTest = 23,
+    RamTest = 24,
+    DriveTest = 25,
+    Program = 26,
+    WriteProtect = 27,
+    BufferCommand = 28,
     ReadDirPage = 29,
-}
-
-impl VfsRequestCode {
-    pub fn from_repr(value: u16) -> Option<Self> {
-        Some(match value {
-            1 => Self::GetStatus,
-            2 => Self::Open,
-            3 => Self::Close,
-            4 => Self::Read,
-            5 => Self::Write,
-            6 => Self::Seek,
-            8 => Self::Attach,
-            9 => Self::Detach,
-            12 => Self::ReadDesc,
-            13 => Self::WriteDesc,
-            20 => Self::SetStatus,
-            29 => Self::ReadDirPage,
-            _ => return None,
-        })
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,10 +101,18 @@ pub enum VfsRequestBody<'a> {
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct VfsAttachRequest<'a> {
-    pub mode: u8,
-    pub access: u8,
-    pub password: [u8; 17],
+    pub mode: VfsAttachMode,
+    pub access: VfsAccessMode,
+    pub password: [u8; VFS_PASSWORD_LEN],
     pub path: Path<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum VfsAttachMode {
+    OldFile = 1,
+    UpdateFile = 2,
+    NewFile = 3,
 }
 
 #[allow(dead_code)]
@@ -102,7 +128,7 @@ pub struct VfsReadRequest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct VfsSeekRequest {
-    pub mode: u8,
+    pub mode: VfsSeekMode,
     pub position: u32,
 }
 
@@ -137,28 +163,6 @@ pub enum VfsSetStatusType {
     SetIpcActivityTimeout = 244,
     GetGenericDeviceName = 243,
     GetDeviceName = 242,
-}
-
-impl VfsSetStatusType {
-    pub fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            255 => Self::SetDirection,
-            254 => Self::SetWildcard,
-            253 => Self::SetObjectMode,
-            252 => Self::SetGpibAddress,
-            251 => Self::SetDeviceMask,
-            250 => Self::SetNoteValue,
-            249 => Self::SetNumBuffers,
-            248 => Self::SetNameAttributes,
-            247 => Self::SetConsoleMode,
-            246 => Self::SetAccessRights,
-            245 => Self::SetSecureMode,
-            244 => Self::SetIpcActivityTimeout,
-            243 => Self::GetGenericDeviceName,
-            242 => Self::GetDeviceName,
-            _ => return None,
-        })
-    }
 }
 
 #[allow(dead_code)]
@@ -220,17 +224,6 @@ pub enum VfsObjectMode {
     CompleteDirectory = 2,
 }
 
-impl VfsObjectMode {
-    pub fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            0 => Self::Byte,
-            1 => Self::Directory,
-            2 => Self::CompleteDirectory,
-            _ => return None,
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct VfsResponseHeader {
     pub response: u16,
@@ -268,9 +261,15 @@ pub struct VfsShortDirEntry {
     pub name: Vec<u8>,
 }
 
-/// The full set of modes the client may ask for; the server answers every
-/// attach as a reader, so only `Read` is ever constructed here.
-#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum VfsSeekMode {
+    Backward = 1,
+    Absolute = 2,
+    Forward = 3,
+    FromEnd = 4,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VfsAccessMode {
@@ -296,6 +295,136 @@ pub enum VfsResponse {
     Read(VfsReadResponse),
 }
 
+pub struct Vfs {
+    connection_id: NonZeroU16,
+    files: HashMap<NonZeroU16, VfsFileDescriptor>,
+    finalized_mail: Option<Vec<u8>>,
+}
+
+struct VfsFileDescriptor {
+    resource: VfsResource,
+    read_dir_page_offset: usize,
+    data: Vec<u8>,
+    position: usize,
+    open: bool,
+    write_failed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VfsResource {
+    Resources,
+    HardDisk,
+    HardDiskFiles,
+    MailObject,
+    Unknown,
+}
+
+impl VfsAttachMode {
+    fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::OldFile,
+            2 => Self::UpdateFile,
+            3 => Self::NewFile,
+            _ => return None,
+        })
+    }
+}
+
+impl VfsRequestCode {
+    pub fn from_repr(value: u16) -> Option<Self> {
+        Some(match value {
+            0 => Self::Initialize,
+            1 => Self::GetStatus,
+            2 => Self::Open,
+            3 => Self::Close,
+            4 => Self::Read,
+            5 => Self::Write,
+            6 => Self::Seek,
+            7 => Self::Truncate,
+            8 => Self::Attach,
+            9 => Self::Detach,
+            10 => Self::Rename,
+            11 => Self::Delete,
+            12 => Self::ReadDesc,
+            13 => Self::WriteDesc,
+            14 => Self::Flush,
+            15 => Self::WaitSrq,
+            16 => Self::SelfTest,
+            17 => Self::Format,
+            20 => Self::SetStatus,
+            21 => Self::Deactivate,
+            22 => Self::TrackFormat,
+            23 => Self::ControllerTest,
+            24 => Self::RamTest,
+            25 => Self::DriveTest,
+            26 => Self::Program,
+            27 => Self::WriteProtect,
+            28 => Self::BufferCommand,
+            29 => Self::ReadDirPage,
+            _ => return None,
+        })
+    }
+}
+
+impl VfsSetStatusType {
+    pub fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            255 => Self::SetDirection,
+            254 => Self::SetWildcard,
+            253 => Self::SetObjectMode,
+            252 => Self::SetGpibAddress,
+            251 => Self::SetDeviceMask,
+            250 => Self::SetNoteValue,
+            249 => Self::SetNumBuffers,
+            248 => Self::SetNameAttributes,
+            247 => Self::SetConsoleMode,
+            246 => Self::SetAccessRights,
+            245 => Self::SetSecureMode,
+            244 => Self::SetIpcActivityTimeout,
+            243 => Self::GetGenericDeviceName,
+            242 => Self::GetDeviceName,
+            _ => return None,
+        })
+    }
+}
+
+impl VfsObjectMode {
+    pub fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => Self::Byte,
+            1 => Self::Directory,
+            2 => Self::CompleteDirectory,
+            _ => return None,
+        })
+    }
+}
+
+impl VfsSeekMode {
+    fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::Backward,
+            2 => Self::Absolute,
+            3 => Self::Forward,
+            4 => Self::FromEnd,
+            _ => return None,
+        })
+    }
+}
+
+impl VfsAccessMode {
+    fn from_repr(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::Read,
+            2 => Self::Write,
+            3 => Self::Update,
+            4 => Self::UpdateDescriptor,
+            5 => Self::ShortDirectory,
+            6 => Self::LongDirectory,
+            _ => return None,
+        })
+    }
+}
+
 impl<'a> VfsRequest<'a> {
     pub fn try_from_slice(data: &'a [u8]) -> Result<Self, FrameError> {
         let mut cursor = io::Cursor::new(data);
@@ -307,8 +436,16 @@ impl<'a> VfsRequest<'a> {
 
         let body = match VfsRequestCode::from_repr(header.request) {
             Some(VfsRequestCode::Attach) => {
-                let mode = cursor.read_u8()?;
-                let access = cursor.read_u8()?;
+                let mode = VfsAttachMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                    FrameError::Validation {
+                        reason: "invalid VFS attach mode".to_owned(),
+                    }
+                })?;
+                let access = VfsAccessMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                    FrameError::Validation {
+                        reason: "invalid VFS access mode".to_owned(),
+                    }
+                })?;
                 let password = cursor.read_array()?;
                 let path = read_small_slice(&mut cursor).and_then(Path::try_from_slice)?;
                 ensure_empty(&cursor, "VFS attach payload")?;
@@ -333,7 +470,11 @@ impl<'a> VfsRequest<'a> {
                 VfsRequestBody::ReadDirPage(read_request(&mut cursor)?)
             }
             Some(VfsRequestCode::Seek) => {
-                let mode = cursor.read_u8()?;
+                let mode = VfsSeekMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                    FrameError::Validation {
+                        reason: "invalid VFS seek mode".to_owned(),
+                    }
+                })?;
                 let position = cursor.read_u32()?;
                 ensure_empty(&cursor, "VFS seek payload")?;
                 VfsRequestBody::Seek(VfsSeekRequest { mode, position })
@@ -364,7 +505,7 @@ impl<'a> VfsRequest<'a> {
                 ensure_empty(&cursor, "VFS close payload")?;
                 VfsRequestBody::Close
             }
-            None => VfsRequestBody::Unknown(cursor.read_remainder()),
+            Some(_) | None => VfsRequestBody::Unknown(cursor.read_remainder()),
         };
 
         Ok(Self { header, body })
@@ -399,7 +540,7 @@ impl VfsResponse {
                     for entry in &response.entries {
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
                         dst.write_array([0; 4])?;
-                        dst.write_u32(9 + u32::from(name_length))?;
+                        dst.write_u32(DIRECTORY_ENTRY_PREAMBLE_LEN + u32::from(name_length))?;
                         dst.write_u8(name_length)?;
                         dst.write_all(&entry.name)?;
                     }
@@ -528,51 +669,25 @@ fn ensure_empty(cursor: &io::Cursor<&[u8]>, context: &str) -> Result<(), FrameEr
     }
 }
 
+fn response_header(request: u16, header: &VfsRequestHeader, error: u16) -> VfsResponseHeader {
+    VfsResponseHeader {
+        response: VFS_RESPONSE_BIT | request,
+        servers_conn_id: header.servers_conn_id,
+        requestors_conn_id: header.requestors_conn_id,
+        error,
+    }
+}
+
+fn simple_response(request: u16, header: &VfsRequestHeader, error: u16) -> VfsResponse {
+    VfsResponse::Simple(response_header(request, header, error))
+}
+
 fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), FrameError> {
     dst.write_u16(header.response)?;
     dst.write_u16(header.servers_conn_id)?;
     dst.write_u16(header.requestors_conn_id)?;
     dst.write_u16(header.error)?;
     Ok(())
-}
-
-const RESOURCES: &[&str] = &["Hard Disk~FS~"];
-const HARD_DISK: &[&str] = &[
-    "Folder 1~Subject~",
-    "Folder 3~Subject~",
-    "Folder 2~Subject~",
-];
-const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
-
-const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
-
-const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
-const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
-const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
-const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
-
-pub struct Vfs {
-    connection_id: NonZeroU16,
-    files: HashMap<NonZeroU16, VfsFileDescriptor>,
-    finalized_mail: Option<Vec<u8>>,
-}
-
-struct VfsFileDescriptor {
-    resource: VfsResource,
-    read_dir_page_offset: usize,
-    data: Vec<u8>,
-    position: usize,
-    open: bool,
-    write_failed: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum VfsResource {
-    Resources,
-    HardDisk,
-    HardDiskFiles,
-    MailObject,
-    Unknown,
 }
 
 impl Vfs {
@@ -612,12 +727,7 @@ impl Vfs {
 
     fn get_status(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
         VfsResponse::GetStatus(VfsGetStatusResponse {
-            header: VfsResponseHeader {
-                response: 0x8000 | VfsRequestCode::GetStatus as u16,
-                servers_conn_id: header.servers_conn_id,
-                requestors_conn_id: header.requestors_conn_id,
-                error: 0, // Ok
-            },
+            header: response_header(VfsRequestCode::GetStatus as u16, header, status::OK),
             // FIXME: replace with real data
             open: true,
             access: VfsAccessMode::Read,
@@ -636,39 +746,32 @@ impl Vfs {
             file.open = true;
         }
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Open as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        simple_response(VfsRequestCode::Open as u16, header, status::OK)
     }
 
     fn read(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
         // TODO
 
         VfsResponse::Read(VfsReadResponse {
-            header: VfsResponseHeader {
-                response: 0x8000 | VfsRequestCode::Read as u16,
-                servers_conn_id: header.servers_conn_id,
-                requestors_conn_id: header.requestors_conn_id,
-                error: 0, // Ok
-            },
-            data: b"Read stub".to_vec(),
+            header: response_header(VfsRequestCode::Read as u16, header, status::OK),
+            data: READ_STUB.to_vec(),
         })
     }
 
-    fn read_desc(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
-        // TODO
+    fn read_desc(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
+        let data_length = usize::from(body.data_length).min(VFS_DESCRIPTOR_LEN);
+        let mut data = vec![0; data_length];
+
+        if let Some(property_length) = data
+            .get_mut(VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET..)
+            .and_then(|data| data.get_mut(..size_of::<u32>()))
+        {
+            property_length.copy_from_slice(&0_u32.to_le_bytes());
+        }
 
         VfsResponse::Read(VfsReadResponse {
-            header: VfsResponseHeader {
-                response: 0x8000 | VfsRequestCode::ReadDesc as u16,
-                servers_conn_id: header.servers_conn_id,
-                requestors_conn_id: header.requestors_conn_id,
-                error: 0, // Ok
-            },
-            data: Vec::new(),
+            header: response_header(VfsRequestCode::ReadDesc as u16, header, status::OK),
+            data,
         })
     }
 
@@ -679,12 +782,7 @@ impl Vfs {
             .unwrap_or_default();
 
         VfsResponse::ReadDirPage(VfsReadDirPageResponse {
-            header: VfsResponseHeader {
-                response: 0x8000 | VfsRequestCode::ReadDirPage as u16,
-                servers_conn_id: header.servers_conn_id,
-                requestors_conn_id: header.requestors_conn_id,
-                error: 0, // Ok
-            },
+            header: response_header(VfsRequestCode::ReadDirPage as u16, header, status::OK),
             entries,
         })
     }
@@ -716,23 +814,13 @@ impl Vfs {
             warn!(target: "vfs", "refused a write with error {error}");
         }
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Write as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error,
-        })
+        simple_response(VfsRequestCode::Write as u16, header, error)
     }
 
     fn write_desc(&mut self, header: &VfsRequestHeader, _body: VfsWriteRequest<'_>) -> VfsResponse {
         // TODO
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::WriteDesc as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        simple_response(VfsRequestCode::WriteDesc as u16, header, status::OK)
     }
 
     fn set_status(
@@ -742,12 +830,7 @@ impl Vfs {
     ) -> VfsResponse {
         // TODO
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::SetStatus as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        simple_response(VfsRequestCode::SetStatus as u16, header, status::OK)
     }
 
     fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> VfsResponse {
@@ -759,15 +842,23 @@ impl Vfs {
             Some(file) => {
                 let offset = usize::try_from(body.position).ok();
                 let position = match body.mode {
-                    1 => offset.and_then(|offset| file.position.checked_sub(offset)),
-                    2 => offset,
-                    3 => offset.and_then(|offset| file.position.checked_add(offset)),
-                    4 => offset.and_then(|offset| file.data.len().checked_sub(offset)),
-                    _ => None,
+                    VfsSeekMode::Backward => {
+                        offset.and_then(|offset| file.position.checked_sub(offset))
+                    }
+                    VfsSeekMode::Absolute => offset,
+                    VfsSeekMode::Forward => {
+                        offset.and_then(|offset| file.position.checked_add(offset))
+                    }
+                    VfsSeekMode::FromEnd => {
+                        offset.and_then(|offset| file.data.len().checked_sub(offset))
+                    }
                 };
 
-                match position.filter(|position| *position <= MAX_MAIL_OBJECT_SIZE) {
+                match position {
                     Some(position) => {
+                        // FsSeek forwards absolute positions to the device without
+                        // comparing them to the current file length. The write
+                        // operation enforces the object-size limit separately.
                         file.position = position;
                         status::OK
                     }
@@ -780,12 +871,7 @@ impl Vfs {
             warn!(target: "vfs", "refused a seek with error {error}");
         }
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Seek as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error,
-        })
+        simple_response(VfsRequestCode::Seek as u16, header, error)
     }
 
     /// Hands out the next free connection id. Ids are only released on detach,
@@ -811,7 +897,7 @@ impl Vfs {
             warn!(target: "vfs", "refused attach, no free connection id");
 
             return VfsResponse::Simple(VfsResponseHeader {
-                response: 0x8000 | VfsRequestCode::Attach as u16,
+                response: VFS_RESPONSE_BIT | VfsRequestCode::Attach as u16,
                 servers_conn_id: 0,
                 requestors_conn_id: header.requestors_conn_id,
                 error: VFS_ERROR_DEVICE_FULL,
@@ -830,12 +916,9 @@ impl Vfs {
             },
         );
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Attach as u16,
-            servers_conn_id: conn_id.get(),
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        let mut response = response_header(VfsRequestCode::Attach as u16, header, status::OK);
+        response.servers_conn_id = conn_id.get();
+        VfsResponse::Simple(response)
     }
 
     fn detach(&mut self, header: &VfsRequestHeader) -> VfsResponse {
@@ -848,23 +931,13 @@ impl Vfs {
             self.finalized_mail = Some(file.data);
         }
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Detach as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        simple_response(VfsRequestCode::Detach as u16, header, status::OK)
     }
 
     fn close(&mut self, header: &VfsRequestHeader) -> VfsResponse {
         // TODO
 
-        VfsResponse::Simple(VfsResponseHeader {
-            response: 0x8000 | VfsRequestCode::Close as u16,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: 0, // Ok
-        })
+        simple_response(VfsRequestCode::Close as u16, header, status::OK)
     }
 
     /// A request code the parser did not recognize. Answering with an error
@@ -878,14 +951,7 @@ impl Vfs {
             body.len()
         );
 
-        VfsResponse::Simple(VfsResponseHeader {
-            // The response code mirrors the request code with the high bit set,
-            // the same way every handled request answers.
-            response: 0x8000 | header.request,
-            servers_conn_id: header.servers_conn_id,
-            requestors_conn_id: header.requestors_conn_id,
-            error: VFS_ERROR_BAD_PARAMETER,
-        })
+        simple_response(header.request, header, VFS_ERROR_NOT_SUPPORTED)
     }
 }
 
@@ -957,9 +1023,9 @@ mod tests {
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Attach, 0),
             body: VfsRequestBody::Attach(VfsAttachRequest {
-                mode: 4,
-                access: VfsAccessMode::Write as u8,
-                password: [0; 17],
+                mode: VfsAttachMode::NewFile,
+                access: VfsAccessMode::Write,
+                password: [0; VFS_PASSWORD_LEN],
                 path,
             }),
         });
@@ -1002,9 +1068,9 @@ mod tests {
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Attach, 0),
             body: VfsRequestBody::Attach(VfsAttachRequest {
-                mode: 4,
-                access: VfsAccessMode::Write as u8,
-                password: [0; 17],
+                mode: VfsAttachMode::NewFile,
+                access: VfsAccessMode::Write,
+                password: [0; VFS_PASSWORD_LEN],
                 path,
             }),
         });
@@ -1033,6 +1099,66 @@ mod tests {
     }
 
     #[test]
+    fn read_descriptor_initializes_the_property_length_used_by_clients() {
+        let mut vfs = Vfs::new();
+        let response = vfs.read_desc(
+            &header(VfsRequestCode::ReadDesc, 1),
+            VfsReadRequest {
+                data_length: VFS_DESCRIPTOR_LEN as u16,
+            },
+        );
+        let VfsResponse::Read(response) = response else {
+            panic!("read descriptor returned a non-read response");
+        };
+
+        assert_eq!(response.data.len(), VFS_DESCRIPTOR_LEN);
+        assert_eq!(
+            &response.data[VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET
+                ..VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET + size_of::<u32>()],
+            &0_u32.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn absolute_seek_may_position_beyond_end_of_file() {
+        let path =
+            Path::try_from_slice(b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~").unwrap();
+        let mut vfs = Vfs::new();
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Attach, 0),
+            body: VfsRequestBody::Attach(VfsAttachRequest {
+                mode: VfsAttachMode::NewFile,
+                access: VfsAccessMode::Write,
+                password: [0; VFS_PASSWORD_LEN],
+                path: path.clone(),
+            }),
+        });
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Open, 1),
+            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+        });
+
+        let response = vfs.seek(
+            &header(VfsRequestCode::Seek, 1),
+            VfsSeekRequest {
+                mode: VfsSeekMode::Absolute,
+                position: u32::MAX,
+            },
+        );
+        let VfsResponse::Simple(response) = response else {
+            panic!("seek returned a non-simple response");
+        };
+        assert_eq!(response.error, status::OK);
+        assert_eq!(
+            vfs.files
+                .get(&NonZeroU16::new(1).unwrap())
+                .unwrap()
+                .position,
+            u32::MAX as usize
+        );
+    }
+
+    #[test]
     fn seek_updates_the_next_write_position() {
         let path =
             Path::try_from_slice(b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~").unwrap();
@@ -1040,9 +1166,9 @@ mod tests {
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Attach, 0),
             body: VfsRequestBody::Attach(VfsAttachRequest {
-                mode: 4,
-                access: VfsAccessMode::Write as u8,
-                password: [0; 17],
+                mode: VfsAttachMode::NewFile,
+                access: VfsAccessMode::Write,
+                password: [0; VFS_PASSWORD_LEN],
                 path,
             }),
         });
@@ -1057,7 +1183,7 @@ mod tests {
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Seek, 1),
             body: VfsRequestBody::Seek(VfsSeekRequest {
-                mode: 1,
+                mode: VfsSeekMode::Backward,
                 position: 3,
             }),
         });

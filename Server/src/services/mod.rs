@@ -238,7 +238,7 @@ mod tests {
     fn finalized_vfs_mail_appears_in_mail_list() {
         let mut vipc = vipc();
         let path = b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~";
-        let mut attach = vec![8, 0, 0, 0x7e, 0, 0, 4, 2];
+        let mut attach = vec![8, 0, 0, 0x7e, 0, 0, 3, 2];
         attach.extend([0; 17]);
         attach.push(path.len() as u8);
         attach.extend_from_slice(path);

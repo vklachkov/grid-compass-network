@@ -27,7 +27,7 @@ const CLASS_SENTRY: MessageType = MessageType(0xffff);
 pub struct Vipc {
     vfs: Vfs,
     mail: MailServer,
-    broadcast: MailBroadcastServer,
+    mail_broadcast: MailBroadcastServer,
     sentry: SentryServer,
 }
 
@@ -36,7 +36,7 @@ impl Vipc {
         Self {
             vfs: Vfs::new(),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
-            broadcast: MailBroadcastServer::new(),
+            mail_broadcast: MailBroadcastServer::new(),
             sentry: SentryServer::new(conn, actor),
         }
     }
@@ -92,7 +92,7 @@ impl Vipc {
                 })
                 .collect(),
             CLASS_BROADCAST => self
-                .broadcast
+                .mail_broadcast
                 .process(message.body.payload)
                 .map(|payload| OutgoingMessage {
                     note: 0x8000 | message.note,

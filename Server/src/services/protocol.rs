@@ -10,12 +10,3 @@ pub mod property {
     pub const USER: u8 = 0x09; // userProp
     pub const PASSWORD: u8 = 0x0a; // userPasswordProp
 }
-
-/// The application framing mail and broadcast share inside a VIPC message:
-/// a four byte transport header, then `<marker><u16 length><tag + value>`.
-pub mod app {
-    pub const TAG_TERMINATOR: u8 = b'z';
-    /// Set in the transport header while a request continues in a later frame.
-    pub const MORE: u8 = 1;
-    pub const TRANSPORT_HEADER_LEN: usize = 4;
-}

@@ -3,8 +3,7 @@ use std::rc::Rc;
 use log::{debug, warn};
 use rusqlite::Connection;
 
-use broadcast::BroadcastServer;
-use mail::MailServer;
+use mail::{MailBroadcastServer, MailServer};
 use sentry::SentryServer;
 use vfs::{Vfs, VfsRequest};
 
@@ -14,7 +13,6 @@ use crate::{
     shared::FrameError,
 };
 
-mod broadcast;
 mod mail;
 mod vfs;
 
@@ -29,8 +27,8 @@ const CLASS_SENTRY: MessageType = MessageType(0xffff);
 pub struct Vipc {
     vfs: Vfs,
     mail: MailServer,
+    broadcast: MailBroadcastServer,
     sentry: SentryServer,
-    broadcast: BroadcastServer,
 }
 
 impl Vipc {
@@ -38,8 +36,8 @@ impl Vipc {
         Self {
             vfs: Vfs::new(),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
+            broadcast: MailBroadcastServer::new(),
             sentry: SentryServer::new(conn, actor),
-            broadcast: BroadcastServer::new(),
         }
     }
 

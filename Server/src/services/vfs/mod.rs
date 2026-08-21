@@ -5,17 +5,19 @@ pub use protocol::VfsRequest;
 use std::{collections::HashMap, mem::size_of, num::NonZeroU16};
 
 use log::{debug, warn};
+use num_traits::ToPrimitive;
 
 use super::protocol::status;
 
 use protocol::{
-    HARD_DISK, HARD_DISK_FILES, MAX_MAIL_OBJECT_SIZE, READ_STUB, RESOURCES, VFS_DESCRIPTOR_LEN,
+    HARD_DISK, HARD_DISK_FILES, MAX_MAIL_OBJECT_SIZE, READ_STUB, RESOURCES, VFS_DESCRIPTOR_LENGTH,
     VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET, VFS_ERROR_BAD_CONNECTION, VFS_ERROR_BAD_PARAMETER,
-    VFS_ERROR_DEVICE_FULL, VFS_ERROR_FILE_NOT_OPEN, VFS_ERROR_NOT_SUPPORTED, VFS_RESPONSE_BIT,
-    VfsAccessMode, VfsAttachRequest, VfsGetStatusResponse, VfsOpenRequest, VfsReadDirPageResponse,
-    VfsReadRequest, VfsReadResponse, VfsRequestBody, VfsRequestCode, VfsRequestHeader, VfsResource,
-    VfsResponse, VfsResponseHeader, VfsSeekMode, VfsSeekRequest, VfsSetStatusRequest,
-    VfsShortDirEntry, VfsWriteRequest, response_header, simple_response,
+    VFS_ERROR_DEVICE_FULL, VFS_ERROR_FILE_NOT_OPEN, VFS_ERROR_NOT_SUPPORTED,
+    VFS_MAX_DIRECTORY_OBJECTS_PER_PAGE, VFS_MAX_WRITE_LENGTH, VFS_RESPONSE_BIT, VfsAccessMode,
+    VfsAttachRequest, VfsGetStatusResponse, VfsOpenRequest, VfsReadDirPageResponse, VfsReadRequest,
+    VfsReadResponse, VfsRequestBody, VfsRequestCode, VfsRequestHeader, VfsResource, VfsResponse,
+    VfsResponseHeader, VfsSeekMode, VfsSeekRequest, VfsSetStatusRequest, VfsShortDirEntry,
+    VfsWriteRequest, response_header, simple_response,
 };
 
 pub struct Vfs {
@@ -70,7 +72,7 @@ impl Vfs {
 
     fn get_status(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
         VfsResponse::GetStatus(VfsGetStatusResponse {
-            header: response_header(VfsRequestCode::GetStatus as u16, header, status::OK),
+            header: response_header(VfsRequestCode::GetStatus, header, status::OK),
             // FIXME: replace with real data
             open: true,
             access: VfsAccessMode::Read,
@@ -89,20 +91,21 @@ impl Vfs {
             file.open = true;
         }
 
-        simple_response(VfsRequestCode::Open as u16, header, status::OK)
+        simple_response(VfsRequestCode::Open, header, status::OK)
     }
 
-    fn read(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
-        // TODO
+    fn read(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
+        let data_length = body.bounded_length();
+        let data = READ_STUB[..READ_STUB.len().min(data_length)].to_vec();
 
         VfsResponse::Read(VfsReadResponse {
-            header: response_header(VfsRequestCode::Read as u16, header, status::OK),
-            data: READ_STUB.to_vec(),
+            header: response_header(VfsRequestCode::Read, header, status::OK),
+            data,
         })
     }
 
     fn read_desc(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
-        let data_length = usize::from(body.data_length).min(VFS_DESCRIPTOR_LEN);
+        let data_length = usize::from(body.data_length).min(VFS_DESCRIPTOR_LENGTH);
         let mut data = vec![0; data_length];
 
         if let Some(property_length) = data
@@ -113,7 +116,7 @@ impl Vfs {
         }
 
         VfsResponse::Read(VfsReadResponse {
-            header: response_header(VfsRequestCode::ReadDesc as u16, header, status::OK),
+            header: response_header(VfsRequestCode::ReadDesc, header, status::OK),
             data,
         })
     }
@@ -121,11 +124,11 @@ impl Vfs {
     fn read_dir_page(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
         let entries = NonZeroU16::new(header.servers_conn_id)
             .and_then(|conn_id| self.files.get_mut(&conn_id))
-            .map(|file| file.read_dir_page(body.data_length as usize))
+            .map(|file| file.read_dir_page(usize::from(body.data_length)))
             .unwrap_or_default();
 
         VfsResponse::ReadDirPage(VfsReadDirPageResponse {
-            header: response_header(VfsRequestCode::ReadDirPage as u16, header, status::OK),
+            header: response_header(VfsRequestCode::ReadDirPage, header, status::OK),
             entries,
         })
     }
@@ -135,6 +138,8 @@ impl Vfs {
             .and_then(|conn_id| self.files.get_mut(&conn_id))
         {
             None => VFS_ERROR_BAD_CONNECTION,
+
+            Some(_) if body.data.len() > VFS_MAX_WRITE_LENGTH => VFS_ERROR_BAD_PARAMETER,
             Some(file) if !file.open => VFS_ERROR_FILE_NOT_OPEN,
             Some(file) if file.resource != VfsResource::MailObject => VFS_ERROR_BAD_PARAMETER,
             Some(file) => match file.position.checked_add(body.data.len()) {
@@ -157,13 +162,13 @@ impl Vfs {
             warn!(target: "vfs", "refused a write with error {error}");
         }
 
-        simple_response(VfsRequestCode::Write as u16, header, error)
+        simple_response(VfsRequestCode::Write, header, error)
     }
 
     fn write_desc(&mut self, header: &VfsRequestHeader, _body: VfsWriteRequest<'_>) -> VfsResponse {
         // TODO
 
-        simple_response(VfsRequestCode::WriteDesc as u16, header, status::OK)
+        simple_response(VfsRequestCode::WriteDesc, header, status::OK)
     }
 
     fn set_status(
@@ -173,7 +178,7 @@ impl Vfs {
     ) -> VfsResponse {
         // TODO
 
-        simple_response(VfsRequestCode::SetStatus as u16, header, status::OK)
+        simple_response(VfsRequestCode::SetStatus, header, status::OK)
     }
 
     fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> VfsResponse {
@@ -214,7 +219,7 @@ impl Vfs {
             warn!(target: "vfs", "refused a seek with error {error}");
         }
 
-        simple_response(VfsRequestCode::Seek as u16, header, error)
+        simple_response(VfsRequestCode::Seek, header, error)
     }
 
     /// Hands out the next free connection id. Ids are only released on detach,
@@ -240,7 +245,10 @@ impl Vfs {
             warn!(target: "vfs", "refused attach, no free connection id");
 
             return VfsResponse::Simple(VfsResponseHeader {
-                response: VFS_RESPONSE_BIT | VfsRequestCode::Attach as u16,
+                response: VFS_RESPONSE_BIT
+                    | VfsRequestCode::Attach
+                        .to_u16()
+                        .expect("valid VFS request code"),
                 servers_conn_id: 0,
                 requestors_conn_id: header.requestors_conn_id,
                 error: VFS_ERROR_DEVICE_FULL,
@@ -259,7 +267,7 @@ impl Vfs {
             },
         );
 
-        let mut response = response_header(VfsRequestCode::Attach as u16, header, status::OK);
+        let mut response = response_header(VfsRequestCode::Attach, header, status::OK);
         response.servers_conn_id = conn_id.get();
         VfsResponse::Simple(response)
     }
@@ -274,13 +282,13 @@ impl Vfs {
             self.finalized_mail = Some(file.data);
         }
 
-        simple_response(VfsRequestCode::Detach as u16, header, status::OK)
+        simple_response(VfsRequestCode::Detach, header, status::OK)
     }
 
     fn close(&mut self, header: &VfsRequestHeader) -> VfsResponse {
         // TODO
 
-        simple_response(VfsRequestCode::Close as u16, header, status::OK)
+        simple_response(VfsRequestCode::Close, header, status::OK)
     }
 
     /// A request code the parser did not recognize. Answering with an error
@@ -294,12 +302,18 @@ impl Vfs {
             body.len()
         );
 
-        simple_response(header.request, header, VFS_ERROR_NOT_SUPPORTED)
+        VfsResponse::Simple(VfsResponseHeader {
+            response: VFS_RESPONSE_BIT | header.request,
+            servers_conn_id: header.servers_conn_id,
+            requestors_conn_id: header.requestors_conn_id,
+            error: VFS_ERROR_NOT_SUPPORTED,
+        })
     }
 }
 
 impl VfsFileDescriptor {
     fn read_dir_page(&mut self, max_entries: usize) -> Vec<VfsShortDirEntry> {
+        let max_entries = max_entries.min(VFS_MAX_DIRECTORY_OBJECTS_PER_PAGE);
         let entries = match self.resource {
             VfsResource::Resources => RESOURCES,
             VfsResource::HardDisk => HARD_DISK,
@@ -348,13 +362,16 @@ impl VfsResource {
 
 #[cfg(test)]
 mod tests {
-    use super::protocol::{Path, VFS_PASSWORD_LEN, VfsAttachMode};
+    use super::protocol::{Path, VFS_PASSWORD_SPACE, VfsAttachMode};
     use super::*;
+
+    const REQUESTORS_CONNECTION_ID: u16 = 0x7e00;
+    const BUFFER_COUNT: u8 = 1;
 
     fn header(request: VfsRequestCode, server: u16) -> VfsRequestHeader {
         VfsRequestHeader {
-            request: request as u16,
-            requestors_conn_id: 0x7e00,
+            request: request.to_u16().expect("valid VFS request code"),
+            requestors_conn_id: REQUESTORS_CONNECTION_ID,
             servers_conn_id: server,
         }
     }
@@ -369,13 +386,15 @@ mod tests {
             body: VfsRequestBody::Attach(VfsAttachRequest {
                 mode: VfsAttachMode::NewFile,
                 access: VfsAccessMode::Write,
-                password: [0; VFS_PASSWORD_LEN],
+                password: [0; VFS_PASSWORD_SPACE],
                 path,
             }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Open, 1),
-            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+            body: VfsRequestBody::Open(VfsOpenRequest {
+                num_buf: BUFFER_COUNT,
+            }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Write, 1),
@@ -414,13 +433,15 @@ mod tests {
             body: VfsRequestBody::Attach(VfsAttachRequest {
                 mode: VfsAttachMode::NewFile,
                 access: VfsAccessMode::Write,
-                password: [0; VFS_PASSWORD_LEN],
+                password: [0; VFS_PASSWORD_SPACE],
                 path,
             }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Open, 1),
-            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+            body: VfsRequestBody::Open(VfsOpenRequest {
+                num_buf: BUFFER_COUNT,
+            }),
         });
         vfs.files
             .get_mut(&NonZeroU16::new(1).unwrap())
@@ -448,14 +469,14 @@ mod tests {
         let response = vfs.read_desc(
             &header(VfsRequestCode::ReadDesc, 1),
             VfsReadRequest {
-                data_length: VFS_DESCRIPTOR_LEN as u16,
+                data_length: VFS_DESCRIPTOR_LENGTH as u16,
             },
         );
         let VfsResponse::Read(response) = response else {
             panic!("read descriptor returned a non-read response");
         };
 
-        assert_eq!(response.data.len(), VFS_DESCRIPTOR_LEN);
+        assert_eq!(response.data.len(), VFS_DESCRIPTOR_LENGTH);
         assert_eq!(
             &response.data[VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET
                 ..VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET + size_of::<u32>()],
@@ -473,13 +494,15 @@ mod tests {
             body: VfsRequestBody::Attach(VfsAttachRequest {
                 mode: VfsAttachMode::NewFile,
                 access: VfsAccessMode::Write,
-                password: [0; VFS_PASSWORD_LEN],
+                password: [0; VFS_PASSWORD_SPACE],
                 path: path.clone(),
             }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Open, 1),
-            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+            body: VfsRequestBody::Open(VfsOpenRequest {
+                num_buf: BUFFER_COUNT,
+            }),
         });
 
         let response = vfs.seek(
@@ -512,13 +535,15 @@ mod tests {
             body: VfsRequestBody::Attach(VfsAttachRequest {
                 mode: VfsAttachMode::NewFile,
                 access: VfsAccessMode::Write,
-                password: [0; VFS_PASSWORD_LEN],
+                password: [0; VFS_PASSWORD_SPACE],
                 path,
             }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Open, 1),
-            body: VfsRequestBody::Open(VfsOpenRequest { num_buf: 1 }),
+            body: VfsRequestBody::Open(VfsOpenRequest {
+                num_buf: BUFFER_COUNT,
+            }),
         });
         vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::Write, 1),

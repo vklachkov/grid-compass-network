@@ -1,6 +1,8 @@
-use std::{io, io::Write};
+use std::{io, io::Write, mem::size_of};
 
 use bstr::BStr;
+use num_derive::{FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::shared::{
     FrameError,
@@ -8,10 +10,19 @@ use crate::shared::{
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
-pub(super) const VFS_PASSWORD_LEN: usize = 17;
-pub(super) const VFS_DESCRIPTOR_LEN: usize = 198;
+pub(super) const VFS_MAX_MESSAGE_LENGTH: usize = 514;
+pub(super) const VFS_PAGE_SIZE: usize = 504;
+pub(super) const VFS_MAX_DIRECTORY_OBJECTS_PER_PAGE: usize = 30;
+pub(super) const VFS_MAX_FILE_NAME_LENGTH: usize = 80;
+pub(super) const VFS_MAX_PASSWORD_LENGTH: usize = 16;
+pub(super) const VFS_PASSWORD_SPACE: usize = VFS_MAX_PASSWORD_LENGTH + 1;
+pub(super) const VFS_MAX_DESCRIPTOR_LENGTH: usize = 200;
+pub(super) const VFS_DESCRIPTOR_LENGTH: usize = VFS_MAX_DESCRIPTOR_LENGTH - size_of::<u16>();
 pub(super) const VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET: usize = 164;
-pub(super) const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 = 9;
+pub(super) const VFS_MAX_READ_LENGTH: usize = VFS_PAGE_SIZE;
+pub(super) const VFS_MAX_WRITE_LENGTH: usize = VFS_PAGE_SIZE;
+pub(super) const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 =
+    (size_of::<u32>() + size_of::<u32>() + size_of::<u8>()) as u32;
 pub(super) const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
 
 pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
@@ -42,7 +53,7 @@ pub struct VfsRequestHeader {
     pub servers_conn_id: u16,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u16)]
 pub enum VfsRequestCode {
     Initialize = 0,
@@ -73,6 +84,13 @@ pub enum VfsRequestCode {
     WriteProtect = 27,
     BufferCommand = 28,
     ReadDirPage = 29,
+    SignOn = 30,
+    SignOff = 31,
+    Send = 32,
+    RemoteCopy = 33,
+    GetMoreStatus = 34,
+    ReadRamBuffer = 35,
+    WriteRamBuffer = 36,
 }
 
 #[derive(Clone, Debug)]
@@ -99,11 +117,11 @@ pub enum VfsRequestBody<'a> {
 pub struct VfsAttachRequest<'a> {
     pub mode: VfsAttachMode,
     pub access: VfsAccessMode,
-    pub password: [u8; VFS_PASSWORD_LEN],
+    pub password: [u8; VFS_PASSWORD_SPACE],
     pub path: Path<'a>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum VfsAttachMode {
     OldFile = 1,
@@ -120,6 +138,12 @@ pub struct VfsOpenRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct VfsReadRequest {
     pub data_length: u16,
+}
+
+impl VfsReadRequest {
+    pub fn bounded_length(self) -> usize {
+        usize::from(self.data_length).min(VFS_MAX_READ_LENGTH)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,7 +166,7 @@ pub struct VfsSetStatusRequest<'a> {
     pub actions: Vec<VfsSetStatusAction<'a>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum VfsSetStatusType {
     SetDirection = 255,
@@ -165,7 +189,7 @@ pub enum VfsSetStatusType {
 #[derive(Clone, Debug)]
 pub enum VfsSetStatusAction<'a> {
     SetDirection {
-        raw: &'a [u8],
+        direction: VfsReadDirection,
     },
     SetWildcard {
         pattern: &'a BStr,
@@ -212,7 +236,7 @@ pub enum VfsSetStatusAction<'a> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum VfsObjectMode {
     Byte = 0,
@@ -257,7 +281,7 @@ pub struct VfsShortDirEntry {
     pub name: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum VfsSeekMode {
     Backward = 1,
@@ -266,7 +290,14 @@ pub enum VfsSeekMode {
     FromEnd = 4,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[repr(u8)]
+pub enum VfsReadDirection {
+    Forward = 0,
+    Backward = 1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum VfsAccessMode {
     Read = 1,
@@ -300,112 +331,6 @@ pub(super) enum VfsResource {
     Unknown,
 }
 
-impl VfsAttachMode {
-    fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            1 => Self::OldFile,
-            2 => Self::UpdateFile,
-            3 => Self::NewFile,
-            _ => return None,
-        })
-    }
-}
-
-impl VfsRequestCode {
-    pub fn from_repr(value: u16) -> Option<Self> {
-        Some(match value {
-            0 => Self::Initialize,
-            1 => Self::GetStatus,
-            2 => Self::Open,
-            3 => Self::Close,
-            4 => Self::Read,
-            5 => Self::Write,
-            6 => Self::Seek,
-            7 => Self::Truncate,
-            8 => Self::Attach,
-            9 => Self::Detach,
-            10 => Self::Rename,
-            11 => Self::Delete,
-            12 => Self::ReadDesc,
-            13 => Self::WriteDesc,
-            14 => Self::Flush,
-            15 => Self::WaitSrq,
-            16 => Self::SelfTest,
-            17 => Self::Format,
-            20 => Self::SetStatus,
-            21 => Self::Deactivate,
-            22 => Self::TrackFormat,
-            23 => Self::ControllerTest,
-            24 => Self::RamTest,
-            25 => Self::DriveTest,
-            26 => Self::Program,
-            27 => Self::WriteProtect,
-            28 => Self::BufferCommand,
-            29 => Self::ReadDirPage,
-            _ => return None,
-        })
-    }
-}
-
-impl VfsSetStatusType {
-    pub fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            255 => Self::SetDirection,
-            254 => Self::SetWildcard,
-            253 => Self::SetObjectMode,
-            252 => Self::SetGpibAddress,
-            251 => Self::SetDeviceMask,
-            250 => Self::SetNoteValue,
-            249 => Self::SetNumBuffers,
-            248 => Self::SetNameAttributes,
-            247 => Self::SetConsoleMode,
-            246 => Self::SetAccessRights,
-            245 => Self::SetSecureMode,
-            244 => Self::SetIpcActivityTimeout,
-            243 => Self::GetGenericDeviceName,
-            242 => Self::GetDeviceName,
-            _ => return None,
-        })
-    }
-}
-
-impl VfsObjectMode {
-    pub fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            0 => Self::Byte,
-            1 => Self::Directory,
-            2 => Self::CompleteDirectory,
-            _ => return None,
-        })
-    }
-}
-
-impl VfsSeekMode {
-    fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            1 => Self::Backward,
-            2 => Self::Absolute,
-            3 => Self::Forward,
-            4 => Self::FromEnd,
-            _ => return None,
-        })
-    }
-}
-
-impl VfsAccessMode {
-    fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            1 => Self::Read,
-            2 => Self::Write,
-            3 => Self::Update,
-            4 => Self::UpdateDescriptor,
-            5 => Self::ShortDirectory,
-            6 => Self::LongDirectory,
-            _ => return None,
-        })
-    }
-}
-
 fn read_request(cursor: &mut io::Cursor<&[u8]>) -> Result<VfsReadRequest, FrameError> {
     let data_length = cursor.read_u16()?;
     ensure_empty(cursor, "VFS read payload")?;
@@ -419,6 +344,18 @@ fn read_write_request<'a>(
     let data = cursor.read_slice(data_length)?;
     ensure_empty(cursor, "VFS write payload")?;
     Ok(VfsWriteRequest { data })
+}
+
+fn read_single_byte(raw: &[u8], name: &str) -> Result<u8, FrameError> {
+    raw.first()
+        .copied()
+        .filter(|_| raw.len() == 1)
+        .ok_or_else(|| FrameError::Validation {
+            reason: format!(
+                "invalid VFS set {name} length: expected 1, found {}",
+                raw.len()
+            ),
+        })
 }
 
 fn ensure_empty(cursor: &io::Cursor<&[u8]>, context: &str) -> Result<(), FrameError> {
@@ -444,14 +381,14 @@ impl<'a> VfsRequest<'a> {
             servers_conn_id: cursor.read_u16()?,
         };
 
-        let body = match VfsRequestCode::from_repr(header.request) {
+        let body = match VfsRequestCode::from_u16(header.request) {
             Some(VfsRequestCode::Attach) => {
-                let mode = VfsAttachMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                let mode = VfsAttachMode::from_u8(cursor.read_u8()?).ok_or_else(|| {
                     FrameError::Validation {
                         reason: "invalid VFS attach mode".to_owned(),
                     }
                 })?;
-                let access = VfsAccessMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                let access = VfsAccessMode::from_u8(cursor.read_u8()?).ok_or_else(|| {
                     FrameError::Validation {
                         reason: "invalid VFS access mode".to_owned(),
                     }
@@ -480,7 +417,7 @@ impl<'a> VfsRequest<'a> {
                 VfsRequestBody::ReadDirPage(read_request(&mut cursor)?)
             }
             Some(VfsRequestCode::Seek) => {
-                let mode = VfsSeekMode::from_repr(cursor.read_u8()?).ok_or_else(|| {
+                let mode = VfsSeekMode::from_u8(cursor.read_u8()?).ok_or_else(|| {
                     FrameError::Validation {
                         reason: "invalid VFS seek mode".to_owned(),
                     }
@@ -523,19 +460,23 @@ impl<'a> VfsRequest<'a> {
 }
 
 pub(super) fn response_header(
-    request: u16,
+    request: VfsRequestCode,
     header: &VfsRequestHeader,
     error: u16,
 ) -> VfsResponseHeader {
     VfsResponseHeader {
-        response: VFS_RESPONSE_BIT | request,
+        response: VFS_RESPONSE_BIT | request.to_u16().expect("valid VFS request code"),
         servers_conn_id: header.servers_conn_id,
         requestors_conn_id: header.requestors_conn_id,
         error,
     }
 }
 
-pub(super) fn simple_response(request: u16, header: &VfsRequestHeader, error: u16) -> VfsResponse {
+pub(super) fn simple_response(
+    request: VfsRequestCode,
+    header: &VfsRequestHeader,
+    error: u16,
+) -> VfsResponse {
     VfsResponse::Simple(response_header(request, header, error))
 }
 
@@ -554,13 +495,15 @@ impl VfsResponse {
     /// prefix cannot disagree with the bytes it describes the way a separate
     /// counting pass over the same data could.
     pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
+        let start = dst.len();
+
         match self {
             Self::Simple(response) => write_header(dst, response)?,
             Self::GetStatus(response) => {
                 write_header(dst, &response.header)?;
                 with_u16_len(dst, |dst| {
                     dst.write_u8(response.open as u8)?;
-                    dst.write_u8(response.access as u8)?;
+                    dst.write_u8(response.access.to_u8().expect("valid VFS access mode"))?;
                     dst.write_u8(response.seek as u8)?;
                     dst.write_u32(response.file_position)?;
                     dst.write_u32(response.file_length)?;
@@ -573,6 +516,13 @@ impl VfsResponse {
                 write_header(dst, &response.header)?;
                 with_u16_len(dst, |dst| {
                     for entry in &response.entries {
+                        if entry.name.len() > VFS_MAX_FILE_NAME_LENGTH {
+                            return Err(FrameError::Validation {
+                                reason: format!(
+                                    "VFS directory entry name exceeds the maximum length of {VFS_MAX_FILE_NAME_LENGTH} bytes"
+                                ),
+                            });
+                        }
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
                         dst.write_array([0; 4])?;
                         dst.write_u32(DIRECTORY_ENTRY_PREAMBLE_LEN + u32::from(name_length))?;
@@ -589,6 +539,15 @@ impl VfsResponse {
                     Ok(())
                 })?;
             }
+        }
+
+        if dst.len() - start > VFS_MAX_MESSAGE_LENGTH {
+            dst.truncate(start);
+            return Err(FrameError::Validation {
+                reason: format!(
+                    "VFS response exceeds the maximum length of {VFS_MAX_MESSAGE_LENGTH} bytes"
+                ),
+            });
         }
 
         Ok(())
@@ -635,29 +594,26 @@ impl<'a> Path<'a> {
 
 impl<'a> VfsSetStatusAction<'a> {
     fn from_raw(ty: u8, raw: &'a [u8]) -> Result<Self, FrameError> {
-        let Some(ty) = VfsSetStatusType::from_repr(ty) else {
+        let Some(ty) = VfsSetStatusType::from_u8(ty) else {
             return Ok(Self::Unknown { ty, raw });
         };
         match ty {
-            VfsSetStatusType::SetDirection => Ok(Self::SetDirection { raw }),
+            VfsSetStatusType::SetDirection => {
+                let direction = VfsReadDirection::from_u8(read_single_byte(raw, "direction")?)
+                    .ok_or_else(|| FrameError::Validation {
+                        reason: format!("invalid VFS read direction: {}", raw[0]),
+                    })?;
+                Ok(Self::SetDirection { direction })
+            }
             VfsSetStatusType::SetWildcard => Ok(Self::SetWildcard {
                 pattern: BStr::new(raw),
             }),
             VfsSetStatusType::SetObjectMode => {
-                if raw.len() != 1 {
-                    return Err(FrameError::Validation {
-                        reason: format!(
-                            "invalid VFS set object mode length: expected 1, found {}",
-                            raw.len()
-                        ),
-                    });
-                }
-                let raw_mode = raw[0];
-                let Some(mode) = VfsObjectMode::from_repr(raw_mode) else {
-                    return Err(FrameError::Validation {
+                let raw_mode = read_single_byte(raw, "object mode")?;
+                let mode =
+                    VfsObjectMode::from_u8(raw_mode).ok_or_else(|| FrameError::Validation {
                         reason: format!("invalid VFS object mode: {raw_mode}"),
-                    });
-                };
+                    })?;
                 Ok(Self::SetObjectMode { mode })
             }
             VfsSetStatusType::SetGpibAddress => Ok(Self::SetGpibAddress { raw }),

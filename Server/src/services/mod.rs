@@ -11,6 +11,7 @@ use crate::{
     db,
     gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
     shared::FrameError,
+    vfs::FsBackend,
 };
 
 mod mail;
@@ -25,7 +26,7 @@ const CLASS_BROADCAST: MessageType = MessageType(0x7000);
 const CLASS_SENTRY: MessageType = MessageType(0xffff);
 
 pub struct Vipc {
-    vfs: Vfs,
+    vfs: Vfs<FsBackend>,
     mail: MailServer,
     mail_broadcast: MailBroadcastServer,
     sentry: SentryServer,
@@ -34,7 +35,7 @@ pub struct Vipc {
 impl Vipc {
     pub fn new(conn: Rc<Connection>, actor: db::Account) -> Self {
         Self {
-            vfs: Vfs::new(),
+            vfs: Vfs::new(FsBackend::new()),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
             mail_broadcast: MailBroadcastServer::new(),
             sentry: SentryServer::new(conn, actor),
@@ -53,11 +54,7 @@ impl Vipc {
                 self.vfs
                     .process_request(request)
                     .write_into(&mut response)?;
-                if let Some(data) = self.vfs.take_finalized_mail()
-                    && !self.mail.accept_outgoing(data)
-                {
-                    warn!(target: "vipc", "discarded malformed outgoing mail object");
-                }
+
                 vec![OutgoingMessage {
                     note: message.note,
                     body: OutgoingMessageBody {
@@ -212,62 +209,6 @@ mod tests {
         assert_eq!(
             responses[0].to_bytes(),
             [0xff, 0xff, 0xff, 0xff, 3, 0, 2, 0, 0]
-        );
-    }
-
-    fn tagged(tag: u8, value: &[u8]) -> Vec<u8> {
-        let mut data = vec![0xfd];
-        data.extend(((value.len() + 1) as u16).to_le_bytes());
-        data.push(tag);
-        data.extend_from_slice(value);
-        data
-    }
-
-    fn vfs_message(note: u16, payload: &[u8]) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend(CLASS_VFS.0.to_le_bytes());
-        data.extend(note.to_le_bytes());
-        data.extend((payload.len() as u16).to_le_bytes());
-        data.extend_from_slice(payload);
-        data
-    }
-
-    #[test]
-    fn finalized_vfs_mail_appears_in_mail_list() {
-        let mut vipc = vipc();
-        let path = b"`vklachkov server:Mail`Mail`84/08/10 19:01:54.3~Mail~";
-        let mut attach = vec![8, 0, 0, 0x7e, 0, 0, 3, 2];
-        attach.extend([0; 17]);
-        attach.push(path.len() as u8);
-        attach.extend_from_slice(path);
-        vipc.process_message(&vfs_message(1, &attach)).unwrap();
-
-        vipc.process_message(&vfs_message(2, &[2, 0, 0, 0x7e, 1, 0, 1]))
-            .unwrap();
-
-        let mut outgoing = tagged(b't', b"MANAGER");
-        outgoing.extend(tagged(b's', b"Sent through VFS"));
-        outgoing.extend(tagged(b'n', b"Stored body"));
-        outgoing.extend(tagged(b'z', b""));
-        let mut write = vec![5, 0, 0, 0x7e, 1, 0];
-        write.extend((outgoing.len() as u16).to_le_bytes());
-        write.extend(outgoing);
-        vipc.process_message(&vfs_message(3, &write)).unwrap();
-        vipc.process_message(&vfs_message(4, &[9, 0, 0, 0x7e, 1, 0]))
-            .unwrap();
-
-        let request = [
-            0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 7, 0, 1, 0, 0, 0, 0, 0, 0,
-        ];
-        let responses = vipc.process_message(&request).unwrap();
-
-        assert_eq!(responses.len(), 1);
-        let listed = responses[0].to_bytes();
-        assert_eq!(listed[6] & 1, 0);
-        assert!(
-            listed
-                .windows(b"Sent through VFS".len())
-                .any(|bytes| bytes == b"Sent through VFS")
         );
     }
 

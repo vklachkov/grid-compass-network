@@ -4,9 +4,12 @@ use bstr::BStr;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 
-use crate::shared::{
-    FrameError,
-    io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
+use crate::{
+    shared::{
+        FrameError,
+        io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
+    },
+    vfs::{AccessMode, AttachMode, ObjectMode, ReadDirection, SeekMode},
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
@@ -23,22 +26,12 @@ pub(super) const VFS_MAX_READ_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const VFS_MAX_WRITE_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 =
     (size_of::<u32>() + size_of::<u32>() + size_of::<u8>()) as u32;
-pub(super) const MAX_MAIL_OBJECT_SIZE: usize = 16 * 1024 * 1024;
 
 pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
 pub(super) const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
 pub(super) const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
 pub(super) const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
 pub(super) const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
-
-pub(super) const RESOURCES: &[&str] = &["Hard Disk~FS~"];
-pub(super) const HARD_DISK: &[&str] = &[
-    "Folder 1~Subject~",
-    "Folder 3~Subject~",
-    "Folder 2~Subject~",
-];
-pub(super) const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
-pub(super) const READ_STUB: &[u8] = b"Read stub";
 
 #[derive(Clone, Debug)]
 pub struct VfsRequest<'a> {
@@ -107,6 +100,7 @@ pub enum VfsRequestBody<'a> {
     Attach(VfsAttachRequest<'a>),
     Detach,
     Close,
+    Flush,
     Unknown(&'a [u8]),
 }
 
@@ -308,6 +302,59 @@ pub enum VfsAccessMode {
     LongDirectory = 6,
 }
 
+impl From<VfsAttachMode> for AttachMode {
+    fn from(value: VfsAttachMode) -> Self {
+        match value {
+            VfsAttachMode::OldFile => Self::OldFile,
+            VfsAttachMode::UpdateFile => Self::UpdateFile,
+            VfsAttachMode::NewFile => Self::NewFile,
+        }
+    }
+}
+
+impl From<VfsAccessMode> for AccessMode {
+    fn from(value: VfsAccessMode) -> Self {
+        match value {
+            VfsAccessMode::Read => Self::Read,
+            VfsAccessMode::Write => Self::Write,
+            VfsAccessMode::Update => Self::Update,
+            VfsAccessMode::UpdateDescriptor => Self::UpdateDescriptor,
+            VfsAccessMode::ShortDirectory => Self::ShortDirectory,
+            VfsAccessMode::LongDirectory => Self::LongDirectory,
+        }
+    }
+}
+
+impl From<VfsSeekMode> for SeekMode {
+    fn from(value: VfsSeekMode) -> Self {
+        match value {
+            VfsSeekMode::Backward => Self::Backward,
+            VfsSeekMode::Absolute => Self::Absolute,
+            VfsSeekMode::Forward => Self::Forward,
+            VfsSeekMode::FromEnd => Self::FromEnd,
+        }
+    }
+}
+
+impl From<VfsReadDirection> for ReadDirection {
+    fn from(value: VfsReadDirection) -> Self {
+        match value {
+            VfsReadDirection::Forward => Self::Forward,
+            VfsReadDirection::Backward => Self::Backward,
+        }
+    }
+}
+
+impl From<VfsObjectMode> for ObjectMode {
+    fn from(value: VfsObjectMode) -> Self {
+        match value {
+            VfsObjectMode::Byte => Self::Byte,
+            VfsObjectMode::Directory => Self::Directory,
+            VfsObjectMode::CompleteDirectory => Self::CompleteDirectory,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Path<'a> {
     pub server: &'a BStr,
@@ -320,15 +367,6 @@ pub enum VfsResponse {
     GetStatus(VfsGetStatusResponse),
     ReadDirPage(VfsReadDirPageResponse),
     Read(VfsReadResponse),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum VfsResource {
-    Resources,
-    HardDisk,
-    HardDiskFiles,
-    MailObject,
-    Unknown,
 }
 
 fn read_request(cursor: &mut io::Cursor<&[u8]>) -> Result<VfsReadRequest, FrameError> {
@@ -451,6 +489,10 @@ impl<'a> VfsRequest<'a> {
             Some(VfsRequestCode::Close) => {
                 ensure_empty(&cursor, "VFS close payload")?;
                 VfsRequestBody::Close
+            }
+            Some(VfsRequestCode::Flush) => {
+                ensure_empty(&cursor, "VFS flush payload")?;
+                VfsRequestBody::Flush
             }
             Some(_) | None => VfsRequestBody::Unknown(cursor.read_remainder()),
         };

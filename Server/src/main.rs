@@ -4,6 +4,7 @@ mod gridserver;
 mod logger;
 mod services;
 mod shared;
+mod vfs;
 mod web;
 
 use std::{process::ExitCode, thread};

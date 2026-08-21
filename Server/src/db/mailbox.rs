@@ -147,7 +147,10 @@ pub fn search(conn: &Connection, filter: &Filter<'_>) -> rusqlite::Result<Vec<Me
            AND (?3 = '' OR r.name = ?3)
          ORDER BY rc.name, rg.name, r.name, m.mail_id"
     ))?
-    .query_map(params![filter.company, filter.group, filter.user], read_message)?
+    .query_map(
+        params![filter.company, filter.group, filter.user],
+        read_message,
+    )?
     .collect()
 }
 

@@ -5,12 +5,11 @@ use protocol::*;
 
 use std::{collections::HashMap, mem::size_of, num::NonZeroU16};
 
-use bstr::ByteSlice;
 use log::{debug, warn};
 use num_traits::ToPrimitive;
 
 use super::protocol::status;
-use crate::vfs::{Backend, ObjectMode, Path as BackendPath, ReadDirection};
+use crate::vfs::{Backend, ObjectMode, ReadDirection};
 
 pub(crate) struct Vfs<B: Backend> {
     backend: B,
@@ -231,18 +230,9 @@ impl<B: Backend> Vfs<B> {
             });
         };
 
-        let path = BackendPath {
-            server: body.path.server.as_bytes().to_vec(),
-            components: body
-                .path
-                .components
-                .iter()
-                .map(|component| component.as_bytes().to_vec())
-                .collect(),
-        };
         let handle = match self
             .backend
-            .open(&path, body.mode.into(), body.access.into())
+            .open(&body.path, body.mode.into(), body.access.into())
         {
             Ok(handle) => handle,
             Err(error) => return simple_response(VfsRequestCode::Attach, header, error),

@@ -1,9 +1,11 @@
+use super::GRiDPath;
+
 pub(crate) trait Backend {
     type Handle;
 
     fn open(
         &mut self,
-        path: &Path,
+        path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
     ) -> Result<Self::Handle, u16>;
@@ -64,12 +66,6 @@ pub(crate) enum ObjectMode {
     Byte,
     Directory,
     CompleteDirectory,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Path {
-    pub server: Vec<u8>,
-    pub components: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

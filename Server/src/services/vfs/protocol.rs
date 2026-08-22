@@ -9,7 +9,7 @@ use crate::{
         FrameError,
         io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
     },
-    vfs::{AccessMode, AttachMode, ObjectMode, ReadDirection, SeekMode},
+    vfs::{AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection, SeekMode},
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
@@ -112,7 +112,7 @@ pub struct VfsAttachRequest<'a> {
     pub mode: VfsAttachMode,
     pub access: VfsAccessMode,
     pub password: [u8; VFS_PASSWORD_SPACE],
-    pub path: Path<'a>,
+    pub path: &'a GRiDPath,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
@@ -355,12 +355,6 @@ impl From<VfsObjectMode> for ObjectMode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Path<'a> {
-    pub server: &'a BStr,
-    pub components: Vec<&'a BStr>,
-}
-
 #[derive(Clone, Debug)]
 pub enum VfsResponse {
     Simple(VfsResponseHeader),
@@ -432,7 +426,11 @@ impl<'a> VfsRequest<'a> {
                     }
                 })?;
                 let password = cursor.read_array()?;
-                let path = read_small_slice(&mut cursor).and_then(Path::try_from_slice)?;
+                let path = read_small_slice(&mut cursor).and_then(|path| {
+                    GRiDPath::try_from(path).map_err(|reason| FrameError::Validation {
+                        reason: reason.to_owned(),
+                    })
+                })?;
                 ensure_empty(&cursor, "VFS attach payload")?;
                 VfsRequestBody::Attach(VfsAttachRequest {
                     mode,
@@ -593,44 +591,6 @@ impl VfsResponse {
         }
 
         Ok(())
-    }
-}
-
-impl<'a> Path<'a> {
-    pub fn try_from_slice(data: &'a [u8]) -> Result<Self, FrameError> {
-        let path = data
-            .strip_prefix(b"`")
-            .ok_or_else(|| FrameError::Validation {
-                reason: "path must start with `".to_owned(),
-            })?;
-        let Some(separator) = path.iter().position(|&byte| byte == b':') else {
-            return Err(FrameError::Validation {
-                reason: "path must contain a server name followed by :".to_owned(),
-            });
-        };
-        let server = &path[..separator];
-        let resource = &path[separator + 1..];
-        if server.is_empty() {
-            return Err(FrameError::Validation {
-                reason: "path server name must not be empty".to_owned(),
-            });
-        }
-        let components = resource
-            .split(|&byte| byte == b'`')
-            .map(|component| {
-                if component.is_empty() {
-                    Err(FrameError::Validation {
-                        reason: "path components must not be empty".to_owned(),
-                    })
-                } else {
-                    Ok(BStr::new(component))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            server: BStr::new(server),
-            components,
-        })
     }
 }
 

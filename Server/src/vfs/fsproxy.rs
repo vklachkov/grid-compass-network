@@ -1,4 +1,6 @@
-use super::{AccessMode, AttachMode, Backend, DirEntry, ObjectMode, Path, ReadDirection, SeekMode};
+use super::{
+    AccessMode, AttachMode, Backend, DirEntry, GRiDPath, ObjectMode, ReadDirection, SeekMode,
+};
 
 const RESOURCES: &[&str] = &["Hard Disk~FS~"];
 const HARD_DISK: &[&str] = &[
@@ -44,7 +46,7 @@ impl Backend for FsBackend {
 
     fn open(
         &mut self,
-        path: &Path,
+        path: &GRiDPath,
         _mode: AttachMode,
         _access: AccessMode,
     ) -> Result<Self::Handle, u16> {
@@ -107,24 +109,17 @@ impl Backend for FsBackend {
 }
 
 impl Resource {
-    fn from_path(path: &Path) -> Self {
-        let components = &path.components;
-        if components.len() == 2
-            && components[0] == b"Name Device"
-            && components[1] == b"Resources~Subject~"
-        {
-            Self::Resources
-        } else if components.len() == 1 && components[0] == b"Hard Disk" {
-            Self::HardDisk
-        } else if components.len() == 2
-            && components[0] == b"Hard Disk"
-            && components[1] == b"Folder 3~Subject~"
-        {
-            Self::HardDiskFiles
-        } else if components.len() >= 3 && components[0] == b"Mail" && components[1] == b"Mail" {
-            Self::MailObject
-        } else {
-            Self::Unknown
+    fn from_path(path: &GRiDPath) -> Self {
+        let components = path.components();
+        let device = components.device.map(AsRef::<[u8]>::as_ref);
+        let folder = components.folder.map(AsRef::<[u8]>::as_ref);
+
+        match (device, folder, components.file) {
+            (Some(b"Name Device"), Some(b"Resources~Subject~"), None) => Self::Resources,
+            (Some(b"Hard Disk"), None, None) => Self::HardDisk,
+            (Some(b"Hard Disk"), Some(b"Folder 3~Subject~"), None) => Self::HardDiskFiles,
+            (Some(b"Mail"), Some(b"Mail"), Some(_)) => Self::MailObject,
+            _ => Self::Unknown,
         }
     }
 }

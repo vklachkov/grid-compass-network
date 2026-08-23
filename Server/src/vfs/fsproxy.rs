@@ -1,59 +1,270 @@
-use super::{
-    AccessMode, AttachMode, Backend, DirEntry, GRiDPath, ObjectMode, ReadDirection, SeekMode,
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
 };
 
-const RESOURCES: &[&str] = &["Hard Disk~FS~"];
-const HARD_DISK: &[&str] = &[
-    "Folder 1~Subject~",
-    "Folder 3~Subject~",
-    "Folder 2~Subject~",
-];
-const HARD_DISK_FILES: &[&str] = &["Demo file~Text~"];
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
+use bstr::BStr;
+use log::warn;
+
+use crate::db;
+
+use super::{
+    AccessMode, AttachMode, Backend, DirEntry, GRiDPath, GRiDPathComponents, ObjectMode,
+    ReadDirection, SeekMode,
+};
+
+const RESOURCE_UNAVAILABLE: u16 = 601; // eGCRscUnav
+
+const SUBJECT_SUFFIX: &[u8] = b"~Subject~";
+const FILE_SYSTEM_SUFFIX: &[u8] = b"~FS~";
 const READ_STUB: &[u8] = b"Read stub";
 
-#[derive(Clone, Copy)]
-enum Resource {
-    Resources,
-    HardDisk,
-    HardDiskFiles,
-    MailObject,
-    Unknown,
+const NAME_DEVICE: &[u8] = b"Name Device";
+const RESOURCES_FOLDER: &[u8] = b"Resources~Subject~";
+const MAIL_DEVICE: &[u8] = b"Mail";
+const USER_SUBJECTS: &[u8] = b"User Subjects";
+const GROUP_SUBJECTS: &[u8] = b"Group Subjects";
+const COMPANY_SUBJECTS: &[u8] = b"Company Subjects";
+const SOFTWARE_SUBJECTS: &[u8] = b"Software Subjects";
+const SERVER_SUBJECTS: &[u8] = b"Server Subjects";
+const SHARED_SUBJECTS: &[u8] = b"Shared Subjects";
+
+const MAIL_DIR: &str = "Mail";
+const SENTRY_DIR: &str = "Sentry";
+const COMPANIES_DIR: &str = "Companies";
+const GROUPS_DIR: &str = "Groups";
+const USERS_DIR: &str = "Users";
+const SHARED_DIR: &str = "Shared";
+const SERVER_DIR: &str = "Server";
+const SOFTWARE_DIR: &str = "Software";
+
+const RESOURCE_SUBJECTS: &[&[u8]] = &[
+    USER_SUBJECTS,
+    GROUP_SUBJECTS,
+    COMPANY_SUBJECTS,
+    SOFTWARE_SUBJECTS,
+    SERVER_SUBJECTS,
+    SHARED_SUBJECTS,
+];
+
+pub(crate) struct FsProxy {
+    company_id: i64,
+    group_id: i64,
+    user_id: i64,
+    root: PathBuf,
 }
 
-pub(crate) struct FsBackend;
-
-pub(crate) struct FsHandle {
-    directory: Directory,
-    read_dir_offset: usize,
+pub(crate) enum FsHandle {
+    File,
+    Directory {
+        entries: Vec<DirEntry>,
+        read_offset: usize,
+    },
 }
 
-#[derive(Clone, Copy)]
-enum Directory {
-    Resources,
-    HardDisk,
-    HardDiskFiles,
-    Other,
-}
+impl FsProxy {
+    pub(crate) fn new(account: &db::Account, root: PathBuf) -> io::Result<Self> {
+        for path in [
+            root.join(MAIL_DIR),
+            root.join(SENTRY_DIR).join(COMPANIES_DIR),
+            root.join(SENTRY_DIR).join(SHARED_DIR),
+            root.join(SERVER_DIR),
+            root.join(SOFTWARE_DIR),
+        ] {
+            fs::create_dir_all(path)?;
+        }
 
-impl FsBackend {
-    pub(crate) fn new() -> Self {
-        Self
+        Ok(Self {
+            company_id: account.company_id,
+            group_id: account.group_id,
+            user_id: account.id,
+            root,
+        })
+    }
+
+    fn entries_for(&self, path: &GRiDPath) -> Result<Vec<DirEntry>, u16> {
+        let components = path.components();
+        if Self::is_resources(&components) {
+            return Ok(Self::resources_entries());
+        }
+
+        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
+        if Self::is_subject_root(&components) {
+            fs::create_dir_all(&real_path).map_err(|err| {
+                warn!(target: "vfs", "failed to create resource {}: {err}", real_path.display());
+                RESOURCE_UNAVAILABLE
+            })?;
+        }
+
+        self.read_real_directory(&real_path)
+    }
+
+    fn resources_entries() -> Vec<DirEntry> {
+        RESOURCE_SUBJECTS
+            .iter()
+            .map(|name| {
+                let mut name = name.to_vec();
+                name.extend_from_slice(FILE_SYSTEM_SUFFIX);
+                DirEntry { name: name.into() }
+            })
+            .collect()
+    }
+
+    fn is_resources(components: &GRiDPathComponents<'_>) -> bool {
+        components.device == Some(BStr::new(NAME_DEVICE))
+            && components.folder == Some(BStr::new(RESOURCES_FOLDER))
+            && components.file.is_none()
+    }
+
+    fn real_path(&self, components: &GRiDPathComponents<'_>) -> Option<PathBuf> {
+        let device = components.device?;
+        if device == BStr::new(NAME_DEVICE) {
+            return None;
+        }
+
+        self.subject_real_path(components)
+    }
+
+    fn is_subject_root(components: &GRiDPathComponents<'_>) -> bool {
+        components.folder.is_none() && components.file.is_none()
+    }
+
+    fn subject_real_path(&self, components: &GRiDPathComponents<'_>) -> Option<PathBuf> {
+        let device: &[u8] = components.device?.as_ref();
+        let mut path = match device {
+            MAIL_DEVICE => self.root.join(MAIL_DIR),
+            USER_SUBJECTS => self
+                .root
+                .join(SENTRY_DIR)
+                .join(COMPANIES_DIR)
+                .join(self.company_id.to_string())
+                .join(GROUPS_DIR)
+                .join(self.group_id.to_string())
+                .join(USERS_DIR)
+                .join(self.user_id.to_string()),
+            GROUP_SUBJECTS => self
+                .root
+                .join(SENTRY_DIR)
+                .join(COMPANIES_DIR)
+                .join(self.company_id.to_string())
+                .join(GROUPS_DIR)
+                .join(self.group_id.to_string())
+                .join(SHARED_DIR),
+            COMPANY_SUBJECTS => self
+                .root
+                .join(SENTRY_DIR)
+                .join(COMPANIES_DIR)
+                .join(self.company_id.to_string())
+                .join(SHARED_DIR),
+            SOFTWARE_SUBJECTS => self.root.join(SOFTWARE_DIR),
+            SERVER_SUBJECTS => self.root.join(SERVER_DIR),
+            SHARED_SUBJECTS => self.root.join(SENTRY_DIR).join(SHARED_DIR),
+            _ => return None,
+        };
+
+        if let Some(folder) = components.folder {
+            Self::push_component(&mut path, folder);
+        }
+        if let Some(file) = components.file {
+            Self::push_component(&mut path, file);
+        }
+
+        Some(path)
+    }
+
+    fn push_component(path: &mut PathBuf, component: &BStr) {
+        let component = Self::strip_subject_suffix(component).unwrap_or(component);
+        let component = component
+            .iter()
+            .map(|byte| match byte {
+                b'/' | b'\\' | b'.' => b'_',
+                byte => *byte,
+            })
+            .collect::<Vec<_>>();
+
+        #[cfg(unix)]
+        path.push(std::ffi::OsStr::from_bytes(&component));
+
+        #[cfg(not(unix))]
+        path.push(String::from_utf8_lossy(&component).into_owned());
+    }
+
+    fn strip_subject_suffix(name: &BStr) -> Option<&BStr> {
+        name.strip_suffix(SUBJECT_SUFFIX).map(BStr::new)
+    }
+
+    fn open_file(
+        &self,
+        path: &GRiDPath,
+        _mode: AttachMode,
+        _access: AccessMode,
+    ) -> Result<FsHandle, u16> {
+        self.real_path(&path.components())
+            .map(|_| FsHandle::File)
+            .ok_or(RESOURCE_UNAVAILABLE)
+    }
+
+    fn read_real_directory(&self, path: &Path) -> Result<Vec<DirEntry>, u16> {
+        let read_dir = fs::read_dir(path).map_err(|err| {
+            warn!(target: "vfs", "failed to read resource {}: {err}", path.display());
+            RESOURCE_UNAVAILABLE
+        })?;
+
+        let mut entries = Vec::new();
+        for result in read_dir {
+            let entry = match result {
+                Ok(entry) => entry,
+                Err(err) => {
+                    warn!(target: "vfs", "failed to read an entry in {}: {err}", path.display());
+                    continue;
+                }
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    warn!(target: "vfs", "failed to read the type of {}: {err}", entry.path().display());
+                    continue;
+                }
+            };
+
+            let mut name = entry.file_name().into_encoded_bytes();
+            if file_type.is_dir() {
+                name.extend_from_slice(SUBJECT_SUFFIX);
+            } else if !file_type.is_file() {
+                continue;
+            }
+
+            entries.push(DirEntry { name: name.into() });
+        }
+
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
     }
 }
 
-impl Backend for FsBackend {
+impl Backend for FsProxy {
     type Handle = FsHandle;
 
     fn open(
         &mut self,
         path: &GRiDPath,
-        _mode: AttachMode,
-        _access: AccessMode,
+        mode: AttachMode,
+        access: AccessMode,
     ) -> Result<Self::Handle, u16> {
-        Ok(FsHandle {
-            directory: Directory::from_resource(Resource::from_path(path)),
-            read_dir_offset: 0,
-        })
+        match access {
+            AccessMode::ShortDirectory | AccessMode::LongDirectory => Ok(FsHandle::Directory {
+                entries: self.entries_for(path)?,
+                read_offset: 0,
+            }),
+            AccessMode::Read
+            | AccessMode::Write
+            | AccessMode::Update
+            | AccessMode::UpdateDescriptor => self.open_file(path, mode, access),
+        }
     }
 
     fn close(&mut self, _handle: &mut Self::Handle) -> Result<(), u16> {
@@ -88,49 +299,23 @@ impl Backend for FsBackend {
         _direction: ReadDirection,
         _object_mode: ObjectMode,
     ) -> Result<Vec<DirEntry>, u16> {
-        let entries = match handle.directory {
-            Directory::Resources => RESOURCES,
-            Directory::HardDisk => HARD_DISK,
-            Directory::HardDiskFiles => HARD_DISK_FILES,
-            Directory::Other => return Ok(Vec::new()),
+        let FsHandle::Directory {
+            entries,
+            read_offset,
+        } = handle
+        else {
+            return Err(RESOURCE_UNAVAILABLE);
         };
 
         let page = entries
             .iter()
-            .skip(handle.read_dir_offset)
+            .skip(*read_offset)
             .take(max_entries)
-            .map(|name| DirEntry {
-                name: name.as_bytes().to_vec(),
-            })
+            .cloned()
             .collect::<Vec<_>>();
-        handle.read_dir_offset += page.len();
+
+        *read_offset += page.len();
+
         Ok(page)
-    }
-}
-
-impl Resource {
-    fn from_path(path: &GRiDPath) -> Self {
-        let components = path.components();
-        let device = components.device.map(AsRef::<[u8]>::as_ref);
-        let folder = components.folder.map(AsRef::<[u8]>::as_ref);
-
-        match (device, folder, components.file) {
-            (Some(b"Name Device"), Some(b"Resources~Subject~"), None) => Self::Resources,
-            (Some(b"Hard Disk"), None, None) => Self::HardDisk,
-            (Some(b"Hard Disk"), Some(b"Folder 3~Subject~"), None) => Self::HardDiskFiles,
-            (Some(b"Mail"), Some(b"Mail"), Some(_)) => Self::MailObject,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-impl Directory {
-    fn from_resource(resource: Resource) -> Self {
-        match resource {
-            Resource::Resources => Self::Resources,
-            Resource::HardDisk => Self::HardDisk,
-            Resource::HardDiskFiles => Self::HardDiskFiles,
-            Resource::MailObject | Resource::Unknown => Self::Other,
-        }
     }
 }

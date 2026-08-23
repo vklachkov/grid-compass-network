@@ -25,7 +25,7 @@ fn main() -> ExitCode {
     match gridserver::serve() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            error!(target: "server", "fatal error: {err}");
+            error!(target: "server", "fatal error: {err:#}");
             ExitCode::FAILURE
         }
     }

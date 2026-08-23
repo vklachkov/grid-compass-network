@@ -1,14 +1,44 @@
+use std::fmt;
+
 use bstr::{BStr, ByteSlice};
 
 #[repr(transparent)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct GRiDPath([u8]);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Components<'a> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct GRiDPathComponents<'a> {
     pub device: Option<&'a BStr>,
     pub folder: Option<&'a BStr>,
     pub file: Option<&'a BStr>,
+}
+
+impl fmt::Debug for GRiDPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("GRiDPath")
+            .field(&BStr::new(&self.0))
+            .finish()
+    }
+}
+
+impl fmt::Debug for GRiDPathComponents<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GRiDPathComponents")
+            .field("device", &self.device)
+            .field("folder", &self.folder)
+            .field("file", &self.file)
+            .finish()
+    }
+}
+
+impl<'a> GRiDPathComponents<'a> {
+    pub fn new(device: Option<&'a BStr>, folder: Option<&'a BStr>, file: Option<&'a BStr>) -> Self {
+        Self {
+            device,
+            folder,
+            file,
+        }
+    }
 }
 
 impl GRiDPath {
@@ -84,7 +114,7 @@ impl GRiDPath {
         Some(BStr::new(&path[..separator]))
     }
 
-    pub fn components(&self) -> Components<'_> {
+    pub fn components(&self) -> GRiDPathComponents<'_> {
         let components = self
             .0
             .splitn(2, |&byte| byte == Self::SERVER_SEPARATOR)
@@ -101,11 +131,7 @@ impl GRiDPath {
             .filter(|component| !component.is_empty())
             .map(BStr::new);
 
-        Components {
-            device: components.next(),
-            folder: components.next(),
-            file: components.next(),
-        }
+        GRiDPathComponents::new(components.next(), components.next(), components.next())
     }
 
     #[cfg(test)]

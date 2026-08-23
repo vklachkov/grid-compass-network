@@ -1,3 +1,5 @@
+use bstr::BString;
+
 use super::GRiDPath;
 
 pub(crate) trait Backend {
@@ -70,5 +72,5 @@ pub(crate) enum ObjectMode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirEntry {
-    pub name: Vec<u8>,
+    pub name: BString,
 }

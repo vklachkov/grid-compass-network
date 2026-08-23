@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{io, path::PathBuf, rc::Rc};
 
 use log::{debug, warn};
 use rusqlite::Connection;
@@ -11,7 +11,7 @@ use crate::{
     db,
     gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
     shared::FrameError,
-    vfs::FsBackend,
+    vfs::FsProxy,
 };
 
 mod mail;
@@ -26,20 +26,20 @@ const CLASS_BROADCAST: MessageType = MessageType(0x7000);
 const CLASS_SENTRY: MessageType = MessageType(0xffff);
 
 pub struct Vipc {
-    vfs: Vfs<FsBackend>,
+    vfs: Vfs<FsProxy>,
     mail: MailServer,
     mail_broadcast: MailBroadcastServer,
     sentry: SentryServer,
 }
 
 impl Vipc {
-    pub fn new(conn: Rc<Connection>, actor: db::Account) -> Self {
-        Self {
-            vfs: Vfs::new(FsBackend::new()),
+    pub fn new(conn: Rc<Connection>, actor: db::Account, fs_root: PathBuf) -> io::Result<Self> {
+        Ok(Self {
+            vfs: Vfs::new(FsProxy::new(&actor, fs_root)?),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
             mail_broadcast: MailBroadcastServer::new(),
             sentry: SentryServer::new(conn, actor),
-        }
+        })
     }
 
     pub fn process_message(&mut self, payload: &[u8]) -> Result<Vec<OutgoingMessage>, FrameError> {
@@ -120,8 +120,14 @@ mod tests {
         let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
             .expect("read the demo directory")
             .expect("MANAGER should exist");
+        let fs_root = std::env::temp_dir().join(format!(
+            "setochka-vfs-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&fs_root).expect("create test FS root");
 
-        Vipc::new(conn, actor)
+        Vipc::new(conn, actor, fs_root).expect("create VIPC services")
     }
 
     #[test]

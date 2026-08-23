@@ -1,10 +1,13 @@
 use std::{
+    fs::File,
     io,
     net::{SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
     rc::Rc,
     thread,
 };
 
+use anyhow::Context;
 use bstr::BStr;
 use log::{debug, error, info, trace, warn};
 use rusqlite::Connection;
@@ -16,7 +19,7 @@ use crate::services::{
     protocol::{property, status},
     sentry::Authority,
 };
-use crate::shared::FrameError;
+use crate::shared::{FrameError, env::read_env};
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
@@ -28,13 +31,10 @@ enum ProcessFrameResult {
     Disconnect,
 }
 
-pub fn serve() -> io::Result<()> {
-    let addr = std::env::var("LISTEN_ADDR").map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "env var LISTEN_ADDR not found")
-    })?;
-
-    let db_path = std::env::var("DB_PATH")
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "env var DB_PATH not found"))?;
+pub fn serve() -> anyhow::Result<()> {
+    let addr = read_env("LISTEN_ADDR")?;
+    let db_path = read_env("DB_PATH")?;
+    let (fs_root, _fs_root_lock) = read_locked_directory("FS_ROOT").map_err(io::Error::other)?;
 
     db::open(&db_path).map_err(io::Error::other)?;
     info!(target: "server", "using account database {db_path}");
@@ -47,7 +47,8 @@ pub fn serve() -> io::Result<()> {
             Ok((client, addr)) => {
                 info!(target: "server", "accepted client {addr}");
                 let db_path = db_path.clone();
-                thread::spawn(move || worker(client, addr, &db_path));
+                let fs_root = fs_root.clone();
+                thread::spawn(move || worker(client, addr, &db_path, &fs_root));
             }
             Err(err) => {
                 error!(target: "server", "failed to accept client: {err}");
@@ -56,13 +57,38 @@ pub fn serve() -> io::Result<()> {
     }
 }
 
-fn worker(client: TcpStream, addr: SocketAddr, db_path: &str) {
-    if let Err(err) = try_worker(client, addr, db_path) {
+pub fn read_locked_directory(name: &str) -> anyhow::Result<(PathBuf, File)> {
+    let configured_path = PathBuf::from(read_env(name)?);
+
+    let path = std::fs::canonicalize(&configured_path)
+        .with_context(|| format!("canonicalize {name} at {}", configured_path.display()))?;
+
+    let metadata = std::fs::metadata(&path)
+        .with_context(|| format!("read metadata for {name} at {}", path.display()))?;
+
+    if !metadata.is_dir() {
+        anyhow::bail!("{name} is not a directory: {}", path.display());
+    }
+
+    let lock = File::open(&path).with_context(|| format!("open {name} at {}", path.display()))?;
+    lock.lock()
+        .with_context(|| format!("lock {name} at {}", path.display()))?;
+
+    Ok((path, lock))
+}
+
+fn worker(client: TcpStream, addr: SocketAddr, db_path: &str, fs_root: &Path) {
+    if let Err(err) = try_worker(client, addr, db_path, fs_root) {
         error!(target: "server", "worker({addr}): fatal error: {err}");
     }
 }
 
-fn try_worker(client: TcpStream, addr: SocketAddr, db_path: &str) -> io::Result<()> {
+fn try_worker(
+    client: TcpStream,
+    addr: SocketAddr,
+    db_path: &str,
+    fs_root: &Path,
+) -> io::Result<()> {
     let conn = Rc::new(db::open(db_path).map_err(io::Error::other)?);
 
     let mut session = Session {
@@ -73,6 +99,7 @@ fn try_worker(client: TcpStream, addr: SocketAddr, db_path: &str) -> io::Result<
         recv_sequence: 0x1C,
         vipc: None,
         conn,
+        fs_root: fs_root.to_owned(),
         scratch: Scratch::default(),
     };
 
@@ -109,6 +136,7 @@ struct Session {
     /// address at all.
     vipc: Option<Box<Vipc>>,
     conn: Rc<Connection>,
+    fs_root: PathBuf,
     /// Reused for serializing outgoing frames, one buffer per nesting level:
     /// the VIPC message, the data frame around it and the PDL frame around
     /// that. Frames are bounded by `MAX_FRAME_SIZE`, so after the first few
@@ -270,7 +298,11 @@ impl Session {
                     authority.name(),
                 );
 
-                self.vipc = Some(Box::new(Vipc::new(Rc::clone(&self.conn), account)));
+                self.vipc = Some(Box::new(Vipc::new(
+                    Rc::clone(&self.conn),
+                    account,
+                    self.fs_root.clone(),
+                )?));
 
                 status::OK
             }
@@ -466,6 +498,7 @@ mod tests {
             recv_sequence: 0x1C,
             vipc: None,
             conn: Rc::new(db::open_in_memory()),
+            fs_root: PathBuf::new(),
             scratch: Scratch::default(),
         };
 

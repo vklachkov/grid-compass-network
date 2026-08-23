@@ -134,7 +134,9 @@ impl<B: Backend> Vfs<B> {
                     .map(|entries| {
                         entries
                             .into_iter()
-                            .map(|entry| VfsShortDirEntry { name: entry.name })
+                            .map(|entry| VfsShortDirEntry {
+                                name: entry.name.to_vec(),
+                            })
                             .collect()
                     })
             });

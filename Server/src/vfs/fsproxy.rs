@@ -267,7 +267,11 @@ impl Backend for FsProxy {
         }
     }
 
-    fn close(&mut self, _handle: &mut Self::Handle) -> Result<(), u16> {
+    fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+        if let FsHandle::Directory { read_offset, .. } = handle {
+            *read_offset = 0;
+        }
+
         Ok(())
     }
 

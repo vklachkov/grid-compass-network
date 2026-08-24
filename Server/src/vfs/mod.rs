@@ -1,4 +1,6 @@
 mod backend;
+mod file;
+mod file_desc;
 mod fsproxy;
 mod path;
 

@@ -38,6 +38,11 @@ pub fn u16_len(length: usize, what: &str) -> Result<u16, FrameError> {
 }
 
 pub trait ReadExt: io::Read {
+    /// Reads a bool value.
+    fn read_bool(&mut self) -> io::Result<bool> {
+        self.read_u8().map(|b| b != 0)
+    }
+
     /// Reads a u8 value.
     fn read_u8(&mut self) -> io::Result<u8> {
         let mut buffer = [0; 1];

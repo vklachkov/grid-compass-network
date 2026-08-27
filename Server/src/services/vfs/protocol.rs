@@ -21,7 +21,6 @@ pub(super) const VFS_MAX_PASSWORD_LENGTH: usize = 16;
 pub(super) const VFS_PASSWORD_SPACE: usize = VFS_MAX_PASSWORD_LENGTH + 1;
 pub(super) const VFS_MAX_DESCRIPTOR_LENGTH: usize = 200;
 pub(super) const VFS_DESCRIPTOR_LENGTH: usize = VFS_MAX_DESCRIPTOR_LENGTH - size_of::<u16>();
-pub(super) const VFS_DESCRIPTOR_PROPERTY_LENGTH_OFFSET: usize = 164;
 pub(super) const VFS_MAX_READ_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const VFS_MAX_WRITE_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 =
@@ -31,6 +30,7 @@ pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
 pub(super) const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
 pub(super) const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
 pub(super) const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
+pub(super) const VFS_ERROR_ALREADY_OPEN: u16 = 222; // eOpen
 pub(super) const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
 
 #[derive(Clone, Debug)]
@@ -243,7 +243,7 @@ pub struct VfsResponseHeader {
     pub response: u16,
     pub servers_conn_id: u16,
     pub requestors_conn_id: u16,
-    pub error: u16,
+    pub status: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -502,13 +502,13 @@ impl<'a> VfsRequest<'a> {
 pub(super) fn response_header(
     request: VfsRequestCode,
     header: &VfsRequestHeader,
-    error: u16,
+    status: u16,
 ) -> VfsResponseHeader {
     VfsResponseHeader {
         response: VFS_RESPONSE_BIT | request.to_u16().expect("valid VFS request code"),
         servers_conn_id: header.servers_conn_id,
         requestors_conn_id: header.requestors_conn_id,
-        error,
+        status,
     }
 }
 
@@ -524,7 +524,7 @@ fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), Fra
     dst.write_u16(header.response)?;
     dst.write_u16(header.servers_conn_id)?;
     dst.write_u16(header.requestors_conn_id)?;
-    dst.write_u16(header.error)?;
+    dst.write_u16(header.status)?;
     Ok(())
 }
 

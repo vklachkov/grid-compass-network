@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+bit-vec = { version = "0.10.1", default-features = false }
 bstr = { version = "1.12.1", default-features = false, features = ["alloc"] }
 env_filter = { version = "2.0.0", default-features = false, features = ["std"] }
 log = "0.4.33"

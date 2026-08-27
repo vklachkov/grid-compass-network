@@ -5,7 +5,8 @@ mod fsproxy;
 mod path;
 
 pub(crate) use backend::{
-    AccessMode, AttachMode, Backend, DirEntry, ObjectMode, ReadDirection, SeekMode,
+    AccessMode, AttachMode, Backend, DirEntry, FileStatus, ObjectMode, ReadDirection, SeekMode,
+    StatusAction,
 };
 pub(crate) use file::GRiDFile;
 pub(crate) use file_desc::GRiDFileDescriptor;

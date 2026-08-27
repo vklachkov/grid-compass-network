@@ -249,24 +249,6 @@ impl FsProxy {
 impl Backend for FsProxy {
     type Handle = FsHandle;
 
-    fn open(
-        &mut self,
-        path: &GRiDPath,
-        mode: AttachMode,
-        access: AccessMode,
-    ) -> Result<Self::Handle, u16> {
-        match access {
-            AccessMode::ShortDirectory | AccessMode::LongDirectory => Ok(FsHandle::Directory {
-                entries: self.entries_for(path)?,
-                read_offset: 0,
-            }),
-            AccessMode::Read
-            | AccessMode::Write
-            | AccessMode::Update
-            | AccessMode::UpdateDescriptor => self.open_file(path, mode, access),
-        }
-    }
-
     fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
         if let FsHandle::Directory { read_offset, .. } = handle {
             *read_offset = 0;
@@ -321,5 +303,38 @@ impl Backend for FsProxy {
         *read_offset += page.len();
 
         Ok(page)
+    }
+    
+    fn attach(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<Self::Handle, u16> {
+        todo!()
+    }
+    
+    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+        todo!()
+    }
+    
+    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<(), u16> {
+        todo!()
+    }
+    
+    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
+        todo!()
+    }
+    
+    fn set_status(
+        &mut self,
+        handle: &mut Self::Handle,
+        actions: &[super::StatusAction],
+    ) -> Result<(), u16> {
+        todo!()
+    }
+    
+    fn open(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+        todo!()
     }
 }

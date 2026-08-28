@@ -1,5 +1,6 @@
 use std::{
-    fs, io,
+    fs::{self, OpenOptions},
+    io,
     path::{Path, PathBuf},
 };
 
@@ -12,8 +13,8 @@ use log::warn;
 use crate::db;
 
 use super::{
-    AccessMode, AttachMode, Backend, DirEntry, GRiDPath, GRiDPathComponents, ObjectMode,
-    ReadDirection, SeekMode,
+    AccessMode, AttachMode, Backend, DirEntry, GRiDFile, GRiDFileDescriptor, GRiDPath,
+    GRiDPathComponents, ObjectMode, ReadDirection, SeekMode,
 };
 
 const RESOURCE_UNAVAILABLE: u16 = 601; // eGCRscUnav
@@ -58,9 +59,11 @@ pub(crate) struct FsProxy {
 }
 
 pub(crate) enum FsHandle {
-    File,
+    File {
+        _file: GRiDFile,
+    },
     Directory {
-        entries: Vec<DirEntry>,
+        path: PathBuf,
         read_offset: usize,
     },
 }
@@ -196,17 +199,6 @@ impl FsProxy {
         name.strip_suffix(SUBJECT_SUFFIX).map(BStr::new)
     }
 
-    fn open_file(
-        &self,
-        path: &GRiDPath,
-        _mode: AttachMode,
-        _access: AccessMode,
-    ) -> Result<FsHandle, u16> {
-        self.real_path(&path.components())
-            .map(|_| FsHandle::File)
-            .ok_or(RESOURCE_UNAVAILABLE)
-    }
-
     fn read_real_directory(&self, path: &Path) -> Result<Vec<DirEntry>, u16> {
         let read_dir = fs::read_dir(path).map_err(|err| {
             warn!(target: "vfs", "failed to read resource {}: {err}", path.display());
@@ -244,18 +236,86 @@ impl FsProxy {
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(entries)
     }
+
+    fn is_attachable(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<(), u16> {
+        let components = path.components();
+        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
+
+        // check is path exists (must not exists if newfile and exists else)
+
+        // if access -- shortdir/longdir, then check is path dir
+        // else -- check is path file
+
+        // what I forget?
+
+        Ok(())
+    }
+
+    fn open(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<FsHandle, u16> {
+        let logical_path = path;
+        let components = logical_path.components();
+
+        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
+
+        // TODO(vklachkov): handle long directory properly.
+        if access == AccessMode::ShortDirectory {
+            return Ok(FsHandle::Directory {
+                path: real_path,
+                read_offset: 0,
+            });
+        } else if access == AccessMode::LongDirectory {
+            return Err(35);  // FIXME(vklachkov): make const for not supported.
+        }
+
+        let mut options = OpenOptions::new();
+
+        options.read(true);
+
+        options.write(matches!(
+            access,
+            AccessMode::Write | AccessMode::Update | AccessMode::UpdateDescriptor
+        ));
+
+        if mode == AttachMode::NewFile {
+            fs::create_dir_all(real_path.parent().unwrap()).map_err(|_| RESOURCE_UNAVAILABLE)?;
+            options.create(true).truncate(true);
+        }
+
+        let physical_file = options.open(&real_path).map_err(|err| {
+            warn!(target: "vfs", "failed to open {}: {err}", real_path.display());
+            RESOURCE_UNAVAILABLE
+        })?;
+
+        let file = if mode == AttachMode::NewFile {
+            GRiDFile::create(physical_file, GRiDFileDescriptor::default(), &[])
+        } else {
+            GRiDFile::open(physical_file)
+        }
+        .map_err(|err| {
+            warn!(target: "vfs", "failed to parse GRiD file {}: {err}", real_path.display());
+            RESOURCE_UNAVAILABLE
+        })?;
+
+        Ok(FsHandle::File { _file: file })
+    }
+
+    fn close(&mut self, _handle: &mut FsHandle) -> Result<(), u16> {
+        Ok(())
+    }
 }
 
 impl Backend for FsProxy {
     type Handle = FsHandle;
-
-    fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
-        if let FsHandle::Directory { read_offset, .. } = handle {
-            *read_offset = 0;
-        }
-
-        Ok(())
-    }
 
     fn read(&mut self, _handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
         Ok(READ_STUB[..READ_STUB.len().min(length)].to_vec())
@@ -285,56 +345,68 @@ impl Backend for FsProxy {
         _direction: ReadDirection,
         _object_mode: ObjectMode,
     ) -> Result<Vec<DirEntry>, u16> {
-        let FsHandle::Directory {
-            entries,
-            read_offset,
-        } = handle
-        else {
-            return Err(RESOURCE_UNAVAILABLE);
-        };
+        // let FsHandle::Directory {
+        //     entries,
+        //     read_offset,
+        //     ..
+        // } = handle
+        // else {
+        //     return Err(RESOURCE_UNAVAILABLE);
+        // };
 
-        let page = entries
-            .iter()
-            .skip(*read_offset)
-            .take(max_entries)
-            .cloned()
-            .collect::<Vec<_>>();
+        // let page = entries
+        //     .iter()
+        //     .skip(*read_offset)
+        //     .take(max_entries)
+        //     .cloned()
+        //     .collect::<Vec<_>>();
 
-        *read_offset += page.len();
+        // *read_offset += page.len();
 
-        Ok(page)
+        // Ok(page)
+
+        todo!()
     }
-    
-    fn attach(
+
+    fn is_attachable(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<(), u16> {
+        FsProxy::is_attachable(self, path, mode, access)
+    }
+
+    fn read_desc(&mut self, _handle: &mut Self::Handle, _length: usize) -> Result<Vec<u8>, u16> {
+        todo!()
+    }
+
+    fn write_desc(&mut self, _handle: &mut Self::Handle, _descriptor: &[u8]) -> Result<(), u16> {
+        todo!()
+    }
+
+    fn get_status(&mut self, _handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
+        todo!()
+    }
+
+    fn set_status(
+        &mut self,
+        _handle: &mut Self::Handle,
+        _actions: &[super::StatusAction],
+    ) -> Result<(), u16> {
+        todo!()
+    }
+
+    fn open(
         &mut self,
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
     ) -> Result<Self::Handle, u16> {
-        todo!()
+        FsProxy::open(self, path, mode, access)
     }
-    
-    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
-        todo!()
-    }
-    
-    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<(), u16> {
-        todo!()
-    }
-    
-    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
-        todo!()
-    }
-    
-    fn set_status(
-        &mut self,
-        handle: &mut Self::Handle,
-        actions: &[super::StatusAction],
-    ) -> Result<(), u16> {
-        todo!()
-    }
-    
-    fn open(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
-        todo!()
+
+    fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+        FsProxy::close(self, handle)
     }
 }

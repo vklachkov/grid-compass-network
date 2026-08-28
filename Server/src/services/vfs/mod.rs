@@ -12,7 +12,9 @@ use log::{debug, warn};
 use num_traits::ToPrimitive;
 
 use super::protocol::status;
-use crate::vfs::{AccessMode, Backend, FileStatus, ObjectMode, ReadDirection, StatusAction};
+use crate::vfs::{
+    AccessMode, AttachMode, Backend, FileStatus, GRiDPath, ObjectMode, ReadDirection, StatusAction,
+};
 
 type Files<B> = HashMap<NonZeroU16, File<<B as Backend>::Handle>>;
 type File<H> = VfsFileDescriptor<H>;
@@ -24,7 +26,10 @@ pub(crate) struct Vfs<B: Backend> {
 }
 
 struct VfsFileDescriptor<H> {
-    handle: H,
+    handle: Option<H>,
+    path: Vec<u8>,
+    mode: AttachMode,
+    access: AccessMode,
     open: bool,
 }
 
@@ -74,6 +79,11 @@ impl<B: Backend> Vfs<B> {
             .ok_or(VFS_ERROR_BAD_CONNECTION)
     }
 
+    #[inline]
+    fn get_handle<'f>(file: &'f mut File<B::Handle>) -> Result<&'f mut B::Handle, u16> {
+        file.handle.as_mut().ok_or(VFS_ERROR_FILE_NOT_OPEN)
+    }
+
     fn get_status(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
         match self._get_status(header) {
             Ok((open, backend_status)) => VfsResponse::GetStatus(VfsGetStatusResponse {
@@ -101,7 +111,8 @@ impl<B: Backend> Vfs<B> {
 
     fn _get_status(&mut self, header: &VfsRequestHeader) -> Result<(bool, FileStatus), u16> {
         let file = Self::get_file(header, &mut self.files)?;
-        let file_status = self.backend.get_status(&mut file.handle)?;
+        let handle = Self::get_handle(file)?;
+        let file_status = self.backend.get_status(handle)?;
         Ok((file.open, file_status))
     }
 
@@ -116,7 +127,10 @@ impl<B: Backend> Vfs<B> {
             return Err(VFS_ERROR_ALREADY_OPEN);
         }
 
-        self.backend.open(&mut file.handle)?;
+        let path = GRiDPath::try_from(&file.path).map_err(|_| VFS_ERROR_BAD_PARAMETER)?;
+        let handle = self.backend.open(path, file.mode, file.access)?;
+
+        file.handle = Some(handle);
         file.open = true;
 
         Ok(())
@@ -140,7 +154,8 @@ impl<B: Backend> Vfs<B> {
             return Err(VFS_ERROR_FILE_NOT_OPEN);
         }
 
-        self.backend.read(&mut file.handle, body.bounded_length())
+        self.backend
+            .read(Self::get_handle(file)?, body.bounded_length())
     }
 
     fn read_desc(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
@@ -166,7 +181,7 @@ impl<B: Backend> Vfs<B> {
         }
 
         let length = usize::from(body.data_length).min(VFS_DESCRIPTOR_LENGTH);
-        self.backend.read_desc(&mut file.handle, length)
+        self.backend.read_desc(Self::get_handle(file)?, length)
     }
 
     fn read_dir_page(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> VfsResponse {
@@ -193,7 +208,7 @@ impl<B: Backend> Vfs<B> {
 
         let max_entries = usize::from(body.data_length).min(VFS_MAX_DIRECTORY_OBJECTS_PER_PAGE);
         let entries = self.backend.read_dir(
-            &mut file.handle,
+            Self::get_handle(file)?,
             max_entries,
             ReadDirection::Forward,
             ObjectMode::Directory,
@@ -222,7 +237,7 @@ impl<B: Backend> Vfs<B> {
             return Err(VFS_ERROR_FILE_NOT_OPEN);
         }
 
-        self.backend.write(&mut file.handle, body.data)
+        self.backend.write(Self::get_handle(file)?, body.data)
     }
 
     fn write_desc(&mut self, header: &VfsRequestHeader, body: VfsWriteRequest<'_>) -> VfsResponse {
@@ -244,7 +259,7 @@ impl<B: Backend> Vfs<B> {
             return Err(VFS_ERROR_FILE_NOT_OPEN);
         }
 
-        self.backend.write_desc(&mut file.handle, body.data)
+        self.backend.write_desc(Self::get_handle(file)?, body.data)
     }
 
     fn set_status(
@@ -269,7 +284,7 @@ impl<B: Backend> Vfs<B> {
             .map(StatusAction::from)
             .collect::<Vec<_>>();
 
-        self.backend.set_status(&mut file.handle, &actions)
+        self.backend.set_status(Self::get_handle(file)?, &actions)
     }
 
     fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> VfsResponse {
@@ -284,7 +299,7 @@ impl<B: Backend> Vfs<B> {
         }
 
         self.backend
-            .seek(&mut file.handle, body.mode.into(), body.position)
+            .seek(Self::get_handle(file)?, body.mode.into(), body.position)
     }
 
     fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
@@ -311,14 +326,18 @@ impl<B: Backend> Vfs<B> {
     ) -> Result<NonZeroU16, u16> {
         let file_id = self.get_free_file_id().ok_or(VFS_ERROR_DEVICE_FULL)?;
 
-        let handle = self
-            .backend
-            .attach(&body.path, body.mode.into(), body.access.into())?;
+        let mode = body.mode.into();
+        let access = body.access.into();
+
+        self.backend.is_attachable(&body.path, mode, access)?;
 
         self.files.insert(
             file_id,
             VfsFileDescriptor {
-                handle,
+                handle: None,
+                path: body.path.as_bytes().to_vec(),
+                mode,
+                access,
                 open: false,
             },
         );
@@ -365,7 +384,7 @@ impl<B: Backend> Vfs<B> {
             return Ok(());
         }
 
-        self.backend.close(&mut file.handle)?;
+        self.backend.close(Self::get_handle(file)?)?;
         file.open = false;
 
         Ok(())
@@ -382,7 +401,7 @@ impl<B: Backend> Vfs<B> {
             return Err(VFS_ERROR_FILE_NOT_OPEN);
         }
 
-        self.backend.flush(&mut file.handle)
+        self.backend.flush(Self::get_handle(file)?)
     }
 
     fn unknown(&mut self, header: &VfsRequestHeader, body: &[u8]) -> VfsResponse {
@@ -446,20 +465,24 @@ mod tests {
     impl Backend for MockBackend {
         type Handle = MockHandle;
 
-        fn attach(
+        fn is_attachable(
+            &mut self,
+            _path: &GRiDPath,
+            _mode: AttachMode,
+            _access: AccessMode,
+        ) -> Result<(), u16> {
+            Ok(())
+        }
+
+        fn open(
             &mut self,
             _path: &GRiDPath,
             _mode: AttachMode,
             _access: AccessMode,
         ) -> Result<Self::Handle, u16> {
             Ok(MockHandle {
-                physical_open: false,
+                physical_open: true,
             })
-        }
-
-        fn open(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
-            handle.physical_open = true;
-            Ok(())
         }
 
         fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
@@ -579,7 +602,7 @@ mod tests {
             .unwrap();
 
         assert!(!file.open);
-        assert!(!file.handle.physical_open);
+        assert!(file.handle.is_none());
         assert_eq!(vfs.connection_ids.get(connection_id as usize), Some(true));
     }
 
@@ -608,7 +631,7 @@ mod tests {
             .unwrap();
 
         assert!(file.open);
-        assert!(file.handle.physical_open);
+        assert!(file.handle.as_ref().unwrap().physical_open);
     }
 
     #[test]
@@ -626,7 +649,7 @@ mod tests {
             .unwrap();
 
         assert!(!file.open);
-        assert!(!file.handle.physical_open);
+        assert!(!file.handle.as_ref().unwrap().physical_open);
     }
 
     #[test]

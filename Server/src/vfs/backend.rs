@@ -5,14 +5,19 @@ use super::GRiDPath;
 pub(crate) trait Backend {
     type Handle;
 
-    fn attach(
+    fn is_attachable(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<(), u16>;
+
+    fn open(
         &mut self,
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
     ) -> Result<Self::Handle, u16>;
-
-    fn open(&mut self, handle: &mut Self::Handle) -> Result<(), u16>;
 
     fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16>;
 

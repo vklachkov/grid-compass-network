@@ -50,7 +50,7 @@ impl<B: Backend> Vfs<B> {
 
         debug!(target: "vfs", "received request {body:?} on connection {}", header.servers_conn_id);
 
-        match body {
+        let response = match body {
             VfsRequestBody::GetStatus(body) => self.get_status(&header, body),
             VfsRequestBody::Open(body) => self.open(&header, body),
             VfsRequestBody::Read(body) => self.read(&header, body),
@@ -65,7 +65,11 @@ impl<B: Backend> Vfs<B> {
             VfsRequestBody::Close => self.close(&header),
             VfsRequestBody::Flush => self.flush(&header),
             VfsRequestBody::Unknown(body) => self.unknown(&header, body),
-        }
+        };
+
+        debug!(target: "vfs", "response with {response:?}");
+
+        response
     }
 
     #[inline]
@@ -276,15 +280,19 @@ impl<B: Backend> Vfs<B> {
         header: &VfsRequestHeader,
         body: VfsSetStatusRequest,
     ) -> Result<(), u16> {
-        let file = Self::get_file(header, &mut self.files)?;
+        // FIXME(vklachkov): set status called before open
 
-        let actions = body
-            .actions
-            .into_iter()
-            .map(StatusAction::from)
-            .collect::<Vec<_>>();
+        // let file = Self::get_file(header, &mut self.files)?;
 
-        self.backend.set_status(Self::get_handle(file)?, &actions)
+        // let actions = body
+        //     .actions
+        //     .into_iter()
+        //     .map(StatusAction::from)
+        //     .collect::<Vec<_>>();
+
+        // self.backend.set_status(Self::get_handle(file)?, &actions)
+
+        Ok(())
     }
 
     fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> VfsResponse {

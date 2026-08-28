@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
-    io,
-    path::{Path, PathBuf},
+    io::{self, Read, Seek, Write},
+    path::PathBuf,
 };
 
 #[cfg(unix)]
@@ -18,10 +18,10 @@ use super::{
 };
 
 const RESOURCE_UNAVAILABLE: u16 = 601; // eGCRscUnav
+const NOT_SUPPORTED: u16 = 35; // eNotSupport
 
 const SUBJECT_SUFFIX: &[u8] = b"~Subject~";
 const FILE_SYSTEM_SUFFIX: &[u8] = b"~FS~";
-const READ_STUB: &[u8] = b"Read stub";
 
 const NAME_DEVICE: &[u8] = b"Name Device";
 const RESOURCES_FOLDER: &[u8] = b"Resources~Subject~";
@@ -59,13 +59,18 @@ pub(crate) struct FsProxy {
 }
 
 pub(crate) enum FsHandle {
-    File {
-        _file: GRiDFile,
-    },
-    Directory {
-        path: PathBuf,
-        read_offset: usize,
-    },
+    File(FsFileHandle),
+    Directory(FsDirHandle),
+    Resources,
+}
+
+pub(crate) struct FsFileHandle {
+    file: GRiDFile,
+}
+
+pub(crate) struct FsDirHandle {
+    path: PathBuf,
+    read_offset: usize,
 }
 
 impl FsProxy {
@@ -86,23 +91,6 @@ impl FsProxy {
             user_id: account.id,
             root,
         })
-    }
-
-    fn entries_for(&self, path: &GRiDPath) -> Result<Vec<DirEntry>, u16> {
-        let components = path.components();
-        if Self::is_resources(&components) {
-            return Ok(Self::resources_entries());
-        }
-
-        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
-        if Self::is_subject_root(&components) {
-            fs::create_dir_all(&real_path).map_err(|err| {
-                warn!(target: "vfs", "failed to create resource {}: {err}", real_path.display());
-                RESOURCE_UNAVAILABLE
-            })?;
-        }
-
-        self.read_real_directory(&real_path)
     }
 
     fn resources_entries() -> Vec<DirEntry> {
@@ -199,18 +187,77 @@ impl FsProxy {
         name.strip_suffix(SUBJECT_SUFFIX).map(BStr::new)
     }
 
-    fn read_real_directory(&self, path: &Path) -> Result<Vec<DirEntry>, u16> {
-        let read_dir = fs::read_dir(path).map_err(|err| {
-            warn!(target: "vfs", "failed to read resource {}: {err}", path.display());
+    fn read(&mut self, handle: &mut FsHandle, length: usize) -> Result<Vec<u8>, u16> {
+        let FsHandle::File(f) = handle else {
+            return Err(NOT_SUPPORTED);
+        };
+
+        // TODO(vklachkov): can we prealloc buffer here?
+        let mut buffer = vec![0; length];
+
+        f.file
+            .read_exact(&mut buffer)
+            .map(|_| buffer)
+            .map_err(Self::map_io_err)
+    }
+
+    fn write(&mut self, handle: &mut FsHandle, data: &[u8]) -> Result<(), u16> {
+        let FsHandle::File(f) = handle else {
+            return Err(NOT_SUPPORTED);
+        };
+
+        f.file.write_all(data).map_err(Self::map_io_err)
+    }
+
+    fn seek(&mut self, handle: &mut FsHandle, mode: SeekMode, position: u32) -> Result<(), u16> {
+        let FsHandle::File(f) = handle else {
+            return Err(NOT_SUPPORTED);
+        };
+
+        let pos = match mode {
+            SeekMode::Backward => io::SeekFrom::Current(-i64::from(position)),
+            SeekMode::Absolute => io::SeekFrom::Start(u64::from(position)),
+            SeekMode::Forward => io::SeekFrom::Current(i64::from(position)),
+            SeekMode::FromEnd => io::SeekFrom::End(i64::from(position)),
+        };
+
+        f.file.seek(pos).map(|_| ()).map_err(Self::map_io_err)
+    }
+
+    fn flush(&mut self, handle: &mut FsHandle) -> Result<(), u16> {
+        let FsHandle::File(f) = handle else {
+            return Err(NOT_SUPPORTED);
+        };
+
+        f.file.flush().map_err(Self::map_io_err)
+    }
+
+    fn read_dir(
+        &mut self,
+        handle: &mut FsHandle,
+        max_entries: usize,
+        _direction: ReadDirection, // TODO(vklachkov)
+        _object_mode: ObjectMode,  // TODO(vklachkov)
+    ) -> Result<Vec<DirEntry>, u16> {
+        if matches!(handle, FsHandle::Resources) {
+            return Ok(Self::resources_entries());
+        }
+
+        let FsHandle::Directory(d) = handle else {
+            return Err(NOT_SUPPORTED);
+        };
+
+        let read_dir = fs::read_dir(&d.path).map_err(|err| {
+            warn!(target: "vfs", "failed to read resource {}: {err}", d.path.display());
             RESOURCE_UNAVAILABLE
         })?;
 
-        let mut entries = Vec::new();
-        for result in read_dir {
+        let mut entries = Vec::with_capacity(max_entries);
+        for result in read_dir.skip(d.read_offset).take(max_entries) {
             let entry = match result {
                 Ok(entry) => entry,
                 Err(err) => {
-                    warn!(target: "vfs", "failed to read an entry in {}: {err}", path.display());
+                    warn!(target: "vfs", "failed to read an entry in {}: {err}", d.path.display());
                     continue;
                 }
             };
@@ -233,18 +280,26 @@ impl FsProxy {
             entries.push(DirEntry { name: name.into() });
         }
 
-        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        // TODO(vklachkov): sort entries.
+
+        d.read_offset += entries.len();
+
         Ok(entries)
     }
 
     fn is_attachable(
         &mut self,
         path: &GRiDPath,
-        mode: AttachMode,
-        access: AccessMode,
+        _mode: AttachMode,
+        _access: AccessMode,
     ) -> Result<(), u16> {
         let components = path.components();
-        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
+
+        if Self::is_resources(&components) {
+            return Ok(());
+        }
+
+        let _real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
 
         // check is path exists (must not exists if newfile and exists else)
 
@@ -253,6 +308,31 @@ impl FsProxy {
 
         // what I forget?
 
+        Ok(())
+    }
+
+    fn read_desc(&mut self, _handle: &mut FsHandle, length: usize) -> Result<Vec<u8>, u16> {
+        todo!("read desc length={length} not implemented");
+    }
+
+    fn write_desc(&mut self, _handle: &mut FsHandle, descriptor: &[u8]) -> Result<(), u16> {
+        todo!(
+            "write desc length={} desc={:x?} not implemented",
+            descriptor.len(),
+            descriptor
+        );
+    }
+
+    fn get_status(&mut self, _handle: &mut FsHandle) -> Result<super::FileStatus, u16> {
+        todo!("get status not implemented")
+    }
+
+    fn set_status(
+        &mut self,
+        _handle: &mut FsHandle,
+        actions: &[super::StatusAction],
+    ) -> Result<(), u16> {
+        eprintln!("set status {actions:?} not implemented");
         Ok(())
     }
 
@@ -265,16 +345,27 @@ impl FsProxy {
         let logical_path = path;
         let components = logical_path.components();
 
+        if Self::is_resources(&components) {
+            return Ok(FsHandle::Resources);
+        }
+
         let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
 
         // TODO(vklachkov): handle long directory properly.
         if access == AccessMode::ShortDirectory {
-            return Ok(FsHandle::Directory {
+            if Self::is_subject_root(&components) {
+                fs::create_dir_all(&real_path).map_err(|err| {
+                    warn!(target: "vfs", "failed to create resource {}: {err}", real_path.display());
+                    RESOURCE_UNAVAILABLE
+                })?;
+            }
+
+            return Ok(FsHandle::Directory(FsDirHandle {
                 path: real_path,
                 read_offset: 0,
-            });
+            }));
         } else if access == AccessMode::LongDirectory {
-            return Err(35);  // FIXME(vklachkov): make const for not supported.
+            return Err(NOT_SUPPORTED);
         }
 
         let mut options = OpenOptions::new();
@@ -306,66 +397,51 @@ impl FsProxy {
             RESOURCE_UNAVAILABLE
         })?;
 
-        Ok(FsHandle::File { _file: file })
+        Ok(FsHandle::File(FsFileHandle { file }))
     }
 
     fn close(&mut self, _handle: &mut FsHandle) -> Result<(), u16> {
         Ok(())
+    }
+
+    fn map_io_err(_err: io::Error) -> u16 {
+        // FIXME(vklachkov)
+        1
     }
 }
 
 impl Backend for FsProxy {
     type Handle = FsHandle;
 
-    fn read(&mut self, _handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
-        Ok(READ_STUB[..READ_STUB.len().min(length)].to_vec())
+    fn read(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+        FsProxy::read(self, handle, length)
     }
 
-    fn write(&mut self, _handle: &mut Self::Handle, _data: &[u8]) -> Result<(), u16> {
-        Ok(())
+    fn write(&mut self, handle: &mut Self::Handle, data: &[u8]) -> Result<(), u16> {
+        FsProxy::write(self, handle, data)
     }
 
     fn seek(
         &mut self,
-        _handle: &mut Self::Handle,
-        _mode: SeekMode,
-        _position: u32,
+        handle: &mut Self::Handle,
+        mode: SeekMode,
+        position: u32,
     ) -> Result<(), u16> {
-        Ok(())
+        FsProxy::seek(self, handle, mode, position)
     }
 
-    fn flush(&mut self, _handle: &mut Self::Handle) -> Result<(), u16> {
-        Ok(())
+    fn flush(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+        FsProxy::flush(self, handle)
     }
 
     fn read_dir(
         &mut self,
         handle: &mut Self::Handle,
         max_entries: usize,
-        _direction: ReadDirection,
-        _object_mode: ObjectMode,
+        direction: ReadDirection,
+        object_mode: ObjectMode,
     ) -> Result<Vec<DirEntry>, u16> {
-        // let FsHandle::Directory {
-        //     entries,
-        //     read_offset,
-        //     ..
-        // } = handle
-        // else {
-        //     return Err(RESOURCE_UNAVAILABLE);
-        // };
-
-        // let page = entries
-        //     .iter()
-        //     .skip(*read_offset)
-        //     .take(max_entries)
-        //     .cloned()
-        //     .collect::<Vec<_>>();
-
-        // *read_offset += page.len();
-
-        // Ok(page)
-
-        todo!()
+        FsProxy::read_dir(self, handle, max_entries, direction, object_mode)
     }
 
     fn is_attachable(
@@ -377,24 +453,24 @@ impl Backend for FsProxy {
         FsProxy::is_attachable(self, path, mode, access)
     }
 
-    fn read_desc(&mut self, _handle: &mut Self::Handle, _length: usize) -> Result<Vec<u8>, u16> {
-        todo!()
+    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+        FsProxy::read_desc(self, handle, length)
     }
 
-    fn write_desc(&mut self, _handle: &mut Self::Handle, _descriptor: &[u8]) -> Result<(), u16> {
-        todo!()
+    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<(), u16> {
+        FsProxy::write_desc(self, handle, descriptor)
     }
 
-    fn get_status(&mut self, _handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
-        todo!()
+    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
+        FsProxy::get_status(self, handle)
     }
 
     fn set_status(
         &mut self,
-        _handle: &mut Self::Handle,
-        _actions: &[super::StatusAction],
+        handle: &mut Self::Handle,
+        actions: &[super::StatusAction],
     ) -> Result<(), u16> {
-        todo!()
+        FsProxy::set_status(self, handle, actions)
     }
 
     fn open(

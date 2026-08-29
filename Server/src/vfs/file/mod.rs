@@ -1,7 +1,9 @@
 mod descriptor;
+mod name;
 mod path;
 
 pub use descriptor::GRiDFileDescriptor;
+pub use name::{GRiDFileName, GRiDFileNameError};
 pub use path::{GRiDPath, GRiDPathComponents};
 
 use std::{

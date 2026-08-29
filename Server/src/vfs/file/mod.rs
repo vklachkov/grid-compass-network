@@ -1,7 +1,9 @@
+mod date;
 mod descriptor;
 mod name;
 mod path;
 
+pub use date::GRiDDate;
 pub use descriptor::GRiDFileDescriptor;
 pub use name::{GRiDFileName, GRiDFileNameError};
 pub use path::{GRiDPath, GRiDPathComponents};

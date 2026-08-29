@@ -42,13 +42,9 @@ impl GRiDFile {
         Ok(file)
     }
 
-    /// Creates a GRiD file from a descriptor and its property stream.
-    /// The body is allocated to `file_length` and starts with zero-filled bytes.
-    pub fn create(
-        mut file: File,
-        descriptor: GRiDFileDescriptor,
-        properties: &[u8],
-    ) -> io::Result<Self> {
+    /// Creates a GRiD file from a descriptor and its complete body, including properties.
+    /// The body length must equal `property_length + file_length`.
+    pub fn create(mut file: File, descriptor: GRiDFileDescriptor, body: &[u8]) -> io::Result<Self> {
         if descriptor.file_name_length as usize > MAX_FILE_NAME_LENGTH {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -59,18 +55,18 @@ impl GRiDFile {
             ));
         }
 
-        if descriptor.property_length != properties.len() as u32 {
+        let declared_body_length = Self::body_length(&descriptor);
+        if body.len() as u64 != declared_body_length {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "propertyLength is {}, but properties contain {} bytes",
-                    descriptor.property_length,
-                    properties.len()
+                    "descriptor declares a body of {declared_body_length} bytes, but body contains {} bytes",
+                    body.len()
                 ),
             ));
         }
 
-        Self::write_layout(&mut file, &descriptor, properties, &[])?;
+        Self::write_layout(&mut file, &descriptor, body)?;
 
         let mut file = Self {
             file,
@@ -91,40 +87,32 @@ impl GRiDFile {
         self.body_pos
     }
 
-    /// Replaces the descriptor while preserving the properties and body.
-    /// Shrinking a section truncates its tail; growing it appends zero-filled bytes.
-    /// The logical body position is clamped when the new body becomes shorter.
+    /// Replaces the descriptor without changing the body or its logical position.
     pub fn set_descriptor(&mut self, new_descriptor: GRiDFileDescriptor) -> io::Result<()> {
-        self.file.seek(SeekFrom::Start(DESCRIPTOR_LENGTH as u64))?;
-
-        let mut properties = vec![0; self.descriptor.property_length as usize];
-        self.file.read_exact(&mut properties)?;
-        properties.resize(new_descriptor.property_length as usize, 0);
-
-        let mut body = vec![0; self.descriptor.file_length as usize];
-        self.file.read_exact(&mut body)?;
-        body.resize(new_descriptor.file_length as usize, 0);
-
-        Self::write_layout(&mut self.file, &new_descriptor, &properties, &body)?;
+        let body_length = Self::body_length(&self.descriptor);
+        let new_body_length = Self::body_length(&new_descriptor);
+        if new_body_length != body_length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "descriptor declares a body of {new_body_length} bytes, but the current body contains {body_length} bytes"
+                ),
+            ));
+        }
 
         self.descriptor = new_descriptor;
-        self.body_pos = self.body_pos.min(u64::from(self.descriptor.file_length));
-
-        self.seek_body(self.body_pos)?;
-        Ok(())
+        self.sync_descriptor()
     }
 
-    /// Rewrites the physical descriptor-properties-body layout at the exact declared size.
+    /// Writes the descriptor followed by the complete body, including properties.
     fn write_layout(
         file: &mut File,
         descriptor: &GRiDFileDescriptor,
-        properties: &[u8],
         body: &[u8],
     ) -> io::Result<()> {
         file.set_len(Self::file_total_length(descriptor))?;
         file.seek(SeekFrom::Start(0))?;
         file.write_all(&descriptor.to_bytes())?;
-        file.write_all(properties)?;
         file.write_all(body)?;
         Ok(())
     }
@@ -154,25 +142,26 @@ impl GRiDFile {
 
     /// Returns the physical size declared by the descriptor.
     fn file_total_length(descriptor: &GRiDFileDescriptor) -> u64 {
-        DESCRIPTOR_LENGTH as u64
-            + u64::from(descriptor.property_length)
-            + u64::from(descriptor.file_length)
+        DESCRIPTOR_LENGTH as u64 + Self::body_length(descriptor)
     }
 
-    /// Translates a logical body position into a physical file offset.
+    fn body_length(descriptor: &GRiDFileDescriptor) -> u64 {
+        u64::from(descriptor.property_length) + u64::from(descriptor.file_length)
+    }
+
     fn body_offset(&self, position: u64) -> u64 {
-        DESCRIPTOR_LENGTH as u64 + u64::from(self.descriptor.property_length) + position
+        DESCRIPTOR_LENGTH as u64 + position
     }
 }
 
 impl Read for GRiDFile {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let file_length = u64::from(self.descriptor.file_length);
-        if self.body_pos >= file_length || buffer.is_empty() {
+        let body_length = Self::body_length(&self.descriptor);
+        if self.body_pos >= body_length || buffer.is_empty() {
             return Ok(0);
         }
 
-        let available = (file_length - self.body_pos) as usize;
+        let available = (body_length - self.body_pos) as usize;
         let read_length = buffer.len().min(available);
         self.seek_body(self.body_pos)?;
         let count = self.file.read(&mut buffer[..read_length])?;
@@ -187,11 +176,24 @@ impl Write for GRiDFile {
             return Ok(0);
         }
 
+        let end = self
+            .body_pos
+            .checked_add(buffer.len() as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "body length overflow"))?;
+        let maximum_length = u64::from(self.descriptor.property_length) + u64::from(u32::MAX);
+        if end > maximum_length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "body is too large for fileLength",
+            ));
+        }
+
         self.seek_body(self.body_pos)?;
         let count = self.file.write(buffer)?;
         self.body_pos += count as u64;
-        if self.body_pos > u64::from(self.descriptor.file_length) {
-            self.descriptor.file_length = self.body_pos as u32;
+        if self.body_pos > Self::body_length(&self.descriptor) {
+            self.descriptor.file_length =
+                (self.body_pos - u64::from(self.descriptor.property_length)) as u32;
             self.sync_descriptor()?;
         }
 
@@ -208,9 +210,7 @@ impl Seek for GRiDFile {
         let target = match position {
             SeekFrom::Start(position) => Some(position),
             SeekFrom::Current(offset) => Self::seek_target(self.body_pos, offset),
-            SeekFrom::End(offset) => {
-                Self::seek_target(u64::from(self.descriptor.file_length), offset)
-            }
+            SeekFrom::End(offset) => Self::seek_target(Self::body_length(&self.descriptor), offset),
         }
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "logical seek before zero"))?;
 
@@ -248,13 +248,13 @@ mod tests {
     }
 
     #[test]
-    fn create_writes_descriptor_properties_and_declared_body_size() {
+    fn create_writes_descriptor_and_complete_body() {
         let mut physical_file = tempfile().unwrap();
         let descriptor = descriptor(5, 3);
         let file = GRiDFile::create(
             physical_file.try_clone().unwrap(),
             descriptor.clone(),
-            b"abc",
+            b"propbody",
         )
         .unwrap();
         assert_eq!(file.descriptor(), &descriptor);
@@ -264,7 +264,7 @@ mod tests {
 
         let bytes = read_physical_file(&mut physical_file);
         assert_eq!(&bytes[..DESCRIPTOR_LENGTH], descriptor.to_bytes());
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 3], b"abc");
+        assert_eq!(&bytes[DESCRIPTOR_LENGTH..], b"propbody");
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn create_rejects_invalid_descriptor_lengths() {
+    fn create_rejects_invalid_descriptor_or_body_lengths() {
         let mut invalid_name = descriptor(0, 0);
         invalid_name.file_name_length = (MAX_FILE_NAME_LENGTH + 1) as u8;
         let error = GRiDFile::create(tempfile().unwrap(), invalid_name, &[])
@@ -314,8 +314,7 @@ mod tests {
             .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 
-        let invalid_properties = descriptor(0, 1);
-        let error = GRiDFile::create(tempfile().unwrap(), invalid_properties, &[])
+        let error = GRiDFile::create(tempfile().unwrap(), descriptor(2, 1), b"ab")
             .err()
             .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -324,7 +323,7 @@ mod tests {
     #[test]
     fn descriptor_access_does_not_change_body_position() {
         let descriptor = descriptor(3, 0);
-        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor.clone(), &[]).unwrap();
+        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor.clone(), &[0; 3]).unwrap();
         file.seek(SeekFrom::Start(1)).unwrap();
 
         assert_eq!(file.descriptor(), &descriptor);
@@ -332,33 +331,51 @@ mod tests {
     }
 
     #[test]
-    fn properties_are_not_part_of_the_body() {
+    fn properties_are_the_start_of_the_body() {
         let mut physical_file = tempfile().unwrap();
         let descriptor = descriptor(3, 4);
         let mut file =
-            GRiDFile::create(physical_file.try_clone().unwrap(), descriptor, b"meta").unwrap();
-        file.write_all(b"abc").unwrap();
-        file.seek(SeekFrom::Start(0)).unwrap();
+            GRiDFile::create(physical_file.try_clone().unwrap(), descriptor, b"metaabc").unwrap();
 
         let mut body = Vec::new();
         file.read_to_end(&mut body).unwrap();
-        assert_eq!(body, b"abc");
+        assert_eq!(body, b"metaabc");
+
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(b"META").unwrap();
         let bytes = read_physical_file(&mut physical_file);
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 4], b"meta");
+        assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 4], b"META");
+    }
+
+    #[test]
+    fn open_starts_reading_after_desc() {
+        let mut physical_file = tempfile().unwrap();
+        let descriptor = descriptor(3, 4);
+        physical_file.write_all(&descriptor.to_bytes()).unwrap();
+        physical_file.write_all(b"metaabc").unwrap();
+        physical_file.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut file = GRiDFile::open(physical_file).unwrap();
+        let mut body = [0; 6];
+        let count = file.read(&mut body).unwrap();
+
+        assert_eq!(count, 6);
+        assert_eq!(&body[..count], b"metaab");
+        assert_eq!(file.position(), 6);
     }
 
     #[test]
     fn body_read_write_and_seek_are_logical() {
         let descriptor = descriptor(3, 2);
-        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor, b"xy").unwrap();
-        let mut body = [0; 3];
+        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor, &[0; 5]).unwrap();
+        let mut body = [0; 5];
         file.read_exact(&mut body).unwrap();
-        assert_eq!(&body, b"\0\0\0");
+        assert_eq!(&body, b"\0\0\0\0\0");
         file.seek(SeekFrom::Start(1)).unwrap();
         file.write_all(b"Q").unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
         file.read_exact(&mut body).unwrap();
-        assert_eq!(&body, b"\0Q\0");
+        assert_eq!(&body, b"\0Q\0\0\0");
     }
 
     #[test]
@@ -366,30 +383,33 @@ mod tests {
         let mut physical_file = tempfile().unwrap();
         let descriptor = descriptor(1, 2);
         let mut file =
-            GRiDFile::create(physical_file.try_clone().unwrap(), descriptor, b"xy").unwrap();
+            GRiDFile::create(physical_file.try_clone().unwrap(), descriptor, b"xy\0").unwrap();
         file.seek(SeekFrom::Start(3)).unwrap();
         file.write_all(b"new").unwrap();
-        assert_eq!(file.descriptor().file_length, 6);
+        assert_eq!(file.descriptor().file_length, 4);
         assert_eq!(file.position(), 6);
         drop(file);
 
         let bytes = read_physical_file(&mut physical_file);
         let stored_descriptor =
             GRiDFileDescriptor::from_bytes(&bytes[..DESCRIPTOR_LENGTH]).unwrap();
-        assert_eq!(stored_descriptor.file_length, 6);
+        assert_eq!(stored_descriptor.file_length, 4);
         assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 2], b"xy");
-        assert_eq!(physical_file.metadata().unwrap().len(), 206);
+        assert_eq!(physical_file.metadata().unwrap().len(), 204);
     }
 
     #[test]
-    fn descriptor_update_resizes_properties_and_body() {
+    fn descriptor_update_may_redistribute_the_body_length() {
         let mut physical_file = tempfile().unwrap();
-        let mut file =
-            GRiDFile::create(physical_file.try_clone().unwrap(), descriptor(4, 3), b"abc").unwrap();
-        file.write_all(b"body").unwrap();
+        let mut file = GRiDFile::create(
+            physical_file.try_clone().unwrap(),
+            descriptor(4, 3),
+            b"content",
+        )
+        .unwrap();
 
         let mut replacement = file.descriptor().clone();
-        replacement.file_length = 6;
+        replacement.file_length = 2;
         replacement.property_length = 5;
         replacement.mode = 42;
         file.set_descriptor(replacement.clone()).unwrap();
@@ -399,47 +419,34 @@ mod tests {
         let stored_descriptor =
             GRiDFileDescriptor::from_bytes(&bytes[..DESCRIPTOR_LENGTH]).unwrap();
         assert_eq!(stored_descriptor, replacement);
-        assert_eq!(physical_file.metadata().unwrap().len(), 209);
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 5], b"abc\0\0");
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH + 5..], b"body\0\0");
+        assert_eq!(physical_file.metadata().unwrap().len(), 205);
+        assert_eq!(&bytes[DESCRIPTOR_LENGTH..], b"content");
     }
 
     #[test]
-    fn descriptor_update_truncates_sections_and_clamps_position() {
-        let mut physical_file = tempfile().unwrap();
-        let mut file = GRiDFile::create(
-            physical_file.try_clone().unwrap(),
-            descriptor(6, 5),
-            b"props",
-        )
-        .unwrap();
-        file.write_all(b"body!!").unwrap();
+    fn descriptor_update_rejects_a_different_total_body_length() {
+        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor(6, 5), &[0; 11]).unwrap();
         file.seek(SeekFrom::Start(5)).unwrap();
 
         let mut replacement = file.descriptor().clone();
         replacement.file_length = 3;
         replacement.property_length = 2;
-        file.set_descriptor(replacement.clone()).unwrap();
+        let error = file.set_descriptor(replacement).unwrap_err();
 
-        assert_eq!(file.position(), 3);
-        assert_eq!(file.descriptor(), &replacement);
-        drop(file);
-
-        let bytes = read_physical_file(&mut physical_file);
-        assert_eq!(bytes.len(), DESCRIPTOR_LENGTH + 2 + 3);
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH..DESCRIPTOR_LENGTH + 2], b"pr");
-        assert_eq!(&bytes[DESCRIPTOR_LENGTH + 2..], b"bod");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(file.position(), 5);
+        assert_eq!(file.descriptor(), &descriptor(6, 5));
     }
 
     #[test]
     fn seek_is_relative_to_the_logical_body() {
-        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor(2, 0), &[]).unwrap();
+        let mut file = GRiDFile::create(tempfile().unwrap(), descriptor(2, 2), &[0; 4]).unwrap();
         assert_eq!(file.seek(SeekFrom::Start(1)).unwrap(), 1);
         assert_eq!(file.seek(SeekFrom::Current(1)).unwrap(), 2);
-        assert_eq!(file.seek(SeekFrom::End(-1)).unwrap(), 1);
-        assert_eq!(file.seek(SeekFrom::End(4)).unwrap(), 6);
-        assert!(file.seek(SeekFrom::Current(-7)).is_err());
-        assert_eq!(file.position(), 6);
+        assert_eq!(file.seek(SeekFrom::End(-1)).unwrap(), 3);
+        assert_eq!(file.seek(SeekFrom::End(4)).unwrap(), 8);
+        assert!(file.seek(SeekFrom::Current(-9)).is_err());
+        assert_eq!(file.position(), 8);
     }
 
     #[test]

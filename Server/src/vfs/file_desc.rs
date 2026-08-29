@@ -45,11 +45,11 @@ impl Default for GRiDFileDescriptor {
         Self {
             file_length: 0,
             file_name_length: 0,
-            file_name: [0; _], // TODO(vklachkov): set file name.
+            file_name: [0; _],     // TODO(vklachkov): set file name.
             creation_date: [0; _], // TODO(vklachkov): set real date.
             dir_file_id: 0,
-            last_modified_date: [0; _],  // TODO(vklachkov): set real date.
-            expiration_date: [0; _], // TODO(vklachkov): set real date.
+            last_modified_date: [0; _], // TODO(vklachkov): set real date.
+            expiration_date: [0; _],    // TODO(vklachkov): set real date.
             machine_id: 0,
             compressed: 0,
             encrypted: false,

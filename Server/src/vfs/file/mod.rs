@@ -1,9 +1,15 @@
+mod descriptor;
+mod path;
+
+pub use descriptor::GRiDFileDescriptor;
+pub use path::{GRiDPath, GRiDPathComponents};
+
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
 };
 
-use super::file_desc::{DESCRIPTOR_LENGTH, GRiDFileDescriptor, MAX_FILE_NAME_LENGTH};
+use descriptor::{DESCRIPTOR_LENGTH, MAX_FILE_NAME_LENGTH};
 
 pub struct GRiDFile {
     file: File,
@@ -180,6 +186,7 @@ impl Write for GRiDFile {
             .body_pos
             .checked_add(buffer.len() as u64)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "body length overflow"))?;
+
         let maximum_length = u64::from(self.descriptor.property_length) + u64::from(u32::MAX);
         if end > maximum_length {
             return Err(io::Error::new(

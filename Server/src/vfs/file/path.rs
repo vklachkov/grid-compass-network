@@ -53,10 +53,6 @@ impl GRiDPath {
         Ok(unsafe { &*(path as *const [u8] as *const Self) })
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
     fn validate(path: &[u8]) -> Result<(), &'static str> {
         let Some(path_body) = path.strip_prefix(&[Self::COMPONENT_SEPARATOR]) else {
             return Err("path must start with `");

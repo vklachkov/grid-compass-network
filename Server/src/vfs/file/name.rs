@@ -35,6 +35,19 @@ impl GRiDFileName {
         })
     }
 
+    pub fn from_bytes(length: u8, bytes: [u8; MAX_LENGTH]) -> Result<Self, GRiDFileNameError> {
+        if usize::from(length) > MAX_LENGTH {
+            return Err(GRiDFileNameError::TooLong);
+        }
+    
+        Self::is_valid_name(&bytes)?;
+
+        Ok(Self {
+            length,
+            bytes,
+        })
+    }
+
     pub fn is_valid_name(value: impl AsRef<[u8]>) -> Result<(), GRiDFileNameError> {
         let value = value.as_ref();
 
@@ -71,6 +84,14 @@ impl GRiDFileName {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..usize::from(self.length)]
+    }
+
+    pub const fn len(&self) -> u8 {
+        self.length
+    }
+
+    pub const fn storage(&self) -> &[u8; MAX_LENGTH] {
+        &self.bytes
     }
 }
 
@@ -122,6 +143,36 @@ mod tests {
 
         assert_eq!(&*name, b"Report~Text~");
         assert_eq!(name.as_ref(), name.as_bytes());
+    }
+
+    #[test]
+    fn decodes_length_prefixed_storage() {
+        let mut bytes = [0xaa; MAX_LENGTH + 1];
+        bytes[0] = 12;
+        bytes[1..13].copy_from_slice(b"Report~Text~");
+
+        let name = GRiDFileName::from_bytes(bytes).unwrap();
+
+        assert_eq!(&*name, b"Report~Text~");
+        assert_eq!(&name.storage()[12..], &[0xaa; 68]);
+    }
+
+    #[test]
+    fn rejects_an_invalid_length_prefixed_name() {
+        let mut too_long = [0; MAX_LENGTH + 1];
+        too_long[0] = 81;
+        assert_eq!(
+            GRiDFileName::from_bytes(too_long),
+            Err(GRiDFileNameError::TooLong)
+        );
+
+        let mut malformed = [0; MAX_LENGTH + 1];
+        malformed[0] = 5;
+        malformed[1..6].copy_from_slice(b"title");
+        assert_eq!(
+            GRiDFileName::from_bytes(malformed),
+            Err(GRiDFileNameError::InvalidFormat)
+        );
     }
 
     #[test]

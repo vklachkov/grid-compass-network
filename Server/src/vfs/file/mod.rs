@@ -13,7 +13,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
 };
 
-use descriptor::{DESCRIPTOR_LENGTH, MAX_FILE_NAME_LENGTH};
+use descriptor::DESCRIPTOR_LENGTH;
 
 pub struct GRiDFile {
     file: File,
@@ -55,16 +55,6 @@ impl GRiDFile {
     /// Creates a GRiD file from a descriptor and its complete body, including properties.
     /// The body length must equal `property_length + file_length`.
     pub fn create(mut file: File, descriptor: GRiDFileDescriptor, body: &[u8]) -> io::Result<Self> {
-        if descriptor.file_name_length as usize > MAX_FILE_NAME_LENGTH {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "fileNameLength must be at most {MAX_FILE_NAME_LENGTH}, got {}",
-                    descriptor.file_name_length
-                ),
-            ));
-        }
-
         let declared_body_length = Self::body_length(&descriptor);
         if body.len() as u64 != declared_body_length {
             return Err(io::Error::new(
@@ -245,17 +235,10 @@ mod tests {
     }
 
     fn descriptor(file_length: u32, property_length: u32) -> GRiDFileDescriptor {
-        GRiDFileDescriptor {
-            file_length,
-            file_name_length: 4,
-            file_name: {
-                let mut value = [0; 80];
-                value[..4].copy_from_slice(b"test");
-                value
-            },
-            property_length,
-            ..GRiDFileDescriptor::default()
-        }
+        let mut descriptor = GRiDFileDescriptor::new(GRiDFileName::new(b"test~Data~").unwrap());
+        descriptor.file_length = file_length;
+        descriptor.property_length = property_length;
+        descriptor
     }
 
     #[test]
@@ -317,14 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn create_rejects_invalid_descriptor_or_body_lengths() {
-        let mut invalid_name = descriptor(0, 0);
-        invalid_name.file_name_length = (MAX_FILE_NAME_LENGTH + 1) as u8;
-        let error = GRiDFile::create(tempfile().unwrap(), invalid_name, &[])
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-
+    fn create_rejects_an_invalid_body_length() {
         let error = GRiDFile::create(tempfile().unwrap(), descriptor(2, 1), b"ab")
             .err()
             .unwrap();

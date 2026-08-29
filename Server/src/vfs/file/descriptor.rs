@@ -4,18 +4,18 @@ use anyhow::bail;
 
 use crate::shared::io::ReadExt;
 
+use super::{GRiDDate, GRiDFileName};
+
 pub const DESCRIPTOR_LENGTH: usize = 198;
-pub const MAX_FILE_NAME_LENGTH: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GRiDFileDescriptor {
     pub file_length: u32,
-    pub file_name_length: u8,
-    pub file_name: [u8; MAX_FILE_NAME_LENGTH],
-    pub creation_date: [u8; 11],
+    pub file_name: GRiDFileName,
+    pub creation_date: GRiDDate,
     pub dir_file_id: u16,
-    pub last_modified_date: [u8; 11],
-    pub expiration_date: [u8; 11],
+    pub last_modified_date: GRiDDate,
+    pub expiration_date: GRiDDate,
     pub machine_id: u32,
     pub compressed: u8,
     pub encrypted: bool,
@@ -40,21 +40,24 @@ pub struct GRiDFileDescriptor {
     pub grid_central_use: u16,
 }
 
-impl Default for GRiDFileDescriptor {
-    fn default() -> Self {
+impl GRiDFileDescriptor {
+    pub fn new(file_name: GRiDFileName) -> Self {
+        let now = GRiDDate::today();
+
         Self {
             file_length: 0,
-            file_name_length: 0,
-            file_name: [0; _],     // TODO(vklachkov): set file name.
-            creation_date: [0; _], // TODO(vklachkov): set real date.
+            file_name,
+            creation_date: now,
+            // TODO: Set this when the parent directory is integrated.
             dir_file_id: 0,
-            last_modified_date: [0; _], // TODO(vklachkov): set real date.
-            expiration_date: [0; _],    // TODO(vklachkov): set real date.
+            last_modified_date: now,
+            expiration_date: GRiDDate::never(),
+            // TODO: Populate workstation metadata when its source is known.
             machine_id: 0,
             compressed: 0,
             encrypted: false,
             protected: false,
-            password: [0; _],
+            password: [0; 5],
             dir_length: 0,
             dir_count: 0,
             grid_write1: [0; _],
@@ -74,9 +77,7 @@ impl Default for GRiDFileDescriptor {
             grid_central_use: 0,
         }
     }
-}
 
-impl GRiDFileDescriptor {
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         if bytes.len() != DESCRIPTOR_LENGTH {
             bail!(
@@ -87,15 +88,11 @@ impl GRiDFileDescriptor {
 
         let mut cursor = Cursor::new(bytes);
         let file_length = cursor.read_u32()?;
-        let file_name_length = cursor.read_u8()?;
-        if file_name_length as usize > MAX_FILE_NAME_LENGTH {
-            bail!("fileNameLength must be at most {MAX_FILE_NAME_LENGTH}, got {file_name_length}");
-        }
-        let file_name = cursor.read_array()?;
-        let creation_date = cursor.read_array()?;
+        let file_name = GRiDFileName::from_bytes(cursor.read_u8()?, cursor.read_array()?)?;
+        let creation_date = GRiDDate::decode(cursor.read_array()?);
         let dir_file_id = cursor.read_u16()?;
-        let last_modified_date = cursor.read_array()?;
-        let expiration_date = cursor.read_array()?;
+        let last_modified_date = GRiDDate::decode(cursor.read_array()?);
+        let expiration_date = GRiDDate::decode(cursor.read_array()?);
         let machine_id = cursor.read_u32()?;
         let compressed = cursor.read_u8()?;
         let encrypted = cursor.read_bool()?;
@@ -121,7 +118,6 @@ impl GRiDFileDescriptor {
 
         Ok(Self {
             file_length,
-            file_name_length,
             file_name,
             creation_date,
             dir_file_id,
@@ -155,12 +151,12 @@ impl GRiDFileDescriptor {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(DESCRIPTOR_LENGTH);
         bytes.extend_from_slice(&self.file_length.to_le_bytes());
-        bytes.push(self.file_name_length);
-        bytes.extend_from_slice(&self.file_name);
-        bytes.extend_from_slice(&self.creation_date);
+        bytes.push(self.file_name.len());
+        bytes.extend_from_slice(self.file_name.storage());
+        bytes.extend_from_slice(&self.creation_date.encode());
         bytes.extend_from_slice(&self.dir_file_id.to_le_bytes());
-        bytes.extend_from_slice(&self.last_modified_date);
-        bytes.extend_from_slice(&self.expiration_date);
+        bytes.extend_from_slice(&self.last_modified_date.encode());
+        bytes.extend_from_slice(&self.expiration_date.encode());
         bytes.extend_from_slice(&self.machine_id.to_le_bytes());
         bytes.push(self.compressed);
         bytes.push(self.encrypted as u8);
@@ -192,21 +188,24 @@ impl GRiDFileDescriptor {
 mod tests {
     use super::*;
 
+    fn date(value: u8) -> GRiDDate {
+        GRiDDate::decode([value; 11])
+    }
+
     #[test]
     fn descriptor_is_exactly_198_bytes_and_round_trips_all_fields() {
         let descriptor = GRiDFileDescriptor {
             file_length: 0x0102_0304,
-            file_name_length: 3,
-            file_name: [7; 80],
-            creation_date: [8; 11],
+            file_name: GRiDFileName::new(b"Name~Data~").unwrap(),
+            creation_date: date(8),
             dir_file_id: 0x1122,
-            last_modified_date: [9; 11],
-            expiration_date: [10; 11],
+            last_modified_date: date(9),
+            expiration_date: date(10),
             machine_id: 11,
             compressed: 12,
             encrypted: true,
             protected: true,
-            password: [13; 5],
+            password: [3, b'K', b'E', b'Y', 0],
             dir_length: 14,
             dir_count: 0x3344,
             grid_write1: [15; 6],
@@ -232,8 +231,21 @@ mod tests {
 
     #[test]
     fn filename_length_over_80_is_a_format_error() {
-        let mut bytes = GRiDFileDescriptor::default().to_bytes();
+        let mut bytes =
+            GRiDFileDescriptor::new(GRiDFileName::new(b"Name~Data~").unwrap()).to_bytes();
         bytes[4] = 81;
         assert!(GRiDFileDescriptor::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn constructor_sets_known_file_defaults() {
+        let name = GRiDFileName::new(b"Name~Data~").unwrap();
+        let descriptor = GRiDFileDescriptor::new(name);
+
+        assert_eq!(descriptor.file_name, name);
+        assert_ne!(descriptor.creation_date, GRiDDate::never());
+        assert_eq!(descriptor.last_modified_date, descriptor.creation_date);
+        assert_eq!(descriptor.expiration_date, GRiDDate::never());
+        assert_eq!(descriptor.password, [0; 5]);
     }
 }

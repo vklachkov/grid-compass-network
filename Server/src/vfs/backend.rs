@@ -1,8 +1,11 @@
 use bstr::BString;
 
-use super::GRiDPath;
+use super::{GRiDPath, Result};
+
+pub(crate) const DIRECTORY_ENTRY_PREAMBLE_LEN: usize = 9;
 
 pub(crate) trait Backend {
+    type Attachment;
     type Handle;
 
     fn is_attachable(
@@ -10,45 +13,43 @@ pub(crate) trait Backend {
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
-    ) -> Result<(), u16>;
+    ) -> Result<Self::Attachment>;
 
-    fn open(
+    fn open(&mut self, attachment: &mut Self::Attachment) -> Result<Self::Handle>;
+
+    fn close(&mut self, handle: &mut Self::Handle) -> Result<()>;
+
+    fn read(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>>;
+
+    fn write(&mut self, handle: &mut Self::Handle, data: &[u8]) -> Result<()>;
+
+    fn seek(&mut self, handle: &mut Self::Handle, mode: SeekMode, position: u32) -> Result<()>;
+
+    fn flush(&mut self, handle: &mut Self::Handle) -> Result<()>;
+
+    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>>;
+
+    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<()>;
+
+    fn get_status(
         &mut self,
-        path: &GRiDPath,
-        mode: AttachMode,
-        access: AccessMode,
-    ) -> Result<Self::Handle, u16>;
-
-    fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16>;
-
-    fn read(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16>;
-
-    fn write(&mut self, handle: &mut Self::Handle, data: &[u8]) -> Result<(), u16>;
-
-    fn seek(&mut self, handle: &mut Self::Handle, mode: SeekMode, position: u32)
-    -> Result<(), u16>;
-
-    fn flush(&mut self, handle: &mut Self::Handle) -> Result<(), u16>;
-
-    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16>;
-
-    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<(), u16>;
-
-    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<FileStatus, u16>;
+        attachment: &Self::Attachment,
+        handle: Option<&mut Self::Handle>,
+    ) -> Result<FileStatus>;
 
     fn set_status(
         &mut self,
-        handle: &mut Self::Handle,
+        attachment: &mut Self::Attachment,
+        handle: Option<&mut Self::Handle>,
         actions: &[StatusAction],
-    ) -> Result<(), u16>;
+    ) -> Result<()>;
 
     fn read_dir(
         &mut self,
-        handle: &mut Self::Handle,
+        attachment: &mut Self::Attachment,
         max_entries: usize,
-        direction: ReadDirection,
-        object_mode: ObjectMode,
-    ) -> Result<Vec<DirEntry>, u16>;
+        max_bytes: usize,
+    ) -> Result<Vec<DirEntry>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

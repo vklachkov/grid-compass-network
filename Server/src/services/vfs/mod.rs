@@ -13,11 +13,11 @@ use num_traits::ToPrimitive;
 
 use super::protocol::status;
 use crate::vfs::{
-    AccessMode, AttachMode, Backend, FileStatus, GRiDPath, ObjectMode, ReadDirection, StatusAction,
+    AccessMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, Error, FileStatus, Result, StatusAction,
 };
 
-type Files<B> = HashMap<NonZeroU16, File<<B as Backend>::Handle>>;
-type File<H> = VfsFileDescriptor<H>;
+type Files<B> = HashMap<NonZeroU16, File<B>>;
+type File<B> = VfsFileDescriptor<B>;
 
 pub(crate) struct Vfs<B: Backend> {
     backend: B,
@@ -25,12 +25,9 @@ pub(crate) struct Vfs<B: Backend> {
     files: Files<B>,
 }
 
-struct VfsFileDescriptor<H> {
-    handle: Option<H>,
-    path: Vec<u8>,
-    mode: AttachMode,
-    access: AccessMode,
-    open: bool,
+struct VfsFileDescriptor<B: Backend> {
+    attachment: B::Attachment,
+    handle: Option<B::Handle>,
 }
 
 impl<B: Backend> Vfs<B> {
@@ -73,19 +70,16 @@ impl<B: Backend> Vfs<B> {
     }
 
     #[inline]
-    fn get_file<'f>(
-        header: &VfsRequestHeader,
-        files: &'f mut Files<B>,
-    ) -> Result<&'f mut File<B::Handle>, u16> {
+    fn get_file<'f>(header: &VfsRequestHeader, files: &'f mut Files<B>) -> Result<&'f mut File<B>> {
         NonZeroU16::new(header.servers_conn_id)
             .as_ref()
             .and_then(|f| files.get_mut(f))
-            .ok_or(VFS_ERROR_BAD_CONNECTION)
+            .ok_or(Error::BadConnection)
     }
 
     #[inline]
-    fn get_handle<'f>(file: &'f mut File<B::Handle>) -> Result<&'f mut B::Handle, u16> {
-        file.handle.as_mut().ok_or(VFS_ERROR_FILE_NOT_OPEN)
+    fn get_handle<'f>(file: &'f mut File<B>) -> Result<&'f mut B::Handle> {
+        file.handle.as_mut().ok_or(Error::FileNotOpen)
     }
 
     fn get_status(&mut self, header: &VfsRequestHeader, _body: VfsReadRequest) -> VfsResponse {
@@ -101,7 +95,11 @@ impl<B: Backend> Vfs<B> {
                 num_pages_alloc: backend_status.num_pages_alloc,
             }),
             Err(error) => VfsResponse::GetStatus(VfsGetStatusResponse {
-                header: response_header(VfsRequestCode::GetStatus, header, error),
+                header: response_header(
+                    VfsRequestCode::GetStatus,
+                    header,
+                    error::error_code(&error),
+                ),
                 open: false,
                 access: VfsAccessMode::Read,
                 seek: false,
@@ -113,11 +111,12 @@ impl<B: Backend> Vfs<B> {
         }
     }
 
-    fn _get_status(&mut self, header: &VfsRequestHeader) -> Result<(bool, FileStatus), u16> {
+    fn _get_status(&mut self, header: &VfsRequestHeader) -> Result<(bool, FileStatus)> {
         let file = Self::get_file(header, &mut self.files)?;
-        let handle = Self::get_handle(file)?;
-        let file_status = self.backend.get_status(handle)?;
-        Ok((file.open, file_status))
+        let file_status = self
+            .backend
+            .get_status(&file.attachment, file.handle.as_mut())?;
+        Ok((file.handle.is_some(), file_status))
     }
 
     fn open(&mut self, header: &VfsRequestHeader, _body: VfsOpenRequest) -> VfsResponse {
@@ -125,17 +124,15 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Open, header, status)
     }
 
-    fn _open(&mut self, header: &VfsRequestHeader) -> Result<(), u16> {
+    fn _open(&mut self, header: &VfsRequestHeader) -> Result<()> {
         let file = Self::get_file(header, &mut self.files)?;
-        if file.open {
-            return Err(VFS_ERROR_ALREADY_OPEN);
+        if file.handle.is_some() {
+            return Err(Error::AlreadyOpen);
         }
 
-        let path = GRiDPath::try_from(&file.path).map_err(|_| VFS_ERROR_BAD_PARAMETER)?;
-        let handle = self.backend.open(path, file.mode, file.access)?;
+        let handle = self.backend.open(&mut file.attachment)?;
 
         file.handle = Some(handle);
-        file.open = true;
 
         Ok(())
     }
@@ -152,10 +149,10 @@ impl<B: Backend> Vfs<B> {
         })
     }
 
-    fn _read(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> Result<Vec<u8>, u16> {
+    fn _read(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> Result<Vec<u8>> {
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         self.backend
@@ -174,14 +171,10 @@ impl<B: Backend> Vfs<B> {
         })
     }
 
-    fn _read_desc(
-        &mut self,
-        header: &VfsRequestHeader,
-        body: VfsReadRequest,
-    ) -> Result<Vec<u8>, u16> {
+    fn _read_desc(&mut self, header: &VfsRequestHeader, body: VfsReadRequest) -> Result<Vec<u8>> {
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         let length = usize::from(body.data_length).min(VFS_DESCRIPTOR_LENGTH);
@@ -204,19 +197,18 @@ impl<B: Backend> Vfs<B> {
         &mut self,
         header: &VfsRequestHeader,
         body: VfsReadRequest,
-    ) -> Result<Vec<VfsShortDirEntry>, u16> {
-        let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
-        }
-
+    ) -> Result<Vec<VfsShortDirEntry>> {
+        debug!(target: "pain", "_read_dir, body.data_length={}", body.data_length);
+        // TOOD(vklachkov): is it valid?
         let max_entries = usize::from(body.data_length).min(VFS_MAX_DIRECTORY_OBJECTS_PER_PAGE);
-        let entries = self.backend.read_dir(
-            Self::get_handle(file)?,
-            max_entries,
-            ReadDirection::Forward,
-            ObjectMode::Directory,
-        )?;
+
+        let file = Self::get_file(header, &mut self.files)?;
+        let max_bytes = max_entries
+            .saturating_mul(DIRECTORY_ENTRY_PREAMBLE_LEN + VFS_MAX_FILE_NAME_LENGTH)
+            .min(VFS_PAGE_SIZE);
+        let entries = self
+            .backend
+            .read_dir(&mut file.attachment, max_entries, max_bytes)?;
 
         Ok(entries
             .into_iter()
@@ -231,14 +223,14 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Write, header, status)
     }
 
-    fn _write(&mut self, header: &VfsRequestHeader, body: VfsWriteRequest<'_>) -> Result<(), u16> {
+    fn _write(&mut self, header: &VfsRequestHeader, body: VfsWriteRequest<'_>) -> Result<()> {
         if body.data.len() > VFS_MAX_WRITE_LENGTH {
-            return Err(VFS_ERROR_BAD_PARAMETER);
+            return Err(Error::BadParameter);
         }
 
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         self.backend.write(Self::get_handle(file)?, body.data)
@@ -249,18 +241,14 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::WriteDesc, header, status)
     }
 
-    fn _write_desc(
-        &mut self,
-        header: &VfsRequestHeader,
-        body: VfsWriteRequest<'_>,
-    ) -> Result<(), u16> {
+    fn _write_desc(&mut self, header: &VfsRequestHeader, body: VfsWriteRequest<'_>) -> Result<()> {
         if body.data.len() != VFS_DESCRIPTOR_LENGTH {
-            return Err(VFS_ERROR_BAD_PARAMETER);
+            return Err(Error::BadParameter);
         }
 
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         self.backend.write_desc(Self::get_handle(file)?, body.data)
@@ -275,24 +263,16 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::SetStatus, header, status)
     }
 
-    fn _set_status(
-        &mut self,
-        header: &VfsRequestHeader,
-        body: VfsSetStatusRequest,
-    ) -> Result<(), u16> {
-        // FIXME(vklachkov): set status called before open
+    fn _set_status(&mut self, header: &VfsRequestHeader, body: VfsSetStatusRequest) -> Result<()> {
+        let file = Self::get_file(header, &mut self.files)?;
+        let actions = body
+            .actions
+            .into_iter()
+            .map(StatusAction::from)
+            .collect::<Vec<_>>();
 
-        // let file = Self::get_file(header, &mut self.files)?;
-
-        // let actions = body
-        //     .actions
-        //     .into_iter()
-        //     .map(StatusAction::from)
-        //     .collect::<Vec<_>>();
-
-        // self.backend.set_status(Self::get_handle(file)?, &actions)
-
-        Ok(())
+        self.backend
+            .set_status(&mut file.attachment, file.handle.as_mut(), &actions)
     }
 
     fn seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> VfsResponse {
@@ -300,10 +280,10 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Seek, header, status)
     }
 
-    fn _seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> Result<(), u16> {
+    fn _seek(&mut self, header: &VfsRequestHeader, body: VfsSeekRequest) -> Result<()> {
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         self.backend
@@ -322,7 +302,7 @@ impl<B: Backend> Vfs<B> {
                 response: VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap(),
                 servers_conn_id: 0,
                 requestors_conn_id: header.requestors_conn_id,
-                status: err,
+                status: error::error_code(&err),
             }),
         }
     }
@@ -331,22 +311,19 @@ impl<B: Backend> Vfs<B> {
         &mut self,
         _header: &VfsRequestHeader,
         body: VfsAttachRequest<'_>,
-    ) -> Result<NonZeroU16, u16> {
-        let file_id = self.get_free_file_id().ok_or(VFS_ERROR_DEVICE_FULL)?;
+    ) -> Result<NonZeroU16> {
+        let file_id = self.get_free_file_id().ok_or(Error::DeviceFull)?;
 
         let mode = body.mode.into();
         let access = body.access.into();
 
-        self.backend.is_attachable(&body.path, mode, access)?;
+        let attachment = self.backend.is_attachable(&body.path, mode, access)?;
 
         self.files.insert(
             file_id,
             VfsFileDescriptor {
+                attachment,
                 handle: None,
-                path: body.path.as_bytes().to_vec(),
-                mode,
-                access,
-                open: false,
             },
         );
 
@@ -369,11 +346,13 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Detach, header, status)
     }
 
-    fn _detach(&mut self, header: &VfsRequestHeader) -> Result<(), u16> {
-        NonZeroU16::new(header.servers_conn_id)
-            .as_ref()
-            .and_then(|f| self.files.remove(f))
-            .ok_or(VFS_ERROR_BAD_CONNECTION)?;
+    fn _detach(&mut self, header: &VfsRequestHeader) -> Result<()> {
+        let file_id = NonZeroU16::new(header.servers_conn_id).ok_or(Error::BadConnection)?;
+        let mut file = self.files.remove(&file_id).ok_or(Error::BadConnection)?;
+
+        if let Some(handle) = file.handle.as_mut() {
+            self.backend.close(handle)?;
+        }
 
         self.connection_ids
             .set(header.servers_conn_id.into(), false);
@@ -386,14 +365,14 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Close, header, status)
     }
 
-    fn _close(&mut self, header: &VfsRequestHeader) -> Result<(), u16> {
+    fn _close(&mut self, header: &VfsRequestHeader) -> Result<()> {
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
+        if file.handle.is_none() {
             return Ok(());
         }
 
         self.backend.close(Self::get_handle(file)?)?;
-        file.open = false;
+        file.handle = None;
 
         Ok(())
     }
@@ -403,10 +382,10 @@ impl<B: Backend> Vfs<B> {
         simple_response(VfsRequestCode::Flush, header, status)
     }
 
-    fn _flush(&mut self, header: &VfsRequestHeader) -> Result<(), u16> {
+    fn _flush(&mut self, header: &VfsRequestHeader) -> Result<()> {
         let file = Self::get_file(header, &mut self.files)?;
-        if !file.open {
-            return Err(VFS_ERROR_FILE_NOT_OPEN);
+        if file.handle.is_none() {
+            return Err(Error::FileNotOpen);
         }
 
         self.backend.flush(Self::get_handle(file)?)
@@ -464,6 +443,13 @@ mod tests {
     struct MockBackend {
         descriptor_reads: usize,
         descriptor_writes: usize,
+        status_sets: usize,
+        directory_reads: usize,
+        closes: usize,
+    }
+
+    struct MockAttachment {
+        directory: bool,
     }
 
     struct MockHandle {
@@ -471,38 +457,38 @@ mod tests {
     }
 
     impl Backend for MockBackend {
+        type Attachment = MockAttachment;
         type Handle = MockHandle;
 
         fn is_attachable(
             &mut self,
-            _path: &GRiDPath,
+            _path: &crate::vfs::GRiDPath,
             _mode: AttachMode,
             _access: AccessMode,
-        ) -> Result<(), u16> {
-            Ok(())
+        ) -> Result<Self::Attachment> {
+            Ok(MockAttachment { directory: false })
         }
 
-        fn open(
-            &mut self,
-            _path: &GRiDPath,
-            _mode: AttachMode,
-            _access: AccessMode,
-        ) -> Result<Self::Handle, u16> {
+        fn open(&mut self, attachment: &mut Self::Attachment) -> Result<Self::Handle> {
+            if attachment.directory {
+                return Err(Error::NotSupported);
+            }
             Ok(MockHandle {
                 physical_open: true,
             })
         }
 
-        fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+        fn close(&mut self, handle: &mut Self::Handle) -> Result<()> {
+            self.closes += 1;
             handle.physical_open = false;
             Ok(())
         }
 
-        fn read(&mut self, _handle: &mut Self::Handle, _length: usize) -> Result<Vec<u8>, u16> {
+        fn read(&mut self, _handle: &mut Self::Handle, _length: usize) -> Result<Vec<u8>> {
             Ok(Vec::new())
         }
 
-        fn write(&mut self, _handle: &mut Self::Handle, _data: &[u8]) -> Result<(), u16> {
+        fn write(&mut self, _handle: &mut Self::Handle, _data: &[u8]) -> Result<()> {
             Ok(())
         }
 
@@ -511,29 +497,29 @@ mod tests {
             _handle: &mut Self::Handle,
             _mode: SeekMode,
             _position: u32,
-        ) -> Result<(), u16> {
+        ) -> Result<()> {
             Ok(())
         }
 
-        fn flush(&mut self, _handle: &mut Self::Handle) -> Result<(), u16> {
+        fn flush(&mut self, _handle: &mut Self::Handle) -> Result<()> {
             Ok(())
         }
 
-        fn read_desc(&mut self, _handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+        fn read_desc(&mut self, _handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>> {
             self.descriptor_reads += 1;
             Ok(vec![0; length])
         }
 
-        fn write_desc(
-            &mut self,
-            _handle: &mut Self::Handle,
-            _descriptor: &[u8],
-        ) -> Result<(), u16> {
+        fn write_desc(&mut self, _handle: &mut Self::Handle, _descriptor: &[u8]) -> Result<()> {
             self.descriptor_writes += 1;
             Ok(())
         }
 
-        fn get_status(&mut self, _handle: &mut Self::Handle) -> Result<FileStatus, u16> {
+        fn get_status(
+            &mut self,
+            _attachment: &Self::Attachment,
+            _handle: Option<&mut Self::Handle>,
+        ) -> Result<FileStatus> {
             Ok(FileStatus {
                 access: AccessMode::Update,
                 seek: true,
@@ -546,20 +532,24 @@ mod tests {
 
         fn set_status(
             &mut self,
-            _handle: &mut Self::Handle,
+            _attachment: &mut Self::Attachment,
+            _handle: Option<&mut Self::Handle>,
             _actions: &[StatusAction],
-        ) -> Result<(), u16> {
+        ) -> Result<()> {
+            self.status_sets += 1;
             Ok(())
         }
 
         fn read_dir(
             &mut self,
-            _handle: &mut Self::Handle,
+            _attachment: &mut Self::Attachment,
             _max_entries: usize,
-            _direction: ReadDirection,
-            _object_mode: ObjectMode,
-        ) -> Result<Vec<DirEntry>, u16> {
-            Ok(Vec::new())
+            _max_bytes: usize,
+        ) -> Result<Vec<DirEntry>> {
+            self.directory_reads += 1;
+            Ok(vec![DirEntry {
+                name: b"entry".as_slice().into(),
+            }])
         }
     }
 
@@ -609,7 +599,7 @@ mod tests {
             .get(&NonZeroU16::new(connection_id).unwrap())
             .unwrap();
 
-        assert!(!file.open);
+        assert!(file.handle.is_none());
         assert!(file.handle.is_none());
         assert_eq!(vfs.connection_ids.get(connection_id as usize), Some(true));
     }
@@ -638,7 +628,7 @@ mod tests {
             .get(&NonZeroU16::new(connection_id).unwrap())
             .unwrap();
 
-        assert!(file.open);
+        assert!(file.handle.is_some());
         assert!(file.handle.as_ref().unwrap().physical_open);
     }
 
@@ -656,8 +646,7 @@ mod tests {
             .get(&NonZeroU16::new(connection_id).unwrap())
             .unwrap();
 
-        assert!(!file.open);
-        assert!(!file.handle.as_ref().unwrap().physical_open);
+        assert!(file.handle.is_none());
     }
 
     #[test]
@@ -674,6 +663,24 @@ mod tests {
                 .contains_key(&NonZeroU16::new(connection_id).unwrap())
         );
         assert_eq!(vfs.connection_ids.get(connection_id as usize), Some(false));
+    }
+
+    #[test]
+    fn detach_closes_an_open_handle() {
+        let mut vfs = Vfs::new(MockBackend::default());
+        let connection_id = attach(&mut vfs);
+        open(&mut vfs, connection_id);
+
+        vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::Detach, connection_id),
+            body: VfsRequestBody::Detach,
+        });
+
+        assert_eq!(vfs.backend.closes, 1);
+        assert!(
+            !vfs.files
+                .contains_key(&NonZeroU16::new(connection_id).unwrap())
+        );
     }
 
     #[test]
@@ -717,5 +724,51 @@ mod tests {
 
         assert_eq!(vfs.backend.descriptor_reads, 1);
         assert_eq!(vfs.backend.descriptor_writes, 1);
+    }
+
+    #[test]
+    fn directory_operations_work_immediately_after_attach() {
+        let mut vfs = Vfs::new(MockBackend::default());
+        let connection_id = attach(&mut vfs);
+        vfs.files
+            .get_mut(&NonZeroU16::new(connection_id).unwrap())
+            .unwrap()
+            .attachment
+            .directory = true;
+
+        let set_status = vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::SetStatus, connection_id),
+            body: VfsRequestBody::SetStatus(VfsSetStatusRequest {
+                actions: vec![VfsSetStatusAction::SetObjectMode {
+                    mode: VfsObjectMode::Directory,
+                }],
+            }),
+        });
+        let VfsResponse::Simple(set_status) = set_status else {
+            panic!("set status must return a simple response");
+        };
+        assert_eq!(set_status.status, status::OK);
+
+        let get_status = vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::GetStatus, connection_id),
+            body: VfsRequestBody::GetStatus(VfsReadRequest { data_length: 23 }),
+        });
+        let VfsResponse::GetStatus(get_status) = get_status else {
+            panic!("get status must return a status response");
+        };
+        assert_eq!(get_status.header.status, status::OK);
+        assert!(!get_status.open);
+
+        let read_dir = vfs.process_request(VfsRequest {
+            header: header(VfsRequestCode::ReadDirPage, connection_id),
+            body: VfsRequestBody::ReadDirPage(VfsReadRequest { data_length: 1 }),
+        });
+        let VfsResponse::ReadDirPage(read_dir) = read_dir else {
+            panic!("read directory must return a directory response");
+        };
+        assert_eq!(read_dir.header.status, status::OK);
+        assert_eq!(read_dir.entries.len(), 1);
+        assert_eq!(vfs.backend.status_sets, 1);
+        assert_eq!(vfs.backend.directory_reads, 1);
     }
 }

@@ -9,7 +9,10 @@ use crate::{
         FrameError,
         io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
     },
-    vfs::{AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection, SeekMode},
+    vfs::{
+        AccessMode, AttachMode, DIRECTORY_ENTRY_PREAMBLE_LEN, GRiDPath, ObjectMode, ReadDirection,
+        SeekMode,
+    },
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
@@ -23,15 +26,15 @@ pub(super) const VFS_MAX_DESCRIPTOR_LENGTH: usize = 200;
 pub(super) const VFS_DESCRIPTOR_LENGTH: usize = VFS_MAX_DESCRIPTOR_LENGTH - size_of::<u16>();
 pub(super) const VFS_MAX_READ_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const VFS_MAX_WRITE_LENGTH: usize = VFS_PAGE_SIZE;
-pub(super) const DIRECTORY_ENTRY_PREAMBLE_LEN: u32 =
-    (size_of::<u32>() + size_of::<u32>() + size_of::<u8>()) as u32;
 
 pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
+pub(super) const VFS_ERROR_FILE_EXISTS: u16 = 32; // eFileExists
 pub(super) const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
 pub(super) const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
 pub(super) const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
 pub(super) const VFS_ERROR_ALREADY_OPEN: u16 = 222; // eOpen
 pub(super) const VFS_ERROR_BAD_PARAMETER: u16 = 225; // eParam
+pub(super) const VFS_ERROR_RESOURCE_UNAVAILABLE: u16 = 601; // eGCRscUnav
 
 #[derive(Clone, Debug)]
 pub struct VfsRequest<'a> {
@@ -565,7 +568,9 @@ impl VfsResponse {
                         }
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
                         dst.write_array([0; 4])?;
-                        dst.write_u32(DIRECTORY_ENTRY_PREAMBLE_LEN + u32::from(name_length))?;
+                        dst.write_u32(
+                            DIRECTORY_ENTRY_PREAMBLE_LEN as u32 + u32::from(name_length),
+                        )?;
                         dst.write_u8(name_length)?;
                         dst.write_all(&entry.name)?;
                     }

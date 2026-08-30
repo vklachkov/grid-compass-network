@@ -13,12 +13,12 @@ use log::warn;
 use crate::db;
 
 use super::{
-    AccessMode, AttachMode, Backend, DirEntry, GRiDFile, GRiDFileDescriptor, GRiDPath,
-    GRiDPathComponents, ObjectMode, ReadDirection, SeekMode,
+    AccessMode, AttachMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, DirEntry, Error, FileStatus,
+    GRiDFile, GRiDFileDescriptor, GRiDPath, GRiDPathComponents, ObjectMode, ReadDirection, Result,
+    SeekMode, StatusAction,
 };
 
-const RESOURCE_UNAVAILABLE: u16 = 601; // eGCRscUnav
-const NOT_SUPPORTED: u16 = 35; // eNotSupport
+const MAX_DIRECTORY_PAGE_SIZE: usize = 504;
 
 const SUBJECT_SUFFIX: &[u8] = b"~Subject~";
 const FILE_SYSTEM_SUFFIX: &[u8] = b"~FS~";
@@ -60,17 +60,50 @@ pub(crate) struct FsProxy {
 
 pub(crate) enum FsHandle {
     File(FsFileHandle),
-    Directory(FsDirHandle),
-    Resources,
+}
+
+pub(crate) enum FsAttachment {
+    File {
+        path: PathBuf,
+        mode: AttachMode,
+        access: AccessMode,
+    },
+    Directory(FsDirectory),
+    Resources(FsDirectory),
+}
+
+pub(crate) struct FsDirectory {
+    entries: Vec<DirEntry>,
+    read_offset: usize,
+    direction: ReadDirection,
+    object_mode: ObjectMode,
+    wildcard: Option<bstr::BString>,
 }
 
 pub(crate) struct FsFileHandle {
     file: GRiDFile,
 }
 
-pub(crate) struct FsDirHandle {
-    path: PathBuf,
-    read_offset: usize,
+impl FsDirectory {
+    fn new(entries: Vec<DirEntry>) -> Self {
+        Self {
+            entries,
+            read_offset: 0,
+            direction: ReadDirection::Forward,
+            object_mode: ObjectMode::Directory,
+            wildcard: None,
+        }
+    }
+
+    fn new_resources() -> Self {
+        Self {
+            entries: FsProxy::resources_entries(),
+            read_offset: 0,
+            direction: ReadDirection::Forward,
+            object_mode: ObjectMode::Directory,
+            wildcard: None,
+        }
+    }
 }
 
 impl FsProxy {
@@ -187,81 +220,191 @@ impl FsProxy {
         name.strip_suffix(SUBJECT_SUFFIX).map(BStr::new)
     }
 
-    fn read(&mut self, handle: &mut FsHandle, length: usize) -> Result<Vec<u8>, u16> {
-        let FsHandle::File(f) = handle else {
-            return Err(NOT_SUPPORTED);
-        };
+    fn read(&mut self, handle: &mut FsHandle, length: usize) -> Result<Vec<u8>> {
+        let FsHandle::File(f) = handle;
 
         // TODO(vklachkov): can we prealloc buffer here?
         let mut buffer = vec![0; length];
 
-        f.file
-            .read_exact(&mut buffer)
-            .map(|_| buffer)
-            .map_err(Self::map_io_err)
+        let mut offset = 0;
+        while offset < buffer.len() {
+            match f.file.read(&mut buffer[offset..]) {
+                Ok(0) => break,
+                Ok(count) => offset += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        buffer.truncate(offset);
+        Ok(buffer)
     }
 
-    fn write(&mut self, handle: &mut FsHandle, data: &[u8]) -> Result<(), u16> {
-        let FsHandle::File(f) = handle else {
-            return Err(NOT_SUPPORTED);
-        };
+    fn write(&mut self, handle: &mut FsHandle, data: &[u8]) -> Result<()> {
+        let FsHandle::File(f) = handle;
 
-        f.file.write_all(data).map_err(Self::map_io_err)
+        f.file.write_all(data).map_err(Into::into)
     }
 
-    fn seek(&mut self, handle: &mut FsHandle, mode: SeekMode, position: u32) -> Result<(), u16> {
-        let FsHandle::File(f) = handle else {
-            return Err(NOT_SUPPORTED);
-        };
+    fn seek(&mut self, handle: &mut FsHandle, mode: SeekMode, position: u32) -> Result<()> {
+        let FsHandle::File(f) = handle;
 
         let pos = match mode {
             SeekMode::Backward => io::SeekFrom::Current(-i64::from(position)),
             SeekMode::Absolute => io::SeekFrom::Start(u64::from(position)),
             SeekMode::Forward => io::SeekFrom::Current(i64::from(position)),
-            SeekMode::FromEnd => io::SeekFrom::End(i64::from(position)),
+            SeekMode::FromEnd => io::SeekFrom::End(-i64::from(position)),
         };
 
-        f.file.seek(pos).map(|_| ()).map_err(Self::map_io_err)
+        f.file.seek(pos).map(|_| ()).map_err(Into::into)
     }
 
-    fn flush(&mut self, handle: &mut FsHandle) -> Result<(), u16> {
-        let FsHandle::File(f) = handle else {
-            return Err(NOT_SUPPORTED);
-        };
+    fn flush(&mut self, handle: &mut FsHandle) -> Result<()> {
+        let FsHandle::File(f) = handle;
 
-        f.file.flush().map_err(Self::map_io_err)
+        f.file.flush().map_err(Into::into)
     }
 
     fn read_dir(
         &mut self,
-        handle: &mut FsHandle,
+        attachment: &mut FsAttachment,
         max_entries: usize,
-        _direction: ReadDirection, // TODO(vklachkov)
-        _object_mode: ObjectMode,  // TODO(vklachkov)
-    ) -> Result<Vec<DirEntry>, u16> {
-        if matches!(handle, FsHandle::Resources) {
-            return Ok(Self::resources_entries());
+        max_bytes: usize,
+    ) -> Result<Vec<DirEntry>> {
+        let directory = match attachment {
+            FsAttachment::Directory(directory) | FsAttachment::Resources(directory) => directory,
+            FsAttachment::File { .. } => return Err(Error::NotSupported),
+        };
+        let mut entries = directory.entries.clone();
+        if let Some(pattern) = &directory.wildcard {
+            entries.retain(|entry| Self::matches_wildcard(entry.name.as_ref(), pattern.as_ref()));
+        }
+        if directory.direction == ReadDirection::Backward {
+            entries.reverse();
+        }
+        let mut page = Vec::new();
+        let mut page_bytes = 0;
+        for entry in entries
+            .into_iter()
+            .skip(directory.read_offset)
+            .take(max_entries)
+        {
+            let entry_bytes = DIRECTORY_ENTRY_PREAMBLE_LEN + entry.name.len();
+            if entry.name.len() > 80
+                || page_bytes + entry_bytes > max_bytes
+                || page_bytes + entry_bytes > MAX_DIRECTORY_PAGE_SIZE
+            {
+                break;
+            }
+            page_bytes += entry_bytes;
+            page.push(entry);
+        }
+        directory.read_offset += page.len();
+        Ok(page)
+    }
+
+    fn matches_wildcard(name: &BStr, pattern: &BStr) -> bool {
+        let name = name.to_ascii_lowercase();
+        let pattern = pattern.to_ascii_lowercase();
+        Self::wildcard_match(&name, &pattern)
+    }
+
+    fn wildcard_match(name: &[u8], pattern: &[u8]) -> bool {
+        let (mut name_index, mut pattern_index) = (0, 0);
+        let (mut wildcard, mut retry_name) = (None, 0);
+
+        while name_index < name.len() {
+            if pattern.get(pattern_index) == Some(&name[name_index]) {
+                name_index += 1;
+                pattern_index += 1;
+            } else if pattern.get(pattern_index) == Some(&0xf7) {
+                wildcard = Some(pattern_index);
+                pattern_index += 1;
+                retry_name = name_index;
+            } else if let Some(wildcard_index) = wildcard {
+                retry_name += 1;
+                name_index = retry_name;
+                pattern_index = wildcard_index + 1;
+            } else {
+                return false;
+            }
         }
 
-        let FsHandle::Directory(d) = handle else {
-            return Err(NOT_SUPPORTED);
-        };
+        pattern[pattern_index..].iter().all(|byte| *byte == 0xf7)
+    }
 
-        let read_dir = fs::read_dir(&d.path).map_err(|err| {
-            warn!(target: "vfs", "failed to read resource {}: {err}", d.path.display());
-            RESOURCE_UNAVAILABLE
+    fn is_attachable(
+        &mut self,
+        path: &GRiDPath,
+        mode: AttachMode,
+        access: AccessMode,
+    ) -> Result<FsAttachment> {
+        let components = path.components();
+
+        if Self::is_resources(&components) {
+            return if access == AccessMode::ShortDirectory {
+                Ok(FsAttachment::Resources(FsDirectory::new_resources()))
+            } else {
+                Err(Error::ResourceUnavailable)
+            };
+        }
+
+        let real_path = self
+            .real_path(&components)
+            .ok_or(Error::ResourceUnavailable)?;
+        let directory_access = matches!(
+            access,
+            AccessMode::ShortDirectory | AccessMode::LongDirectory
+        );
+
+        if directory_access && Self::is_subject_root(&components) {
+            fs::create_dir_all(&real_path).map_err(|err| {
+                warn!(target: "vfs", "failed to create resource {}: {err}", real_path.display());
+                Error::ResourceUnavailable
+            })?;
+        }
+
+        if components.file.is_none() && mode == AttachMode::NewFile {
+            return Err(Error::ResourceUnavailable);
+        }
+        if directory_access {
+            if mode == AttachMode::NewFile || !real_path.is_dir() {
+                return Err(Error::ResourceUnavailable);
+            }
+            return if access == AccessMode::LongDirectory {
+                Err(Error::NotSupported)
+            } else {
+                let entries = Self::read_directory_entries(&real_path)?;
+                Ok(FsAttachment::Directory(FsDirectory::new(entries)))
+            };
+        }
+        if components.file.is_none() || (mode != AttachMode::NewFile && !real_path.is_file()) {
+            return Err(Error::ResourceUnavailable);
+        }
+        if mode == AttachMode::NewFile && real_path.exists() {
+            return Err(Error::ResourceUnavailable);
+        }
+
+        Ok(FsAttachment::File {
+            path: real_path,
+            mode,
+            access,
+        })
+    }
+
+    fn read_directory_entries(path: &PathBuf) -> Result<Vec<DirEntry>> {
+        let read_dir = fs::read_dir(path).map_err(|err| {
+            warn!(target: "vfs", "failed to read resource {}: {err}", path.display());
+            Error::ResourceUnavailable
         })?;
-
-        let mut entries = Vec::with_capacity(max_entries);
-        for result in read_dir.skip(d.read_offset).take(max_entries) {
+        let mut entries = Vec::new();
+        for result in read_dir {
             let entry = match result {
                 Ok(entry) => entry,
                 Err(err) => {
-                    warn!(target: "vfs", "failed to read an entry in {}: {err}", d.path.display());
+                    warn!(target: "vfs", "failed to read an entry in {}: {err}", path.display());
                     continue;
                 }
             };
-
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(err) => {
@@ -269,179 +412,186 @@ impl FsProxy {
                     continue;
                 }
             };
-
             let mut name = entry.file_name().into_encoded_bytes();
             if file_type.is_dir() {
                 name.extend_from_slice(SUBJECT_SUFFIX);
             } else if !file_type.is_file() {
                 continue;
             }
-
+            if name.len() > 80 {
+                warn!(target: "vfs", "skipping directory entry with an overlong name in {}", path.display());
+                continue;
+            }
             entries.push(DirEntry { name: name.into() });
         }
-
-        // TODO(vklachkov): sort entries.
-
-        d.read_offset += entries.len();
-
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(entries)
     }
 
-    fn is_attachable(
+    fn read_desc(&mut self, handle: &mut FsHandle, length: usize) -> Result<Vec<u8>> {
+        let FsHandle::File(file) = handle;
+        let descriptor = file.file.descriptor().to_bytes();
+        Ok(descriptor[..length.min(descriptor.len())].to_vec())
+    }
+
+    fn write_desc(&mut self, handle: &mut FsHandle, descriptor: &[u8]) -> Result<()> {
+        let FsHandle::File(file) = handle;
+        let descriptor =
+            GRiDFileDescriptor::from_bytes(descriptor).map_err(|_| Error::BadParameter)?;
+        file.file.set_descriptor(descriptor).map_err(Into::into)
+    }
+
+    fn get_status(
         &mut self,
-        path: &GRiDPath,
-        _mode: AttachMode,
-        _access: AccessMode,
-    ) -> Result<(), u16> {
-        let components = path.components();
-
-        if Self::is_resources(&components) {
-            return Ok(());
-        }
-
-        let _real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
-
-        // check is path exists (must not exists if newfile and exists else)
-
-        // if access -- shortdir/longdir, then check is path dir
-        // else -- check is path file
-
-        // what I forget?
-
-        Ok(())
-    }
-
-    fn read_desc(&mut self, _handle: &mut FsHandle, length: usize) -> Result<Vec<u8>, u16> {
-        todo!("read desc length={length} not implemented");
-    }
-
-    fn write_desc(&mut self, _handle: &mut FsHandle, descriptor: &[u8]) -> Result<(), u16> {
-        todo!(
-            "write desc length={} desc={:x?} not implemented",
-            descriptor.len(),
-            descriptor
-        );
-    }
-
-    fn get_status(&mut self, _handle: &mut FsHandle) -> Result<super::FileStatus, u16> {
-        todo!("get status not implemented")
+        attachment: &FsAttachment,
+        handle: Option<&mut FsHandle>,
+    ) -> Result<FileStatus> {
+        let (access, directory) = match attachment {
+            FsAttachment::File { access, .. } => (*access, None),
+            FsAttachment::Directory(directory) | FsAttachment::Resources(directory) => {
+                (AccessMode::ShortDirectory, Some(directory))
+            }
+        };
+        let (seek, file_position, file_length) = match handle {
+            Some(FsHandle::File(file)) => (
+                true,
+                file.file.position().min(u64::from(u32::MAX)) as u32,
+                file.file.descriptor().file_length,
+            ),
+            None => directory
+                .map(|directory| {
+                    (
+                        false,
+                        directory.read_offset as u32,
+                        directory.entries.len() as u32,
+                    )
+                })
+                .unwrap_or((false, 0, 0)),
+        };
+        Ok(FileStatus {
+            access,
+            seek,
+            file_position,
+            file_length,
+            num_pages: 0,
+            num_pages_alloc: 0,
+        })
     }
 
     fn set_status(
         &mut self,
-        _handle: &mut FsHandle,
-        actions: &[super::StatusAction],
-    ) -> Result<(), u16> {
-        eprintln!("set status {actions:?} not implemented");
+        attachment: &mut FsAttachment,
+        _handle: Option<&mut FsHandle>,
+        actions: &[StatusAction],
+    ) -> Result<()> {
+        if actions.iter().any(|action| {
+            matches!(
+                action,
+                StatusAction::Unsupported
+                    | StatusAction::SetObjectMode(ObjectMode::Byte | ObjectMode::CompleteDirectory)
+            )
+        }) {
+            return Err(Error::NotSupported);
+        }
+        let directory = match attachment {
+            FsAttachment::Directory(directory) | FsAttachment::Resources(directory) => directory,
+            FsAttachment::File { .. } => return Err(Error::NotSupported),
+        };
+        for action in actions {
+            match action {
+                StatusAction::SetDirection(value) => directory.direction = *value,
+                StatusAction::SetObjectMode(ObjectMode::Directory) => {
+                    directory.object_mode = ObjectMode::Directory;
+                }
+                StatusAction::SetObjectMode(_) => unreachable!(),
+                StatusAction::SetWildcard(value) => directory.wildcard = Some(value.clone()),
+                StatusAction::Unsupported => unreachable!(),
+            }
+        }
+        directory.read_offset = 0;
         Ok(())
     }
 
-    fn open(
-        &mut self,
-        path: &GRiDPath,
-        mode: AttachMode,
-        access: AccessMode,
-    ) -> Result<FsHandle, u16> {
-        let logical_path = path;
-        let components = logical_path.components();
-
-        if Self::is_resources(&components) {
-            return Ok(FsHandle::Resources);
-        }
-
-        let real_path = self.real_path(&components).ok_or(RESOURCE_UNAVAILABLE)?;
-
-        // TODO(vklachkov): handle long directory properly.
-        if access == AccessMode::ShortDirectory {
-            if Self::is_subject_root(&components) {
-                fs::create_dir_all(&real_path).map_err(|err| {
-                    warn!(target: "vfs", "failed to create resource {}: {err}", real_path.display());
-                    RESOURCE_UNAVAILABLE
-                })?;
-            }
-
-            return Ok(FsHandle::Directory(FsDirHandle {
-                path: real_path,
-                read_offset: 0,
-            }));
-        } else if access == AccessMode::LongDirectory {
-            return Err(NOT_SUPPORTED);
-        }
+    fn open(&mut self, attachment: &mut FsAttachment) -> Result<FsHandle> {
+        let FsAttachment::File { path, mode, access } = attachment else {
+            return Err(Error::NotSupported);
+        };
 
         let mut options = OpenOptions::new();
-
-        options.read(true);
-
         options.write(matches!(
             access,
             AccessMode::Write | AccessMode::Update | AccessMode::UpdateDescriptor
         ));
 
-        if mode == AttachMode::NewFile {
-            fs::create_dir_all(real_path.parent().unwrap()).map_err(|_| RESOURCE_UNAVAILABLE)?;
-            options.create(true).truncate(true);
+        options.read(true);
+
+        let creating = *mode == AttachMode::NewFile;
+        if creating {
+            fs::create_dir_all(path.parent().unwrap())?;
+            options.create_new(true);
         }
 
-        let physical_file = options.open(&real_path).map_err(|err| {
-            warn!(target: "vfs", "failed to open {}: {err}", real_path.display());
-            RESOURCE_UNAVAILABLE
+        let physical_file = options.open(&*path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                Error::FileExists
+            } else {
+                error.into()
+            }
         })?;
 
-        let file = if mode == AttachMode::NewFile {
-            GRiDFile::create(physical_file, GRiDFileDescriptor::default(), &[])
+        let file = if creating {
+            let file_name = path.file_name().ok_or(Error::BadParameter)?;
+            GRiDFile::create(
+                physical_file,
+                GRiDFileDescriptor::new(
+                    super::GRiDFileName::new(file_name.as_encoded_bytes())
+                        .map_err(io::Error::from)?,
+                ),
+                &[],
+            )?
         } else {
-            GRiDFile::open(physical_file)
+            GRiDFile::open(physical_file)?
+        };
+
+        if creating {
+            *mode = AttachMode::OldFile;
         }
-        .map_err(|err| {
-            warn!(target: "vfs", "failed to parse GRiD file {}: {err}", real_path.display());
-            RESOURCE_UNAVAILABLE
-        })?;
 
         Ok(FsHandle::File(FsFileHandle { file }))
     }
 
-    fn close(&mut self, _handle: &mut FsHandle) -> Result<(), u16> {
+    fn close(&mut self, _handle: &mut FsHandle) -> Result<()> {
         Ok(())
-    }
-
-    fn map_io_err(_err: io::Error) -> u16 {
-        // FIXME(vklachkov)
-        1
     }
 }
 
 impl Backend for FsProxy {
+    type Attachment = FsAttachment;
     type Handle = FsHandle;
 
-    fn read(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+    fn read(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>> {
         FsProxy::read(self, handle, length)
     }
 
-    fn write(&mut self, handle: &mut Self::Handle, data: &[u8]) -> Result<(), u16> {
+    fn write(&mut self, handle: &mut Self::Handle, data: &[u8]) -> Result<()> {
         FsProxy::write(self, handle, data)
     }
 
-    fn seek(
-        &mut self,
-        handle: &mut Self::Handle,
-        mode: SeekMode,
-        position: u32,
-    ) -> Result<(), u16> {
+    fn seek(&mut self, handle: &mut Self::Handle, mode: SeekMode, position: u32) -> Result<()> {
         FsProxy::seek(self, handle, mode, position)
     }
 
-    fn flush(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+    fn flush(&mut self, handle: &mut Self::Handle) -> Result<()> {
         FsProxy::flush(self, handle)
     }
 
     fn read_dir(
         &mut self,
-        handle: &mut Self::Handle,
+        attachment: &mut Self::Attachment,
         max_entries: usize,
-        direction: ReadDirection,
-        object_mode: ObjectMode,
-    ) -> Result<Vec<DirEntry>, u16> {
-        FsProxy::read_dir(self, handle, max_entries, direction, object_mode)
+        max_bytes: usize,
+    ) -> Result<Vec<DirEntry>> {
+        FsProxy::read_dir(self, attachment, max_entries, max_bytes)
     }
 
     fn is_attachable(
@@ -449,40 +599,94 @@ impl Backend for FsProxy {
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
-    ) -> Result<(), u16> {
+    ) -> Result<Self::Attachment> {
         FsProxy::is_attachable(self, path, mode, access)
     }
 
-    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>, u16> {
+    fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>> {
         FsProxy::read_desc(self, handle, length)
     }
 
-    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<(), u16> {
+    fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<()> {
         FsProxy::write_desc(self, handle, descriptor)
     }
 
-    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<super::FileStatus, u16> {
-        FsProxy::get_status(self, handle)
+    fn get_status(
+        &mut self,
+        attachment: &Self::Attachment,
+        handle: Option<&mut Self::Handle>,
+    ) -> Result<FileStatus> {
+        FsProxy::get_status(self, attachment, handle)
     }
 
     fn set_status(
         &mut self,
-        handle: &mut Self::Handle,
+        attachment: &mut Self::Attachment,
+        handle: Option<&mut Self::Handle>,
         actions: &[super::StatusAction],
-    ) -> Result<(), u16> {
-        FsProxy::set_status(self, handle, actions)
+    ) -> Result<()> {
+        FsProxy::set_status(self, attachment, handle, actions)
     }
 
-    fn open(
-        &mut self,
-        path: &GRiDPath,
-        mode: AttachMode,
-        access: AccessMode,
-    ) -> Result<Self::Handle, u16> {
-        FsProxy::open(self, path, mode, access)
+    fn open(&mut self, attachment: &mut Self::Attachment) -> Result<Self::Handle> {
+        FsProxy::open(self, attachment)
     }
 
-    fn close(&mut self, handle: &mut Self::Handle) -> Result<(), u16> {
+    fn close(&mut self, handle: &mut Self::Handle) -> Result<()> {
         FsProxy::close(self, handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn directory(names: &[&[u8]]) -> FsAttachment {
+        FsAttachment::Directory(FsDirectory::new(
+            names
+                .iter()
+                .map(|name| DirEntry {
+                    name: (*name).into(),
+                })
+                .collect(),
+        ))
+    }
+
+    #[test]
+    fn wildcard_matches_case_insensitively_and_empty_tail() {
+        assert!(FsProxy::matches_wildcard(
+            BStr::new(b"Hard Disk~FS~"),
+            BStr::new(b"\xf7~fs~\xf7"),
+        ));
+        assert!(!FsProxy::matches_wildcard(
+            BStr::new(b"Hard Disk~Subject~"),
+            BStr::new(b"\xf7~fs~\xf7"),
+        ));
+    }
+
+    #[test]
+    fn directory_pages_use_filtered_snapshot_and_direction() {
+        let mut attachment = directory(&[b"A~FS~", b"B~Subject~", b"C~FS~"]);
+        let FsAttachment::Directory(state) = &mut attachment else {
+            unreachable!();
+        };
+        state.wildcard = Some(b"\xf7~fs~\xf7".as_slice().into());
+        state.direction = ReadDirection::Backward;
+
+        let mut proxy = FsProxy {
+            company_id: 0,
+            group_id: 0,
+            user_id: 0,
+            root: PathBuf::new(),
+        };
+        assert_eq!(
+            proxy.read_dir(&mut attachment, 1, 504).unwrap()[0].name,
+            b"C~FS~".as_slice()
+        );
+        assert_eq!(
+            proxy.read_dir(&mut attachment, 1, 504).unwrap()[0].name,
+            b"A~FS~".as_slice()
+        );
+        assert!(proxy.read_dir(&mut attachment, 1, 504).unwrap().is_empty());
     }
 }

@@ -1,6 +1,7 @@
 mod backend;
 mod error;
 mod file;
+mod dirmanager;
 mod fsproxy;
 
 pub(crate) use backend::{
@@ -14,3 +15,4 @@ pub(crate) use file::{
     GRiDPathComponents,
 };
 pub(crate) use fsproxy::FsProxy;
+pub(crate) use dirmanager::VfsDirManager;

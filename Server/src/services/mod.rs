@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, rc::Rc};
+use std::{io, path::PathBuf, sync::Arc, rc::Rc};
 
 use log::{debug, warn};
 use rusqlite::Connection;
@@ -8,10 +8,7 @@ use sentry::SentryServer;
 use vfs::{Vfs, VfsRequest};
 
 use crate::{
-    db,
-    gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
-    shared::FrameError,
-    vfs::FsProxy,
+    db, gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody}, shared::FrameError, vfs::{FsProxy, VfsDirManager},
 };
 
 mod mail;
@@ -33,9 +30,9 @@ pub struct Vipc {
 }
 
 impl Vipc {
-    pub fn new(conn: Rc<Connection>, actor: db::Account, fs_root: PathBuf) -> io::Result<Self> {
+    pub fn new(conn: Rc<Connection>, actor: db::Account, vfs_root: Arc<VfsDirManager>) -> io::Result<Self> {
         Ok(Self {
-            vfs: Vfs::new(FsProxy::new(&actor, fs_root)?),
+            vfs: Vfs::new(FsProxy::new(&actor, vfs_root)?),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
             mail_broadcast: MailBroadcastServer::new(),
             sentry: SentryServer::new(conn, actor),

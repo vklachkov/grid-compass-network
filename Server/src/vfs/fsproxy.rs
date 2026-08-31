@@ -2,6 +2,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Read, Seek, Write},
     path::PathBuf,
+    sync::Arc,
 };
 
 #[cfg(unix)]
@@ -10,7 +11,7 @@ use std::os::unix::ffi::OsStrExt;
 use bstr::BStr;
 use log::warn;
 
-use crate::db;
+use crate::{db, vfs::VfsDirManager};
 
 use super::{
     AccessMode, AttachMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, DirEntry, Error, FileStatus,
@@ -33,15 +34,6 @@ const SOFTWARE_SUBJECTS: &[u8] = b"Software Subjects";
 const SERVER_SUBJECTS: &[u8] = b"Server Subjects";
 const SHARED_SUBJECTS: &[u8] = b"Shared Subjects";
 
-const MAIL_DIR: &str = "Mail";
-const SENTRY_DIR: &str = "Sentry";
-const COMPANIES_DIR: &str = "Companies";
-const GROUPS_DIR: &str = "Groups";
-const USERS_DIR: &str = "Users";
-const SHARED_DIR: &str = "Shared";
-const SERVER_DIR: &str = "Server";
-const SOFTWARE_DIR: &str = "Software";
-
 const RESOURCE_SUBJECTS: &[&[u8]] = &[
     USER_SUBJECTS,
     GROUP_SUBJECTS,
@@ -55,7 +47,7 @@ pub(crate) struct FsProxy {
     company_id: i64,
     group_id: i64,
     user_id: i64,
-    root: PathBuf,
+    dirman: Arc<VfsDirManager>,
 }
 
 pub(crate) enum FsHandle {
@@ -107,22 +99,12 @@ impl FsDirectory {
 }
 
 impl FsProxy {
-    pub(crate) fn new(account: &db::Account, root: PathBuf) -> io::Result<Self> {
-        for path in [
-            root.join(MAIL_DIR),
-            root.join(SENTRY_DIR).join(COMPANIES_DIR),
-            root.join(SENTRY_DIR).join(SHARED_DIR),
-            root.join(SERVER_DIR),
-            root.join(SOFTWARE_DIR),
-        ] {
-            fs::create_dir_all(path)?;
-        }
-
+    pub(crate) fn new(account: &db::Account, dirman: Arc<VfsDirManager>) -> io::Result<Self> {
         Ok(Self {
             company_id: account.company_id,
             group_id: account.group_id,
             user_id: account.id,
-            root,
+            dirman,
         })
     }
 
@@ -159,33 +141,15 @@ impl FsProxy {
     fn subject_real_path(&self, components: &GRiDPathComponents<'_>) -> Option<PathBuf> {
         let device: &[u8] = components.device?.as_ref();
         let mut path = match device {
-            MAIL_DEVICE => self.root.join(MAIL_DIR),
+            MAIL_DEVICE => self.dirman.mail_dir(),
             USER_SUBJECTS => self
-                .root
-                .join(SENTRY_DIR)
-                .join(COMPANIES_DIR)
-                .join(self.company_id.to_string())
-                .join(GROUPS_DIR)
-                .join(self.group_id.to_string())
-                .join(USERS_DIR)
-                .join(self.user_id.to_string()),
-            GROUP_SUBJECTS => self
-                .root
-                .join(SENTRY_DIR)
-                .join(COMPANIES_DIR)
-                .join(self.company_id.to_string())
-                .join(GROUPS_DIR)
-                .join(self.group_id.to_string())
-                .join(SHARED_DIR),
-            COMPANY_SUBJECTS => self
-                .root
-                .join(SENTRY_DIR)
-                .join(COMPANIES_DIR)
-                .join(self.company_id.to_string())
-                .join(SHARED_DIR),
-            SOFTWARE_SUBJECTS => self.root.join(SOFTWARE_DIR),
-            SERVER_SUBJECTS => self.root.join(SERVER_DIR),
-            SHARED_SUBJECTS => self.root.join(SENTRY_DIR).join(SHARED_DIR),
+                .dirman
+                .user_dir(self.company_id, self.group_id, self.user_id),
+            GROUP_SUBJECTS => self.dirman.group_dir(self.company_id, self.group_id),
+            COMPANY_SUBJECTS => self.dirman.company_dir(self.company_id),
+            SOFTWARE_SUBJECTS => self.dirman.software_dir(),
+            SERVER_SUBJECTS => self.dirman.server_dir(),
+            SHARED_SUBJECTS => self.dirman.shared_dir(),
             _ => return None,
         };
 
@@ -677,7 +641,7 @@ mod tests {
             company_id: 0,
             group_id: 0,
             user_id: 0,
-            root: PathBuf::new(),
+            dirman: PathBuf::new(),
         };
         assert_eq!(
             proxy.read_dir(&mut attachment, 1, 504).unwrap()[0].name,

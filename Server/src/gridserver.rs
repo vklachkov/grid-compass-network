@@ -1,10 +1,5 @@
 use std::{
-    fs::File,
-    io,
-    net::{SocketAddr, TcpListener, TcpStream},
-    path::{Path, PathBuf},
-    rc::Rc,
-    thread,
+    fs::File, io, net::{SocketAddr, TcpListener, TcpStream}, path::{Path, PathBuf}, rc::Rc, sync::Arc, thread,
 };
 
 use anyhow::Context;
@@ -13,6 +8,7 @@ use log::{debug, error, info, trace, warn};
 use rusqlite::Connection;
 
 use crate::db;
+use crate::vfs::VfsDirManager;
 use crate::gridlink::*;
 use crate::services::{
     Vipc,
@@ -34,8 +30,11 @@ enum ProcessFrameResult {
 pub fn serve() -> anyhow::Result<()> {
     let addr = read_env("LISTEN_ADDR")?;
     let db_path = read_env("DB_PATH")?;
-    let (fs_root, _fs_root_lock) = read_locked_directory("FS_ROOT").map_err(io::Error::other)?;
+    let fs_root = read_env("FS_ROOT")?;
 
+    let vfs_root = Arc::new(VfsDirManager::new(fs_root).context("vfs root")?);
+    vfs_root.create_base_dirs()?;
+    
     db::open(&db_path).map_err(io::Error::other)?;
     info!(target: "server", "using account database {db_path}");
 
@@ -47,8 +46,8 @@ pub fn serve() -> anyhow::Result<()> {
             Ok((client, addr)) => {
                 info!(target: "server", "accepted client {addr}");
                 let db_path = db_path.clone();
-                let fs_root = fs_root.clone();
-                thread::spawn(move || worker(client, addr, &db_path, &fs_root));
+                let vfs_root = vfs_root.clone();
+                thread::spawn(move || worker(client, addr, &db_path, vfs_root));
             }
             Err(err) => {
                 error!(target: "server", "failed to accept client: {err}");
@@ -57,28 +56,8 @@ pub fn serve() -> anyhow::Result<()> {
     }
 }
 
-pub fn read_locked_directory(name: &str) -> anyhow::Result<(PathBuf, File)> {
-    let configured_path = PathBuf::from(read_env(name)?);
-
-    let path = std::fs::canonicalize(&configured_path)
-        .with_context(|| format!("canonicalize {name} at {}", configured_path.display()))?;
-
-    let metadata = std::fs::metadata(&path)
-        .with_context(|| format!("read metadata for {name} at {}", path.display()))?;
-
-    if !metadata.is_dir() {
-        anyhow::bail!("{name} is not a directory: {}", path.display());
-    }
-
-    let lock = File::open(&path).with_context(|| format!("open {name} at {}", path.display()))?;
-    lock.lock()
-        .with_context(|| format!("lock {name} at {}", path.display()))?;
-
-    Ok((path, lock))
-}
-
-fn worker(client: TcpStream, addr: SocketAddr, db_path: &str, fs_root: &Path) {
-    if let Err(err) = try_worker(client, addr, db_path, fs_root) {
+fn worker(client: TcpStream, addr: SocketAddr, db_path: &str, vfs_root: Arc<VfsDirManager>) {
+    if let Err(err) = try_worker(client, addr, db_path, vfs_root) {
         error!(target: "server", "worker({addr}): fatal error: {err}");
     }
 }
@@ -87,7 +66,7 @@ fn try_worker(
     client: TcpStream,
     addr: SocketAddr,
     db_path: &str,
-    fs_root: &Path,
+    vfs_root: Arc<VfsDirManager>,
 ) -> io::Result<()> {
     let conn = Rc::new(db::open(db_path).map_err(io::Error::other)?);
 
@@ -99,7 +78,7 @@ fn try_worker(
         recv_sequence: 0x1C,
         vipc: None,
         conn,
-        fs_root: fs_root.to_owned(),
+        vfs_root,
         scratch: Scratch::default(),
     };
 
@@ -136,7 +115,7 @@ struct Session {
     /// address at all.
     vipc: Option<Box<Vipc>>,
     conn: Rc<Connection>,
-    fs_root: PathBuf,
+    vfs_root: Arc<VfsDirManager>,
     /// Reused for serializing outgoing frames, one buffer per nesting level:
     /// the VIPC message, the data frame around it and the PDL frame around
     /// that. Frames are bounded by `MAX_FRAME_SIZE`, so after the first few
@@ -301,7 +280,7 @@ impl Session {
                 self.vipc = Some(Box::new(Vipc::new(
                     Rc::clone(&self.conn),
                     account,
-                    self.fs_root.clone(),
+                    self.vfs_root.clone(),
                 )?));
 
                 status::OK

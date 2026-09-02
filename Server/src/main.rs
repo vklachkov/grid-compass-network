@@ -1,3 +1,6 @@
+#[cfg(not(unix))]
+compile_error!("This project is only supported on Unix-like systems.");
+
 mod db;
 mod gridlink;
 mod gridserver;

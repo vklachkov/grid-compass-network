@@ -2,20 +2,17 @@ use bstr::BString;
 
 use super::{GRiDPath, Result};
 
-pub(crate) const DIRECTORY_ENTRY_PREAMBLE_LEN: usize = 9;
-
 pub(crate) trait Backend {
-    type Attachment;
     type Handle;
 
-    fn is_attachable(
+    fn attach(
         &mut self,
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
-    ) -> Result<Self::Attachment>;
+    ) -> Result<Self::Handle>;
 
-    fn open(&mut self, attachment: &mut Self::Attachment) -> Result<Self::Handle>;
+    fn open(&mut self, attachment: &mut Self::Handle) -> Result<()>;
 
     fn close(&mut self, handle: &mut Self::Handle) -> Result<()>;
 
@@ -31,36 +28,27 @@ pub(crate) trait Backend {
 
     fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<()>;
 
-    fn get_status(
-        &mut self,
-        attachment: &Self::Attachment,
-        handle: Option<&mut Self::Handle>,
-    ) -> Result<FileStatus>;
+    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<FileStatus>;
 
-    fn set_status(
-        &mut self,
-        attachment: &mut Self::Attachment,
-        handle: Option<&mut Self::Handle>,
-        actions: &[StatusAction],
-    ) -> Result<()>;
+    fn set_status(&mut self, handle: &mut Self::Handle, actions: &[StatusAction]) -> Result<()>;
 
     fn read_dir(
         &mut self,
-        attachment: &mut Self::Attachment,
+        handle: &mut Self::Handle,
         max_entries: usize,
         max_bytes: usize,
-    ) -> Result<Vec<DirEntry>>;
+    ) -> Result<Vec<ShortDirEntry>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AttachMode {
+pub enum AttachMode {
     OldFile,
     UpdateFile,
     NewFile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AccessMode {
+pub enum AccessMode {
     Read,
     Write,
     Update,
@@ -70,7 +58,7 @@ pub(crate) enum AccessMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SeekMode {
+pub enum SeekMode {
     Backward,
     Absolute,
     Forward,
@@ -78,25 +66,25 @@ pub(crate) enum SeekMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReadDirection {
+pub enum ReadDirection {
     Forward,
     Backward,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ObjectMode {
+pub enum ObjectMode {
     Byte,
     Directory,
     CompleteDirectory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DirEntry {
+pub struct ShortDirEntry {
     pub name: BString,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FileStatus {
+pub struct FileStatus {
     pub access: AccessMode,
     pub seek: bool,
     pub file_position: u32,
@@ -106,7 +94,7 @@ pub(crate) struct FileStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum StatusAction {
+pub enum StatusAction {
     SetDirection(ReadDirection),
     SetWildcard(BString),
     SetObjectMode(ObjectMode),

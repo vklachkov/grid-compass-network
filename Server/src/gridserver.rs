@@ -465,23 +465,25 @@ mod tests {
     /// a real session — and a session answers into a socket. A loopback pair is
     /// the cheapest way to give it one and still read back what it wrote.
     fn loopback() -> (Session, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
-        let addr = listener.local_addr().expect("read the loopback address");
-        let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
-        let (client, _) = listener.accept().expect("accept the loopback connection");
+        todo!()
+        
+        // let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
+        // let addr = listener.local_addr().expect("read the loopback address");
+        // let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
+        // let (client, _) = listener.accept().expect("accept the loopback connection");
 
-        let session = Session {
-            client,
-            connection_id: 0x7B,
-            last_seq_number: 0x1C,
-            recv_sequence: 0x1C,
-            vipc: None,
-            conn: Rc::new(db::open_in_memory()),
-            fs_root: PathBuf::new(),
-            scratch: Scratch::default(),
-        };
+        // let session = Session {
+        //     client,
+        //     connection_id: 0x7B,
+        //     last_seq_number: 0x1C,
+        //     recv_sequence: 0x1C,
+        //     vipc: None,
+        //     conn: Rc::new(db::open_in_memory()),
+        //     fs_root: PathBuf::new(),
+        //     scratch: Scratch::default(),
+        // };
 
-        (session, peer)
+        // (session, peer)
     }
 
     fn read_response(peer: &mut TcpStream) -> Vec<u8> {

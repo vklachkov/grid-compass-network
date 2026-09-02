@@ -10,7 +10,7 @@ use crate::{
         io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
     },
     vfs::{
-        AccessMode, AttachMode, DIRECTORY_ENTRY_PREAMBLE_LEN, GRiDPath, ObjectMode, ReadDirection,
+        AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection,
         SeekMode,
     },
 };
@@ -569,7 +569,7 @@ impl VfsResponse {
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
                         dst.write_array([0; 4])?;
                         dst.write_u32(
-                            DIRECTORY_ENTRY_PREAMBLE_LEN as u32 + u32::from(name_length),
+                            9 /* What is 9??? */ as u32 + u32::from(name_length),
                         )?;
                         dst.write_u8(name_length)?;
                         dst.write_all(&entry.name)?;

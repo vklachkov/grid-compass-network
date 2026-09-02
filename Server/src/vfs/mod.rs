@@ -5,7 +5,7 @@ mod dirmanager;
 mod fsproxy;
 
 pub(crate) use backend::{
-    AccessMode, AttachMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, DirEntry, FileStatus,
+    AccessMode, AttachMode, Backend, ShortDirEntry, FileStatus,
     ObjectMode, ReadDirection, SeekMode, StatusAction,
 };
 pub(crate) use error::{Error, Result};

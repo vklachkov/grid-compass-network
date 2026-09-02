@@ -113,18 +113,20 @@ mod tests {
     use crate::db;
 
     fn vipc() -> Vipc {
-        let conn = Rc::new(db::open_in_memory());
-        let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
-            .expect("read the demo directory")
-            .expect("MANAGER should exist");
-        let fs_root = std::env::temp_dir().join(format!(
-            "setochka-vfs-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&fs_root).expect("create test FS root");
+        todo!()
 
-        Vipc::new(conn, actor, fs_root).expect("create VIPC services")
+        // let conn = Rc::new(db::open_in_memory());
+        // let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
+        //     .expect("read the demo directory")
+        //     .expect("MANAGER should exist");
+        // let fs_root = std::env::temp_dir().join(format!(
+        //     "setochka-vfs-{}-{:?}",
+        //     std::process::id(),
+        //     std::thread::current().id()
+        // ));
+        // std::fs::create_dir_all(&fs_root).expect("create test FS root");
+
+        // Vipc::new(conn, actor, fs_root).expect("create VIPC services")
     }
 
     #[test]

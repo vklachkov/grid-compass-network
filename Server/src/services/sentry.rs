@@ -1,4 +1,4 @@
-use std::{io::Write, rc::Rc};
+use std::rc::Rc;
 
 use bstr::BStr;
 use log::{debug, error, warn};
@@ -7,10 +7,7 @@ use rusqlite::Connection;
 use super::protocol::{property, status};
 use crate::{
     db,
-    shared::{
-        FrameError, Tlv, TlvEntry,
-        io::{WriteExt, u8_len},
-    },
+    shared::{FrameError, Tlv, TlvEntry, io::WriteExt},
 };
 
 /// Update and Delete are the two commands the client answers to with a bare
@@ -911,7 +908,7 @@ fn ascii_name(field: &[u8]) -> Result<&str, u16> {
         })
 }
 
-fn ascii_names<'a, const N: usize>(fields: [&'a [u8]; N]) -> Result<[&'a str; N], u16> {
+fn ascii_names<const N: usize>(fields: [&[u8]; N]) -> Result<[&str; N], u16> {
     let mut names = [""; N];
 
     for (name, field) in names.iter_mut().zip(fields) {
@@ -938,9 +935,7 @@ fn record<'a>(records: &[TlvEntry<'a>], wanted: u8) -> Option<&'a [u8]> {
 fn write_tagged(dst: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), FrameError> {
     dst.reserve(value.len() + 2);
     dst.write_u8(tag)?;
-    dst.write_u8(u8_len(value.len(), "Sentry record")?)?;
-    dst.write_all(value)?;
-    Ok(())
+    dst.write_u8_slice(value)
 }
 
 #[cfg(test)]
@@ -1026,7 +1021,8 @@ fn filter<'a>(records: &[TlvEntry<'a>], tag: u8) -> Filter<'a> {
     let name = value
         .iter()
         .rposition(|byte| *byte != 0)
-        .map_or(&value[..0], |end| &value[..=end]);
+        .and_then(|end| value.get(..=end))
+        .unwrap_or_default();
 
     if name.is_empty() {
         Filter::Start
@@ -1053,7 +1049,9 @@ fn resume(records: &[TlvEntry]) -> Option<usize> {
     let cursor = record(records, TAG_CURSOR)?;
     let index: usize = std::str::from_utf8(cursor).ok()?.parse().ok()?;
 
-    Some(index + 1)
+    // A cursor at the end of the address space has no successor, which is the
+    // same thing the caller reads as the end of the listing.
+    index.checked_add(1)
 }
 
 fn quota_name(quota: u32) -> String {

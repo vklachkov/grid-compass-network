@@ -62,6 +62,7 @@ pub struct FsAttachment {
     target: MappedPath,
     access: AccessMode,
     position: usize,
+    listing: Option<Vec<DirEntry>>,
     status: AttachmentStatus,
 }
 
@@ -254,6 +255,7 @@ impl FsProxy {
             target,
             access,
             position: 0,
+            listing: None,
             status: AttachmentStatus::default(),
         })
     }
@@ -265,6 +267,7 @@ impl FsProxy {
                     .create(true)
                     .read(true)
                     .write(true)
+                    .truncate(false)
                     .open(path.path())?;
 
                 let name = Self::file_name(path.path())?;
@@ -468,21 +471,36 @@ impl FsProxy {
         max_entries: usize,
         max_bytes: usize,
     ) -> Result<Vec<DirEntry>> {
-        let source_entries = match &attachment.target {
-            MappedPath::Directory(path) => Self::directory_entries(path.path())?,
-            MappedPath::Resources => Self::resource_entries(),
-            MappedPath::File(_) => {
-                error!(target: "vfs", "read dir on a file attachment");
-                return Err(Error::NotSupported);
-            }
-        };
+        // The listing is taken once and kept for the rest of the walk. Rebuilding
+        // it per page costs a full scan of the directory each time, and `read_dir`
+        // offers neither a stable order nor a consistent snapshot, so an object
+        // created or removed between two pages would shift every later index and
+        // make the client see a duplicate or miss a row.
+        //
+        // FIXME(vklachkov): the whole listing is still materialized at once, which
+        // is what sorting by name requires; streaming it would need an index of the
+        // directory kept in name order.
+        if attachment.listing.is_none() {
+            attachment.listing = Some(match &attachment.target {
+                MappedPath::Directory(path) => Self::directory_entries(path.path())?,
+                MappedPath::Resources => Self::resource_entries(),
+                MappedPath::File(_) => {
+                    error!(target: "vfs", "read dir on a file attachment");
+                    return Err(Error::NotSupported);
+                }
+            });
+        }
+
+        let source_entries = attachment.listing.as_deref().unwrap_or_default();
 
         // TODO(vklachkov): Is it allow to send multiple frames for read_dir?
         let mut entries = Vec::with_capacity(max_entries);
         let mut page_size = 0;
 
-        while attachment.position < source_entries.len() && entries.len() < max_entries {
-            let entry = &source_entries[attachment.position];
+        while entries.len() < max_entries {
+            let Some(entry) = source_entries.get(attachment.position) else {
+                break;
+            };
             let entry_size = DIRECTORY_ENTRY_PREAMBLE_LEN + entry.name.len();
 
             if page_size + entry_size > max_bytes {

@@ -193,7 +193,7 @@ impl DataFrameResponse<'_> {
                 server_name,
             } => {
                 dst.write_u16(*status)?;
-                Self::write_nslice(dst, server_name)?;
+                dst.write_u8_slice(server_name)?;
             }
             Self::Msg { header, payload } => {
                 Self::write_connect_header(dst, header)?;
@@ -216,14 +216,6 @@ impl DataFrameResponse<'_> {
     fn write_connect_header(dst: &mut Vec<u8>, header: &ConnectHeader) -> Result<(), FrameError> {
         dst.write_u16(header.local_path_id)?;
         dst.write_u16(header.remote_path_id)?;
-        Ok(())
-    }
-
-    /// The length is checked rather than truncated: a silently shortened prefix
-    /// would desynchronize the client's parser instead of failing here.
-    fn write_nslice(dst: &mut Vec<u8>, value: &[u8]) -> Result<(), FrameError> {
-        dst.write_u8(wire::u8_len(value.len(), "data frame slice")?)?;
-        dst.write_all(value)?;
         Ok(())
     }
 }

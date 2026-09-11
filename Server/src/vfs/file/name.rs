@@ -35,7 +35,9 @@ impl GRiDFileName {
         Self::is_valid_name(value)?;
 
         let mut bytes = [0; MAX_LENGTH];
-        bytes[..value.len()].copy_from_slice(value);
+        for (slot, &byte) in bytes.iter_mut().zip(value) {
+            *slot = byte;
+        }
 
         Ok(Self {
             length: value.len() as u8,
@@ -56,19 +58,20 @@ impl GRiDFileName {
     pub fn is_valid_name(value: impl AsRef<[u8]>) -> Result<(), GRiDFileNameError> {
         let value = value.as_ref();
 
-        if value.is_empty() {
-            return Err(GRiDFileNameError::InvalidFormat);
-        }
         if value.len() > MAX_LENGTH {
             return Err(GRiDFileNameError::TooLong);
         }
 
-        if value[value.len() - 1] != sep::KIND {
+        let Some((&last, head)) = value.split_last() else {
+            return Err(GRiDFileNameError::InvalidFormat);
+        };
+
+        if last != sep::KIND {
             return Err(GRiDFileNameError::InvalidFormat);
         }
 
         let mut has_separator = false;
-        for &byte in &value[..value.len() - 1] {
+        for &byte in head {
             match byte {
                 sep::KIND if !has_separator => {
                     has_separator = true;
@@ -88,7 +91,9 @@ impl GRiDFileName {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.length).min(MAX_LENGTH)]
+        self.bytes
+            .get(..usize::from(self.length))
+            .unwrap_or(&self.bytes)
     }
 }
 

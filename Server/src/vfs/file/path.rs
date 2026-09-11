@@ -111,16 +111,18 @@ impl GRiDPath {
     }
 
     pub fn components(&self) -> GRiDPathComponents<'_> {
+        // A validated path always carries a server separator, so the defaults
+        // only stand in for a state `try_from` cannot produce.
         let components = self
             .0
             .splitn(2, |&byte| byte == Self::SERVER_SEPARATOR)
             .nth(1)
-            .unwrap();
+            .unwrap_or_default();
 
         let components = components
             .splitn(2, |&byte| byte == Self::PASSWORD_SEPARATOR)
             .next()
-            .unwrap();
+            .unwrap_or_default();
 
         let mut components = components
             .split(|&byte| byte == Self::COMPONENT_SEPARATOR)
@@ -145,9 +147,12 @@ mod tests {
     use super::GRiDPath;
     use bstr::BStr;
 
+    type Case = (&'static [u8], OptionalName, OptionalName, OptionalName);
+    type OptionalName = Option<&'static [u8]>;
+
     #[test]
     fn parses_grid_paths() {
-        let cases: &[(&[u8], Option<&[u8]>, Option<&[u8]>, Option<&[u8]>)] = &[
+        let cases: &[Case] = &[
             (b"`server:Device", None, None, None),
             (b"`server:Device`Mail", Some(b"Mail"), None, None),
             (b"`server:Device`Mail`", Some(b"Mail"), None, None),

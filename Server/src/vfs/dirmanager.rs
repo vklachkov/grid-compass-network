@@ -277,7 +277,7 @@ impl VfsDirManager {
     ) -> Result<VfsPath> {
         fn push_component(path: &mut PathBuf, component: &BStr) -> Result<()> {
             let component = component
-                .strip_prefix(SUBJECT_SUFFIX)
+                .strip_suffix(SUBJECT_SUFFIX)
                 .unwrap_or(component.as_ref());
 
             for &byte in component {
@@ -286,11 +286,15 @@ impl VfsDirManager {
                 }
             }
 
+            if matches!(component, b"." | b"..") {
+                return Err(Error::BadParameter);
+            }
+
             #[cfg(unix)]
             path.push(OsStr::from_bytes(component));
 
             #[cfg(not(unix))]
-            unreachable!();
+            const { unreachable!() };
 
             Ok(())
         }

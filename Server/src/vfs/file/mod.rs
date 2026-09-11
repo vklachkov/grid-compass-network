@@ -97,7 +97,7 @@ impl GRiDFileHeader {
     }
 
     fn from_bytes(bytes: &[u8; HEADER_LENGTH]) -> Result<Self> {
-        let header = Self::read_from_bytes(bytes).expect("header size is fixed");
+        let header: Self = zerocopy::transmute!(*bytes);
         header.validate()?;
         Ok(header)
     }
@@ -266,7 +266,11 @@ impl Read for GRiDFile {
         let available = usize::try_from(body_length - self.body_pos).unwrap_or(usize::MAX);
         let read_length = buffer.len().min(available);
         self.seek_body(self.body_pos)?;
-        let count = self.file.read(&mut buffer[..read_length])?;
+
+        // `read_length` is clamped to the buffer just above, so the empty
+        // fallback cannot run and report a spurious end of file.
+        let buffer = buffer.get_mut(..read_length).unwrap_or_default();
+        let count = self.file.read(buffer)?;
         self.body_pos += count as u64;
         Ok(count)
     }
@@ -384,7 +388,7 @@ mod tests {
     #[test]
     fn open_rejects_a_physically_short_property_section() {
         let mut file = tempfile().unwrap();
-        file.write_all(&header(5).to_bytes().unwrap()).unwrap();
+        file.write_all(header(5).to_bytes().unwrap()).unwrap();
         file.write_all(b"abc").unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
 

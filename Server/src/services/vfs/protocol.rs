@@ -1,8 +1,8 @@
 use std::{io, io::Write, mem::size_of};
 
 use bstr::BStr;
-use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
     byteorder::{LE, U16, U32},
@@ -11,7 +11,7 @@ use zerocopy::{
 use crate::{
     shared::{
         FrameError,
-        io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
+        io::{CursorExt, ReadExt, WriteExt, read_small_slice, with_u16_len},
     },
     vfs::{
         AccessMode, AttachMode, DIRECTORY_ENTRY_PREAMBLE_LEN, GRiDPath, ObjectMode, ReadDirection,
@@ -59,7 +59,7 @@ pub struct VfsRequestHeader {
 
 const _: () = assert!(size_of::<VfsRequestHeader>() == 6);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u16)]
 pub enum VfsRequestCode {
     Initialize = 0,
@@ -137,7 +137,7 @@ struct VfsAttachHeader {
     password: [u8; VFS_PASSWORD_SPACE],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsAttachMode {
     OldFile = 1,
@@ -182,7 +182,7 @@ pub struct VfsSetStatusRequest<'a> {
     pub actions: Vec<VfsSetStatusAction<'a>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsSetStatusType {
     SetDirection = 255,
@@ -252,7 +252,7 @@ pub enum VfsSetStatusAction<'a> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsObjectMode {
     Byte = 0,
@@ -322,7 +322,7 @@ struct VfsDirEntryHeader {
 
 const _: () = assert!(size_of::<VfsDirEntryHeader>() == DIRECTORY_ENTRY_PREAMBLE_LEN);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsSeekMode {
     Backward = 1,
@@ -331,14 +331,14 @@ pub enum VfsSeekMode {
     FromEnd = 4,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsReadDirection {
     Forward = 0,
     Backward = 1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
 pub enum VfsAccessMode {
     Read = 1,
@@ -552,7 +552,7 @@ pub(super) fn response_header(
     status: u16,
 ) -> VfsResponseHeader {
     VfsResponseHeader {
-        response: U16::new(VFS_RESPONSE_BIT | request.to_u16().expect("valid VFS request code")),
+        response: U16::new(VFS_RESPONSE_BIT | request as u16),
         servers_conn_id: header.servers_conn_id,
         requestors_conn_id: header.requestors_conn_id,
         status: U16::new(status),
@@ -567,36 +567,31 @@ pub(super) fn simple_response(
     VfsResponse::Simple(response_header(request, header, error))
 }
 
-fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), FrameError> {
-    dst.write_struct(header)?;
-    Ok(())
-}
-
 impl VfsResponse {
     pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
         let start = dst.len();
 
         match self {
-            Self::Simple(response) => write_header(dst, response)?,
+            Self::Simple(response) => dst.write_struct(response)?,
             Self::GetStatus(response) => {
-                write_header(dst, &response.header)?;
+                dst.write_struct(&response.header)?;
                 with_u16_len(dst, |dst| {
                     dst.write_struct(&response.body)?;
                     Ok(())
                 })?;
             }
             Self::ReadDirPage(response) => {
-                write_header(dst, &response.header)?;
+                dst.write_struct(&response.header)?;
                 with_u16_len(dst, |dst| {
                     for entry in &response.entries {
-                        if entry.name.len() > VFS_MAX_FILE_NAME_LENGTH {
-                            return Err(FrameError::Validation {
+                        let name_length = u8::try_from(entry.name.len())
+                            .ok()
+                            .filter(|length| usize::from(*length) <= VFS_MAX_FILE_NAME_LENGTH)
+                            .ok_or_else(|| FrameError::Validation {
                                 reason: format!(
                                     "VFS directory entry name exceeds the maximum length of {VFS_MAX_FILE_NAME_LENGTH} bytes"
                                 ),
-                            });
-                        }
-                        let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
+                            })?;
                         dst.write_struct(&VfsDirEntryHeader {
                             reserved: [0; 4],
                             entry_length: U32::new(
@@ -610,7 +605,7 @@ impl VfsResponse {
                 })?;
             }
             Self::Read(response) => {
-                write_header(dst, &response.header)?;
+                dst.write_struct(&response.header)?;
                 with_u16_len(dst, |dst| {
                     dst.write_all(&response.data)?;
                     Ok(())

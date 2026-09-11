@@ -226,21 +226,20 @@ impl MailServer {
     }
 
     pub fn process(&mut self, note: u16, payload: &[u8]) -> Option<Vec<MailResponse>> {
-        let channel = note as usize;
-        if channel >= self.fragments.len() {
+        let Some(pending) = self.fragments.get_mut(note as usize) else {
             warn!(target: "mail", "ignored a request on the unknown channel {note}");
             return None;
-        }
+        };
 
         let fragment = match TransportFragment::parse(payload) {
             Some(fragment) if fragment.error == 0 => fragment,
             _ => {
                 warn!(target: "mail", "dropped a malformed fragment on channel {note}");
-                self.fragments[channel] = Pending::default();
+                *pending = Pending::default();
                 return None;
             }
         };
-        let pending = &mut self.fragments[channel];
+
         if !pending.data.is_empty() && pending.connection_id != fragment.connection_id {
             *pending = Pending::default();
         }
@@ -411,9 +410,6 @@ fn text(value: &[u8]) -> Option<&str> {
     value.is_ascii().then(|| str::from_utf8(value).ok())?
 }
 
-/// The wire form of a mail id is six bytes of which the client only ever fills
-/// the lower four, so a query naming the upper two addresses no stored message.
-
 /// The body of an outgoing mail object: the `n` record that is immediately
 /// followed by the `z` terminator, which is where GRiDMail stops writing.
 /// A rewritten mail object can keep a tail of the longer version it replaced,
@@ -422,10 +418,16 @@ fn outgoing_body(data: &[u8]) -> Option<&[u8]> {
     Tlv::marker_u16(data, RECORD_MARKER)
         .well_formed_prefix()
         .windows(2)
-        .find(|pair| {
-            pair[0].tag == TAG_BODY && pair[1].tag == TAG_TERMINATOR && pair[1].value.is_empty()
+        .find_map(|pair| match pair {
+            [body, terminator]
+                if body.tag == TAG_BODY
+                    && terminator.tag == TAG_TERMINATOR
+                    && terminator.value.is_empty() =>
+            {
+                Some(body.value)
+            }
+            _ => None,
         })
-        .map(|pair| pair[0].value)
 }
 
 impl MailStatus {

@@ -25,6 +25,7 @@ macro_rules! id_map {
     ($name:ident, $int:ty) => {
         pub struct $name(Box<Align16<[u8; (<$int>::MAX as usize + 1) / 8]>>);
 
+        #[allow(clippy::indexing_slicing)]
         impl $name {
             const SIZE: usize = <$int>::MAX as usize;
             const ALLOC_SIZE: usize = (Self::SIZE + 1) / 8;
@@ -64,9 +65,7 @@ macro_rules! id_map {
                     )
                 };
 
-                for i in 0..chunks.len() {
-                    let chunk = &chunks[i];
-
+                for (i, chunk) in chunks.iter().enumerate() {
                     let free_bytes = chunk.simd_ne(0xFF).to_bitmask();
                     if free_bytes == 0 {
                         continue;

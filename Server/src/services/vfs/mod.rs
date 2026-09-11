@@ -8,7 +8,6 @@ use protocol::*;
 use std::{collections::HashMap, num::NonZeroU16};
 
 use log::{debug, warn};
-use num_traits::ToPrimitive;
 use zerocopy::byteorder::{U16, U32};
 
 use super::protocol::status;
@@ -77,7 +76,7 @@ impl<B: Backend> Vfs<B> {
     }
 
     #[inline]
-    fn get_handle<'f>(file: &'f mut File<B>) -> Result<&'f mut B::Handle> {
+    fn get_handle(file: &mut File<B>) -> Result<&mut B::Handle> {
         file.handle.as_mut().ok_or(Error::FileNotOpen)
     }
 
@@ -87,9 +86,7 @@ impl<B: Backend> Vfs<B> {
                 header: response_header(VfsRequestCode::GetStatus, header, status::OK),
                 body: VfsGetStatusBody {
                     open: u8::from(open),
-                    access: VfsAccessMode::from(backend_status.access)
-                        .to_u8()
-                        .expect("valid VFS access mode"),
+                    access: VfsAccessMode::from(backend_status.access) as u8,
                     seek: u8::from(backend_status.seek),
                     file_position: U32::new(backend_status.file_position),
                     file_length: U32::new(backend_status.file_length),
@@ -105,7 +102,7 @@ impl<B: Backend> Vfs<B> {
                 ),
                 body: VfsGetStatusBody {
                     open: 0,
-                    access: VfsAccessMode::Read.to_u8().expect("valid VFS access mode"),
+                    access: VfsAccessMode::Read as u8,
                     seek: 0,
                     file_position: U32::ZERO,
                     file_length: U32::ZERO,
@@ -295,13 +292,13 @@ impl<B: Backend> Vfs<B> {
     fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
         match self._attach(header, body) {
             Ok(conn_id) => VfsResponse::Simple(VfsResponseHeader {
-                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap()),
+                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach as u16),
                 servers_conn_id: U16::new(conn_id.get()),
                 requestors_conn_id: header.requestors_conn_id,
                 status: U16::new(status::OK),
             }),
             Err(err) => VfsResponse::Simple(VfsResponseHeader {
-                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap()),
+                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach as u16),
                 servers_conn_id: U16::ZERO,
                 requestors_conn_id: header.requestors_conn_id,
                 status: U16::new(error::error_code(&err)),
@@ -319,7 +316,7 @@ impl<B: Backend> Vfs<B> {
         let mode = body.mode.into();
         let access = body.access.into();
 
-        let attachment = self.backend.is_attachable(&body.path, mode, access)?;
+        let attachment = self.backend.is_attachable(body.path, mode, access)?;
 
         self.files.insert(
             file_id,
@@ -431,9 +428,7 @@ impl From<VfsSetStatusAction<'_>> for StatusAction {
     fn from(value: VfsSetStatusAction<'_>) -> Self {
         match value {
             VfsSetStatusAction::SetDirection { direction } => Self::SetDirection(direction.into()),
-            VfsSetStatusAction::SetWildcard { pattern } => {
-                Self::SetWildcard(pattern.to_owned().into())
-            }
+            VfsSetStatusAction::SetWildcard { pattern } => Self::SetWildcard(pattern.to_owned()),
             VfsSetStatusAction::SetObjectMode { mode } => Self::SetObjectMode(mode.into()),
             _ => Self::Unsupported,
         }
@@ -565,7 +560,7 @@ mod tests {
 
     fn header(code: VfsRequestCode, connection_id: u16) -> VfsRequestHeader {
         VfsRequestHeader {
-            request: U16::new(code.to_u16().unwrap()),
+            request: U16::new(code as u16),
             requestors_conn_id: U16::new(7),
             servers_conn_id: U16::new(connection_id),
         }

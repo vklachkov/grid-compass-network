@@ -121,7 +121,10 @@ impl<'a> Frame<'a> {
                 connection_id: cursor.read_u8()?,
             }),
             FrameType::Data => {
-                let body = &raw.data[cursor.position() as usize..];
+                let body = raw
+                    .data
+                    .get(cursor.position() as usize..)
+                    .unwrap_or_default();
                 FrameBody::Data(body)
             }
         };

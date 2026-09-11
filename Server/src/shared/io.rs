@@ -21,22 +21,21 @@ pub fn with_u16_len(
 
     f(dst)?;
 
-    let length = u16_len(dst.len() - at - 2, "length-prefixed block")?;
-    dst[at..at + 2].copy_from_slice(&length.to_le_bytes());
+    let body_length = dst.len().saturating_sub(at + 2);
+    let Ok(length) = u16::try_from(body_length) else {
+        return Err(FrameError::Validation {
+            reason: format!("a block of {body_length} bytes overruns its u16 length prefix"),
+        });
+    };
+
+    let Some(prefix) = dst.get_mut(at..at + 2) else {
+        return Err(FrameError::Validation {
+            reason: "the block body consumed its own length prefix".to_owned(),
+        });
+    };
+    prefix.copy_from_slice(&length.to_le_bytes());
 
     Ok(())
-}
-
-pub fn u8_len(length: usize, what: &str) -> Result<u8, FrameError> {
-    u8::try_from(length).map_err(|_| FrameError::Validation {
-        reason: format!("{what} of {length} bytes exceeds the u8 length field"),
-    })
-}
-
-pub fn u16_len(length: usize, what: &str) -> Result<u16, FrameError> {
-    u16::try_from(length).map_err(|_| FrameError::Validation {
-        reason: format!("{what} of {length} bytes exceeds the u16 length field"),
-    })
 }
 
 pub trait ReadExt: io::Read {
@@ -83,6 +82,24 @@ pub trait WriteExt: io::Write {
     fn write_struct<T: IntoBytes + Immutable + ?Sized>(&mut self, value: &T) -> io::Result<()> {
         self.write_all(value.as_bytes())
     }
+
+    /// The length is checked rather than truncated: a silently shortened prefix
+    /// would desynchronize the client's parser instead of failing here.
+    fn write_u8_slice(&mut self, value: &[u8]) -> Result<(), FrameError> {
+        let Ok(length) = u8::try_from(value.len()) else {
+            return Err(FrameError::Validation {
+                reason: format!(
+                    "a slice of {} bytes overruns its u8 length prefix",
+                    value.len()
+                ),
+            });
+        };
+
+        self.write_u8(length)?;
+        self.write_all(value)?;
+
+        Ok(())
+    }
 }
 
 impl<T: io::Write + ?Sized> WriteExt for T {}
@@ -98,7 +115,7 @@ impl<'a> CursorExt<'a> for io::Cursor<&'a [u8]> {
         let start = self.position() as usize;
         let end = self.get_ref().len();
         self.set_position(end as u64);
-        &self.get_ref()[start..]
+        self.get_ref().get(start..).unwrap_or_default()
     }
 
     fn read_slice(&mut self, length: usize) -> io::Result<&'a [u8]> {

@@ -96,19 +96,17 @@ impl<'a> Tlv<'a> {
                 }
 
                 let length = self.cursor.read_u16()? as usize;
+                let record = self.cursor.read_slice(length)?;
+
                 // The length covers the tag byte, so an empty record cannot
                 // carry one and the walk would not advance.
-                if length == 0 {
+                let Some((&tag, value)) = record.split_first() else {
                     return Err(FrameError::Validation {
                         reason: "record length must cover the tag byte".to_owned(),
                     });
-                }
+                };
 
-                let record = self.cursor.read_slice(length)?;
-                Ok(TlvEntry {
-                    tag: record[0],
-                    value: &record[1..],
-                })
+                Ok(TlvEntry { tag, value })
             }
         }
     }

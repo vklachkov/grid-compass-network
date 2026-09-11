@@ -4,7 +4,7 @@ use log::error;
 
 use crate::shared::{
     Tlv,
-    io::{CursorExt, ReadExt, u16_len},
+    io::{CursorExt, ReadExt},
 };
 
 pub const RECORD_MARKER: u8 = 0xfd;
@@ -58,7 +58,9 @@ impl MailId {
 
     pub fn from_u32(value: u32) -> Self {
         let mut bytes = [0; MAIL_ID_LEN];
-        bytes[..size_of::<u32>()].copy_from_slice(&value.to_le_bytes());
+        if let Some(low) = bytes.first_chunk_mut() {
+            *low = value.to_le_bytes();
+        }
         Self(bytes)
     }
 
@@ -66,6 +68,9 @@ impl MailId {
         self.0
     }
 
+    /// The wire form of a mail id is six bytes of which the client only ever
+    /// fills the lower four, so a query naming the upper two addresses no
+    /// stored message.
     pub fn value(self) -> Option<u32> {
         let (value, reserved) = self.0.split_at(size_of::<u32>());
         let value = *value.first_chunk()?;
@@ -108,14 +113,16 @@ pub fn single_record(data: &[u8], marker: u8, tag: u8) -> Option<&[u8]> {
 /// down to what the field can name: a client reading a truncated record stays in
 /// sync with the stream, one reading a record whose header lies does not.
 pub fn app_frame(marker: u8, payload: &[u8]) -> Vec<u8> {
-    let length = match u16_len(payload.len(), "Mail application record") {
-        Ok(length) => length,
-        Err(err) => {
-            error!(target: "mail", "truncated an application record: {err}");
-            u16::MAX
-        }
+    let payload = if payload.len() > usize::from(u16::MAX) {
+        error!(target: "mail", "truncated an application record of {} bytes", payload.len());
+        payload.get(..usize::from(u16::MAX)).unwrap_or_default()
+    } else {
+        payload
     };
-    let payload = &payload[..length as usize];
+
+    // Taking the length from the truncated payload rather than the other way
+    // round is what keeps the header from ever describing more than it carries.
+    let length = u16::try_from(payload.len()).unwrap_or(u16::MAX);
 
     let mut frame = Vec::with_capacity(payload.len() + RECORD_HEADER_LEN);
     frame.push(marker);

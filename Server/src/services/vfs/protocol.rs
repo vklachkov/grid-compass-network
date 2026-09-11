@@ -9,10 +9,7 @@ use crate::{
         FrameError,
         io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
     },
-    vfs::{
-        AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection,
-        SeekMode,
-    },
+    vfs::{AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection, SeekMode},
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
@@ -28,6 +25,7 @@ pub(super) const VFS_MAX_READ_LENGTH: usize = VFS_PAGE_SIZE;
 pub(super) const VFS_MAX_WRITE_LENGTH: usize = VFS_PAGE_SIZE;
 
 pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
+pub(super) const VFS_ERROR_ACCESS_DENIED: u16 = 38; // eAccess
 pub(super) const VFS_ERROR_FILE_EXISTS: u16 = 32; // eFileExists
 pub(super) const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
 pub(super) const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
@@ -103,6 +101,7 @@ pub enum VfsRequestBody<'a> {
     Attach(VfsAttachRequest<'a>),
     Detach,
     Close,
+    Truncate,
     Flush,
     Unknown(&'a [u8]),
 }
@@ -491,6 +490,10 @@ impl<'a> VfsRequest<'a> {
                 ensure_empty(&cursor, "VFS close payload")?;
                 VfsRequestBody::Close
             }
+            Some(VfsRequestCode::Truncate) => {
+                ensure_empty(&cursor, "VFS truncate payload")?;
+                VfsRequestBody::Truncate
+            }
             Some(VfsRequestCode::Flush) => {
                 ensure_empty(&cursor, "VFS flush payload")?;
                 VfsRequestBody::Flush
@@ -568,9 +571,7 @@ impl VfsResponse {
                         }
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
                         dst.write_array([0; 4])?;
-                        dst.write_u32(
-                            9 /* What is 9??? */ as u32 + u32::from(name_length),
-                        )?;
+                        dst.write_u32(9 /* What is 9??? */ as u32 + u32::from(name_length))?;
                         dst.write_u8(name_length)?;
                         dst.write_all(&entry.name)?;
                     }

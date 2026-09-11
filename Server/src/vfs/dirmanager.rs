@@ -1,7 +1,10 @@
 use std::{
+    collections::{HashMap, hash_map::Entry},
     ffi::OsStr,
     fs, io,
+    num::NonZeroU16,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 #[cfg(unix)]
@@ -9,6 +12,9 @@ use std::os::unix::ffi::OsStrExt;
 
 use anyhow::{Context, bail};
 use bstr::BStr;
+
+use super::{Error, Result};
+use crate::shared::bitmap::IdMap;
 
 const MAIL_DIR: &str = "Mail";
 const SENTRY_DIR: &str = "Sentry";
@@ -21,10 +27,29 @@ const SOFTWARE_DIR: &str = "Software";
 
 const SUBJECT_SUFFIX: &[u8] = b"~Subject~";
 
+/// Linux only accepts extended attributes in a namespace, and `user` is the
+/// only one writable without privileges.
+const XATTR_SUPPORT_KEY: &str = "user.grid.xattr-probe";
+const XATTR_FILE_ID_KEY: &str = "user.grid.file-id";
+
 macro_rules! path_err {
     ($action:expr, $path:expr) => {
         || format!(concat!($action, " '{}'"), $path.display())
     };
+}
+
+/// A path inside one of the virtual disks, kept together with the disk it
+/// belongs to: file ids are only unique within a single disk.
+#[derive(Clone, Debug)]
+pub struct VfsPath {
+    disk: PathBuf,
+    path: PathBuf,
+}
+
+impl VfsPath {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 pub struct VfsDirManager(Inner);
@@ -32,6 +57,7 @@ pub struct VfsDirManager(Inner);
 struct Inner {
     root_path: PathBuf,
     _root_fd: fs::File,
+    file_ids: Mutex<HashMap<PathBuf, IdMap>>,
 }
 
 impl VfsDirManager {
@@ -63,40 +89,106 @@ impl VfsDirManager {
         Ok(Self(Inner {
             root_path: path,
             _root_fd: fd,
+            file_ids: Mutex::new(HashMap::new()),
         }))
     }
 
     fn is_xattr_supported(path: &Path) -> io::Result<()> {
-        const KEY: &str = "is-xattr-supported";
         const SUPPORTED: &[u8] = b"supported";
 
-        xattr::set(path, KEY, SUPPORTED)?;
+        xattr::set(path, XATTR_SUPPORT_KEY, SUPPORTED)?;
 
-        if xattr::get(path, KEY)? != Some(SUPPORTED.to_owned()) {
+        if xattr::get(path, XATTR_SUPPORT_KEY)? != Some(SUPPORTED.to_owned()) {
             Err(io::ErrorKind::Unsupported.into())
         } else {
             Ok(())
         }
     }
 
-    pub fn create_base_dirs(&self) -> anyhow::Result<()> {
-        let root = self.0.root_path.as_path();
+    /// Ids live in an extended attribute on every object, so the allocator of a
+    /// disk has to be rebuilt from its tree before handing out an id, or it
+    /// would reuse one that an object created by an earlier run already owns.
+    fn collect_file_ids(path: &Path, ids: &mut IdMap) -> io::Result<()> {
+        if let Some(id) = Self::read_file_id(path)? {
+            ids.set(id);
+        }
 
-        for path in [
-            root.join(MAIL_DIR),
-            root.join(SENTRY_DIR).join(COMPANIES_DIR),
-            root.join(SENTRY_DIR).join(SHARED_DIR),
-            root.join(SERVER_DIR),
-            root.join(SOFTWARE_DIR),
-        ] {
-            fs::create_dir_all(&path)
-                .with_context(|| format!("create dir at {}", path.display()))?;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+
+            if entry.file_type()?.is_dir() {
+                Self::collect_file_ids(&entry_path, ids)?;
+            } else if let Some(id) = Self::read_file_id(&entry_path)? {
+                ids.set(id);
+            }
         }
 
         Ok(())
     }
 
-    pub fn mail_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> PathBuf {
+    /// Returns the id of an object, assigning and persisting one on first use.
+    pub fn file_id(&self, path: &VfsPath) -> Result<NonZeroU16> {
+        self.allocate_file_id(&path.disk, &path.path)
+    }
+
+    /// Returns the id of the directory holding an object.
+    pub fn parent_file_id(&self, path: &VfsPath) -> Result<NonZeroU16> {
+        let parent = path.path.parent().ok_or(Error::ResourceUnavailable)?;
+
+        if !parent.starts_with(&path.disk) {
+            return Err(Error::ResourceUnavailable);
+        }
+
+        self.allocate_file_id(&path.disk, parent)
+    }
+
+    fn allocate_file_id(&self, disk: &Path, path: &Path) -> Result<NonZeroU16> {
+        if let Some(id) = Self::read_file_id(path)? {
+            return Ok(id);
+        }
+
+        let mut disks = self
+            .0
+            .file_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let ids = match disks.entry(disk.to_path_buf()) {
+            Entry::Occupied(occupied) => occupied.into_mut(),
+            Entry::Vacant(vacant) => {
+                let mut ids = IdMap::new();
+                Self::collect_file_ids(disk, &mut ids)?;
+                vacant.insert(ids)
+            }
+        };
+
+        // Another attachment may have assigned an id while the tree was scanned.
+        if let Some(id) = Self::read_file_id(path)? {
+            return Ok(id);
+        }
+
+        let id = ids.find_free().ok_or(Error::DeviceFull)?;
+        xattr::set(path, XATTR_FILE_ID_KEY, &id.get().to_le_bytes())?;
+        ids.set(id);
+
+        Ok(id)
+    }
+
+    fn read_file_id(path: &Path) -> io::Result<Option<NonZeroU16>> {
+        let Some(raw) = xattr::get(path, XATTR_FILE_ID_KEY)? else {
+            return Ok(None);
+        };
+
+        let raw = <[u8; 2]>::try_from(raw.as_slice())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "malformed file id"))?;
+
+        NonZeroU16::new(u16::from_le_bytes(raw))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "zero file id"))
+            .map(Some)
+    }
+
+    pub fn mail_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> Result<VfsPath> {
         Self::map_file_path(self.0.root_path.join(MAIL_DIR), folder, file)
     }
 
@@ -105,7 +197,7 @@ impl VfsDirManager {
         company_id: i64,
         folder: Option<&BStr>,
         file: Option<&BStr>,
-    ) -> PathBuf {
+    ) -> Result<VfsPath> {
         Self::map_file_path(
             self.0
                 .root_path
@@ -124,7 +216,7 @@ impl VfsDirManager {
         group_id: i64,
         folder: Option<&BStr>,
         file: Option<&BStr>,
-    ) -> PathBuf {
+    ) -> Result<VfsPath> {
         Self::map_file_path(
             self.0
                 .root_path
@@ -146,7 +238,7 @@ impl VfsDirManager {
         user_id: i64,
         folder: Option<&BStr>,
         file: Option<&BStr>,
-    ) -> PathBuf {
+    ) -> Result<VfsPath> {
         Self::map_file_path(
             self.0
                 .root_path
@@ -162,15 +254,19 @@ impl VfsDirManager {
         )
     }
 
-    pub fn software_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> PathBuf {
+    pub fn software_file_path(
+        &self,
+        folder: Option<&BStr>,
+        file: Option<&BStr>,
+    ) -> Result<VfsPath> {
         Self::map_file_path(self.0.root_path.join(SOFTWARE_DIR), folder, file)
     }
 
-    pub fn server_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> PathBuf {
+    pub fn server_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> Result<VfsPath> {
         Self::map_file_path(self.0.root_path.join(SERVER_DIR), folder, file)
     }
 
-    pub fn shared_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> PathBuf {
+    pub fn shared_file_path(&self, folder: Option<&BStr>, file: Option<&BStr>) -> Result<VfsPath> {
         Self::map_file_path(
             self.0.root_path.join(SENTRY_DIR).join(SHARED_DIR),
             folder,
@@ -178,34 +274,43 @@ impl VfsDirManager {
         )
     }
 
-    fn map_file_path(mut path: PathBuf, folder: Option<&BStr>, file: Option<&BStr>) -> PathBuf {
-        fn push_component(path: &mut PathBuf, component: &BStr) {
+    fn map_file_path(
+        disk_path: PathBuf,
+        folder: Option<&BStr>,
+        file: Option<&BStr>,
+    ) -> Result<VfsPath> {
+        fn push_component(path: &mut PathBuf, component: &BStr) -> Result<()> {
             let component = component
                 .strip_prefix(SUBJECT_SUFFIX)
                 .unwrap_or(component.as_ref());
 
-            let component = component
-                .iter()
-                .map(|byte| match byte {
-                    b'/' | b'\\' | b'.' => b'_',
-                    byte => *byte,
-                })
-                .collect::<Vec<_>>();
+            for &byte in component {
+                if byte == 0 || byte == b'/' {
+                    return Err(Error::BadParameter);
+                }
+            }
 
             #[cfg(unix)]
-            path.push(OsStr::from_bytes(component.as_slice()));
+            path.push(OsStr::from_bytes(component));
 
             #[cfg(not(unix))]
             unreachable!();
+
+            Ok(())
         }
+
+        let mut path = disk_path.clone();
 
         if let Some(folder) = folder {
-            push_component(&mut path, folder);
+            push_component(&mut path, folder)?;
         }
         if let Some(file) = file {
-            push_component(&mut path, file);
+            push_component(&mut path, file)?;
         }
 
-        return path;
+        Ok(VfsPath {
+            disk: disk_path,
+            path,
+        })
     }
 }

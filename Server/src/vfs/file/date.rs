@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, time::SystemTime};
 
-use jiff::Zoned;
+use jiff::{Timestamp, Zoned, tz::TimeZone};
 
 pub const DATE_LENGTH: usize = 11;
 
@@ -22,7 +22,10 @@ struct GRiDDateInner {
 
 impl GRiDDate {
     pub fn today() -> Self {
-        let date_time = Zoned::now();
+        Self::from_zoned(&Zoned::now())
+    }
+
+    fn from_zoned(date_time: &Zoned) -> Self {
         Self(Some(GRiDDateInner {
             year: date_time.year() as u16,
             month: date_time.month() as u8,
@@ -74,6 +77,17 @@ impl GRiDDate {
         bytes[8] = date.day_of_week;
         bytes[9..].copy_from_slice(&date.day_of_year.to_le_bytes());
         bytes
+    }
+}
+
+/// Timestamps outside the range GRiD can express degrade to `never` rather
+/// than failing the request that carries them.
+impl From<SystemTime> for GRiDDate {
+    fn from(time: SystemTime) -> Self {
+        match Timestamp::try_from(time) {
+            Ok(timestamp) => Self::from_zoned(&timestamp.to_zoned(TimeZone::system())),
+            Err(_) => Self::never(),
+        }
     }
 }
 

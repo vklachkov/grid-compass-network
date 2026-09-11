@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{io::Cursor, mem::MaybeUninit};
 
 use anyhow::bail;
 
@@ -41,43 +41,6 @@ pub struct GRiDFileDescriptor {
 }
 
 impl GRiDFileDescriptor {
-    pub fn new(file_name: GRiDFileName) -> Self {
-        let now = GRiDDate::today();
-
-        Self {
-            file_length: 0,
-            file_name,
-            creation_date: now,
-            // TODO: Set this when the parent directory is integrated.
-            dir_file_id: 0,
-            last_modified_date: now,
-            expiration_date: GRiDDate::never(),
-            // TODO: Populate workstation metadata when its source is known.
-            machine_id: 0,
-            compressed: 0,
-            encrypted: false,
-            protected: false,
-            password: [0; 5],
-            dir_length: 0,
-            dir_count: 0,
-            grid_write1: [0; _],
-            machine_id2: false,
-            uses_8087: false,
-            version1: 0,
-            version2: 0,
-            machine_id3: 0,
-            grid_write2: [0; _],
-            version3: 0,
-            property_length: 0,
-            rom: false,
-            rom_id: 0,
-            mode: 0,
-            rainy_day_bytes: [0; _],
-            user_defined_bytes: [0; _],
-            grid_central_use: 0,
-        }
-    }
-
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         if bytes.len() != DESCRIPTOR_LENGTH {
             bail!(
@@ -184,6 +147,12 @@ impl GRiDFileDescriptor {
     }
 }
 
+impl Default for GRiDFileDescriptor {
+    fn default() -> Self {
+        unsafe { MaybeUninit::zeroed().assume_init() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,20 +200,26 @@ mod tests {
 
     #[test]
     fn filename_length_over_80_is_a_format_error() {
-        let mut bytes =
-            GRiDFileDescriptor::new(GRiDFileName::new(b"Name~Data~").unwrap()).to_bytes();
+        let descriptor = GRiDFileDescriptor {
+            file_name: GRiDFileName::new(b"Name~Data~").unwrap(),
+            ..Default::default()
+        };
+        let mut bytes = descriptor.to_bytes();
         bytes[4] = 81;
         assert!(GRiDFileDescriptor::from_bytes(&bytes).is_err());
     }
 
     #[test]
-    fn constructor_sets_known_file_defaults() {
+    fn default_descriptor_is_zeroed() {
         let name = GRiDFileName::new(b"Name~Data~").unwrap();
-        let descriptor = GRiDFileDescriptor::new(name);
+        let descriptor = GRiDFileDescriptor {
+            file_name: name,
+            ..Default::default()
+        };
 
         assert_eq!(descriptor.file_name, name);
-        assert_ne!(descriptor.creation_date, GRiDDate::never());
-        assert_eq!(descriptor.last_modified_date, descriptor.creation_date);
+        assert_eq!(descriptor.creation_date, GRiDDate::never());
+        assert_eq!(descriptor.last_modified_date, GRiDDate::never());
         assert_eq!(descriptor.expiration_date, GRiDDate::never());
         assert_eq!(descriptor.password, [0; 5]);
     }

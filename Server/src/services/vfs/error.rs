@@ -2,9 +2,9 @@ use crate::vfs::{Error, Result};
 use log::warn;
 
 use super::protocol::{
-    VFS_ERROR_ALREADY_OPEN, VFS_ERROR_BAD_CONNECTION, VFS_ERROR_BAD_PARAMETER,
-    VFS_ERROR_DEVICE_FULL, VFS_ERROR_FILE_EXISTS, VFS_ERROR_FILE_NOT_OPEN, VFS_ERROR_NOT_SUPPORTED,
-    VFS_ERROR_RESOURCE_UNAVAILABLE,
+    VFS_ERROR_ACCESS_DENIED, VFS_ERROR_ALREADY_OPEN, VFS_ERROR_BAD_CONNECTION,
+    VFS_ERROR_BAD_PARAMETER, VFS_ERROR_DEVICE_FULL, VFS_ERROR_FILE_EXISTS, VFS_ERROR_FILE_NOT_OPEN,
+    VFS_ERROR_NOT_SUPPORTED, VFS_ERROR_RESOURCE_UNAVAILABLE,
 };
 
 pub(super) trait ErrorCodeExt {
@@ -23,6 +23,7 @@ impl<T> ErrorCodeExt for Result<T> {
 pub(super) fn error_code(error: &Error) -> u16 {
     match error {
         Error::NotSupported => VFS_ERROR_NOT_SUPPORTED,
+        Error::AccessDenied => VFS_ERROR_ACCESS_DENIED,
         Error::DeviceFull => VFS_ERROR_DEVICE_FULL,
         Error::FileNotOpen => VFS_ERROR_FILE_NOT_OPEN,
         Error::BadConnection => VFS_ERROR_BAD_CONNECTION,

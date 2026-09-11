@@ -3,6 +3,7 @@ use std::io;
 #[derive(Debug)]
 pub(crate) enum Error {
     NotSupported,
+    AccessDenied,
     DeviceFull,
     FileNotOpen,
     BadConnection,

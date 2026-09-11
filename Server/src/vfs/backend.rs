@@ -2,17 +2,23 @@ use bstr::BString;
 
 use super::{GRiDPath, Result};
 
+pub(crate) const DIRECTORY_ENTRY_PREAMBLE_LEN: usize = 9;
+
+/// An attachment exists for as long as the connection does and answers
+/// directory and status requests on its own. A handle is the physically opened
+/// object and only lives between open and close.
 pub(crate) trait Backend {
+    type Attachment;
     type Handle;
 
-    fn attach(
+    fn is_attachable(
         &mut self,
         path: &GRiDPath,
         mode: AttachMode,
         access: AccessMode,
-    ) -> Result<Self::Handle>;
+    ) -> Result<Self::Attachment>;
 
-    fn open(&mut self, attachment: &mut Self::Handle) -> Result<()>;
+    fn open(&mut self, attachment: &mut Self::Attachment) -> Result<Self::Handle>;
 
     fn close(&mut self, handle: &mut Self::Handle) -> Result<()>;
 
@@ -22,22 +28,33 @@ pub(crate) trait Backend {
 
     fn seek(&mut self, handle: &mut Self::Handle, mode: SeekMode, position: u32) -> Result<()>;
 
+    fn truncate(&mut self, handle: &mut Self::Handle) -> Result<()>;
+
     fn flush(&mut self, handle: &mut Self::Handle) -> Result<()>;
 
     fn read_desc(&mut self, handle: &mut Self::Handle, length: usize) -> Result<Vec<u8>>;
 
     fn write_desc(&mut self, handle: &mut Self::Handle, descriptor: &[u8]) -> Result<()>;
 
-    fn get_status(&mut self, handle: &mut Self::Handle) -> Result<FileStatus>;
+    fn get_status(
+        &mut self,
+        attachment: &Self::Attachment,
+        handle: Option<&mut Self::Handle>,
+    ) -> Result<FileStatus>;
 
-    fn set_status(&mut self, handle: &mut Self::Handle, actions: &[StatusAction]) -> Result<()>;
+    fn set_status(
+        &mut self,
+        attachment: &mut Self::Attachment,
+        handle: Option<&mut Self::Handle>,
+        actions: &[StatusAction],
+    ) -> Result<()>;
 
     fn read_dir(
         &mut self,
-        handle: &mut Self::Handle,
+        attachment: &mut Self::Attachment,
         max_entries: usize,
         max_bytes: usize,
-    ) -> Result<Vec<ShortDirEntry>>;
+    ) -> Result<Vec<DirEntry>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +96,7 @@ pub enum ObjectMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShortDirEntry {
+pub struct DirEntry {
     pub name: BString,
 }
 

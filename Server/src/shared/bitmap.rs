@@ -40,6 +40,13 @@ impl IdMap {
         self.0[byte] |= mask;
     }
 
+    pub fn is_set(&self, id: NonZeroU16) -> bool {
+        let bit = id.get() - 1;
+        let byte = (bit >> 3) as usize;
+        let mask = 1u8 << (bit & 0b111);
+        self.0[byte] & mask != 0
+    }
+
     pub fn clear(&mut self, id: NonZeroU16) {
         let bit = id.get() - 1;
         let byte = (bit >> 3) as usize;

@@ -1,5 +1,9 @@
 use std::{
-    fs::File, io, net::{SocketAddr, TcpListener, TcpStream}, path::{Path, PathBuf}, rc::Rc, sync::Arc, thread,
+    io,
+    net::{SocketAddr, TcpListener, TcpStream},
+    rc::Rc,
+    sync::Arc,
+    thread,
 };
 
 use anyhow::Context;
@@ -8,7 +12,6 @@ use log::{debug, error, info, trace, warn};
 use rusqlite::Connection;
 
 use crate::db;
-use crate::vfs::VfsDirManager;
 use crate::gridlink::*;
 use crate::services::{
     Vipc,
@@ -16,6 +19,7 @@ use crate::services::{
     sentry::Authority,
 };
 use crate::shared::{FrameError, env::read_env};
+use crate::vfs::VfsDirManager;
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
@@ -33,8 +37,7 @@ pub fn serve() -> anyhow::Result<()> {
     let fs_root = read_env("FS_ROOT")?;
 
     let vfs_root = Arc::new(VfsDirManager::new(fs_root).context("vfs root")?);
-    vfs_root.create_base_dirs()?;
-    
+
     db::open(&db_path).map_err(io::Error::other)?;
     info!(target: "server", "using account database {db_path}");
 
@@ -457,6 +460,8 @@ pub(crate) fn authenticate(
 mod tests {
     use std::io::Read;
 
+    use tempfile::TempDir;
+
     use super::*;
 
     use super::sign_on_properties as properties;
@@ -464,26 +469,27 @@ mod tests {
     /// The gate lives in the session, not in `authenticate`, so binding it takes
     /// a real session — and a session answers into a socket. A loopback pair is
     /// the cheapest way to give it one and still read back what it wrote.
-    fn loopback() -> (Session, TcpStream) {
-        todo!()
-        
-        // let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
-        // let addr = listener.local_addr().expect("read the loopback address");
-        // let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
-        // let (client, _) = listener.accept().expect("accept the loopback connection");
+    fn loopback() -> (TempDir, Session, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
+        let addr = listener.local_addr().expect("read the loopback address");
+        let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
+        let (client, _) = listener.accept().expect("accept the loopback connection");
 
-        // let session = Session {
-        //     client,
-        //     connection_id: 0x7B,
-        //     last_seq_number: 0x1C,
-        //     recv_sequence: 0x1C,
-        //     vipc: None,
-        //     conn: Rc::new(db::open_in_memory()),
-        //     fs_root: PathBuf::new(),
-        //     scratch: Scratch::default(),
-        // };
+        let fs_root = TempDir::new().expect("create test FS root");
+        let vfs_root = Arc::new(VfsDirManager::new(fs_root.path()).expect("open the test FS root"));
 
-        // (session, peer)
+        let session = Session {
+            client,
+            connection_id: 0x7B,
+            last_seq_number: 0x1C,
+            recv_sequence: 0x1C,
+            vipc: None,
+            conn: Rc::new(db::open_in_memory()),
+            vfs_root,
+            scratch: Scratch::default(),
+        };
+
+        (fs_root, session, peer)
     }
 
     fn read_response(peer: &mut TcpStream) -> Vec<u8> {
@@ -531,7 +537,7 @@ mod tests {
 
     #[test]
     fn refuses_a_connect_before_sign_on() {
-        let (mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = loopback();
 
         assert_eq!(
             connect_status(&mut session, &mut peer),
@@ -541,7 +547,7 @@ mod tests {
 
     #[test]
     fn refuses_a_connect_after_a_failed_sign_on() {
-        let (mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = loopback();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"WRONG"),
@@ -555,7 +561,7 @@ mod tests {
 
     #[test]
     fn accepts_a_connect_once_signed_on() {
-        let (mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = loopback();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"MANAGER"),
@@ -568,7 +574,7 @@ mod tests {
     /// would keep its reach over a link somebody else can now sign on to.
     #[test]
     fn signing_off_closes_the_gate_again() {
-        let (mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = loopback();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"MANAGER"),
@@ -586,7 +592,7 @@ mod tests {
     /// only be silence — and silence is what has to be asserted.
     #[test]
     fn drops_a_message_before_sign_on() {
-        let (mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = loopback();
 
         let header = ConnectHeader {
             local_path_id: 1,

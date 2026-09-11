@@ -40,7 +40,7 @@ impl GRiDFileName {
             return Err(GRiDFileNameError::TooLong);
         }
 
-        Self::is_valid_name(&bytes)?;
+        Self::is_valid_name(&bytes[..usize::from(length)])?;
 
         Ok(Self { length, bytes })
     }

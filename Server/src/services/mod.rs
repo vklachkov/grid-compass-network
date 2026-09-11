@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, sync::Arc, rc::Rc};
+use std::{io, rc::Rc, sync::Arc};
 
 use log::{debug, warn};
 use rusqlite::Connection;
@@ -8,7 +8,10 @@ use sentry::SentryServer;
 use vfs::{Vfs, VfsRequest};
 
 use crate::{
-    db, gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody}, shared::FrameError, vfs::{FsProxy, VfsDirManager},
+    db,
+    gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
+    shared::FrameError,
+    vfs::{FsProxy, VfsDirManager},
 };
 
 mod mail;
@@ -30,7 +33,11 @@ pub struct Vipc {
 }
 
 impl Vipc {
-    pub fn new(conn: Rc<Connection>, actor: db::Account, vfs_root: Arc<VfsDirManager>) -> io::Result<Self> {
+    pub fn new(
+        conn: Rc<Connection>,
+        actor: db::Account,
+        vfs_root: Arc<VfsDirManager>,
+    ) -> io::Result<Self> {
         Ok(Self {
             vfs: Vfs::new(FsProxy::new(&actor, vfs_root)?),
             mail: MailServer::new(conn.clone(), actor.id, actor.user.clone()),
@@ -111,27 +118,28 @@ impl Vipc {
 mod tests {
     use super::*;
     use crate::db;
+    use tempfile::TempDir;
 
-    fn vipc() -> Vipc {
-        todo!()
+    /// The root is returned along with the services: dropping it would delete
+    /// the directory the VFS keeps open.
+    fn vipc() -> (TempDir, Vipc) {
+        let conn = Rc::new(db::open_in_memory());
+        let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
+            .expect("read the demo directory")
+            .expect("MANAGER should exist");
 
-        // let conn = Rc::new(db::open_in_memory());
-        // let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
-        //     .expect("read the demo directory")
-        //     .expect("MANAGER should exist");
-        // let fs_root = std::env::temp_dir().join(format!(
-        //     "setochka-vfs-{}-{:?}",
-        //     std::process::id(),
-        //     std::thread::current().id()
-        // ));
-        // std::fs::create_dir_all(&fs_root).expect("create test FS root");
+        let fs_root = TempDir::new().expect("create test FS root");
+        let vfs_root = Arc::new(VfsDirManager::new(fs_root.path()).expect("open the test FS root"));
 
-        // Vipc::new(conn, actor, fs_root).expect("create VIPC services")
+        (
+            fs_root,
+            Vipc::new(conn, actor, vfs_root).expect("create VIPC services"),
+        )
     }
 
     #[test]
     fn serializes_mail_initialization_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [
             0x44, 0x74, 0, 0, 11, 0, 0, 5, 0, 0, 0xfe, 4, 0, b'a', 0x88, 0x2c, 1,
         ];
@@ -147,7 +155,7 @@ mod tests {
 
     #[test]
     fn serializes_broadcast_initialization_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [
             0x00, 0x70, 0, 0, 11, 0, 0, 1, 0, 0, 0xfe, 4, 0, b'a', 0xec, 0x2c, 1,
         ];
@@ -163,7 +171,7 @@ mod tests {
 
     #[test]
     fn ignores_unknown_broadcast_frames() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [0x00, 0x70, 0, 0, 4, 0, 0, 1, 0, 0];
 
         assert!(vipc.process_message(&request).unwrap().is_empty());
@@ -171,7 +179,7 @@ mod tests {
 
     #[test]
     fn serializes_initial_message_drain_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [0x44, 0x74, 0x10, 0, 4, 0, 0, 1, 0, 0];
 
         let responses = vipc.process_message(&request).unwrap();
@@ -185,7 +193,7 @@ mod tests {
 
     #[test]
     fn serializes_sentry_variant_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [0xff, 0xff, 0xff, 0xff, 1, 0, 4];
 
         let responses = vipc.process_message(&request).unwrap();
@@ -199,7 +207,7 @@ mod tests {
 
     #[test]
     fn serializes_sentry_add_user_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let payload = [
             6, 7, 4, b'G', b'R', b'i', b'D', 8, 4, b'D', b'e', b'm', b'o', 9, 3, b'B', b'O', b'B',
             0x0a, 2, b'P', b'W', 0x1a, 2, 0, 0, 0x26, 4, 0, 4, 0, 0,
@@ -219,7 +227,7 @@ mod tests {
 
     #[test]
     fn serializes_empty_mail_list_response() {
-        let mut vipc = vipc();
+        let (_fs_root, mut vipc) = vipc();
         let request = [
             0x44, 0x74, 7, 0, 17, 0, 0, 5, 0, 0, 0xfd, 10, 0, b'S', 1, 0, 1, 0, 0, 0, 0, 0, 0,
         ];

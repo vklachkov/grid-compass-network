@@ -1,13 +1,14 @@
 mod backend;
+mod dirmanager;
 mod error;
 mod file;
-mod dirmanager;
 mod fsproxy;
 
 pub(crate) use backend::{
-    AccessMode, AttachMode, Backend, ShortDirEntry, FileStatus,
+    AccessMode, AttachMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, DirEntry, FileStatus,
     ObjectMode, ReadDirection, SeekMode, StatusAction,
 };
+pub(crate) use dirmanager::{VfsDirManager, VfsPath};
 pub(crate) use error::{Error, Result};
 #[allow(unused_imports)]
 pub(crate) use file::{
@@ -15,4 +16,3 @@ pub(crate) use file::{
     GRiDPathComponents,
 };
 pub(crate) use fsproxy::FsProxy;
-pub(crate) use dirmanager::VfsDirManager;

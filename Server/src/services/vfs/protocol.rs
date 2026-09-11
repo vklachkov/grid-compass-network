@@ -3,13 +3,20 @@ use std::{io, io::Write, mem::size_of};
 use bstr::BStr;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
+use zerocopy::{
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+    byteorder::{LE, U16, U32},
+};
 
 use crate::{
     shared::{
         FrameError,
         io::{CursorExt, ReadExt, WriteExt, read_small_slice, u8_len, with_u16_len},
     },
-    vfs::{AccessMode, AttachMode, GRiDPath, ObjectMode, ReadDirection, SeekMode},
+    vfs::{
+        AccessMode, AttachMode, DIRECTORY_ENTRY_PREAMBLE_LEN, GRiDPath, ObjectMode, ReadDirection,
+        SeekMode,
+    },
 };
 
 pub(super) const VFS_RESPONSE_BIT: u16 = 0x8000;
@@ -40,12 +47,15 @@ pub struct VfsRequest<'a> {
     pub body: VfsRequestBody<'a>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
+#[repr(C)]
 pub struct VfsRequestHeader {
-    pub request: u16,
-    pub requestors_conn_id: u16,
-    pub servers_conn_id: u16,
+    pub request: U16<LE>,
+    pub requestors_conn_id: U16<LE>,
+    pub servers_conn_id: U16<LE>,
 }
+
+const _: () = assert!(size_of::<VfsRequestHeader>() == 6);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u16)]
@@ -115,6 +125,15 @@ pub struct VfsAttachRequest<'a> {
     pub access: VfsAccessMode,
     pub password: [u8; VFS_PASSWORD_SPACE],
     pub path: &'a GRiDPath,
+}
+
+/// The fixed part of an attach request; the variable-length path follows it.
+#[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
+#[repr(C)]
+struct VfsAttachHeader {
+    mode: u8,
+    access: u8,
+    password: [u8; VFS_PASSWORD_SPACE],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
@@ -240,25 +259,38 @@ pub enum VfsObjectMode {
     CompleteDirectory = 2,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
+#[repr(C)]
 pub struct VfsResponseHeader {
-    pub response: u16,
-    pub servers_conn_id: u16,
-    pub requestors_conn_id: u16,
-    pub status: u16,
+    pub response: U16<LE>,
+    pub servers_conn_id: U16<LE>,
+    pub requestors_conn_id: U16<LE>,
+    pub status: U16<LE>,
 }
+
+const _: () = assert!(size_of::<VfsResponseHeader>() == 8);
 
 #[derive(Clone, Debug)]
 pub struct VfsGetStatusResponse {
     pub header: VfsResponseHeader,
-    pub open: bool,
-    pub access: VfsAccessMode,
-    pub seek: bool,
-    pub file_position: u32,
-    pub file_length: u32,
-    pub num_pages: u16,
-    pub num_pages_alloc: u16,
+    pub body: VfsGetStatusBody,
 }
+
+/// The flags travel as bytes because GRiD writes them straight out of its own
+/// records, and only 0 and 1 are valid `bool` bit patterns.
+#[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
+#[repr(C)]
+pub struct VfsGetStatusBody {
+    pub open: u8,
+    pub access: u8,
+    pub seek: u8,
+    pub file_position: U32<LE>,
+    pub file_length: U32<LE>,
+    pub num_pages: U16<LE>,
+    pub num_pages_alloc: U16<LE>,
+}
+
+const _: () = assert!(size_of::<VfsGetStatusBody>() == 15);
 
 #[derive(Clone, Debug)]
 pub struct VfsReadDirPageResponse {
@@ -276,6 +308,18 @@ pub struct VfsReadResponse {
 pub struct VfsShortDirEntry {
     pub name: Vec<u8>,
 }
+
+/// The preamble the backend accounts for when it decides how many entries fit
+/// into a page.
+#[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
+#[repr(C)]
+struct VfsDirEntryHeader {
+    reserved: [u8; 4],
+    entry_length: U32<LE>,
+    name_length: u8,
+}
+
+const _: () = assert!(size_of::<VfsDirEntryHeader>() == DIRECTORY_ENTRY_PREAMBLE_LEN);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
@@ -409,25 +453,21 @@ fn ensure_empty(cursor: &io::Cursor<&[u8]>, context: &str) -> Result<(), FrameEr
 impl<'a> VfsRequest<'a> {
     pub fn try_from_slice(data: &'a [u8]) -> Result<Self, FrameError> {
         let mut cursor = io::Cursor::new(data);
-        let header = VfsRequestHeader {
-            request: cursor.read_u16()?,
-            requestors_conn_id: cursor.read_u16()?,
-            servers_conn_id: cursor.read_u16()?,
-        };
+        let header: VfsRequestHeader = cursor.read_struct()?;
 
-        let body = match VfsRequestCode::from_u16(header.request) {
+        let body = match VfsRequestCode::from_u16(header.request.get()) {
             Some(VfsRequestCode::Attach) => {
-                let mode = VfsAttachMode::from_u8(cursor.read_u8()?).ok_or_else(|| {
-                    FrameError::Validation {
+                let attach: VfsAttachHeader = cursor.read_struct()?;
+                let mode =
+                    VfsAttachMode::from_u8(attach.mode).ok_or_else(|| FrameError::Validation {
                         reason: "invalid VFS attach mode".to_owned(),
-                    }
-                })?;
-                let access = VfsAccessMode::from_u8(cursor.read_u8()?).ok_or_else(|| {
+                    })?;
+                let access = VfsAccessMode::from_u8(attach.access).ok_or_else(|| {
                     FrameError::Validation {
                         reason: "invalid VFS access mode".to_owned(),
                     }
                 })?;
-                let password = cursor.read_array()?;
+                let password = attach.password;
                 let path = read_small_slice(&mut cursor).and_then(|path| {
                     GRiDPath::try_from(path).map_err(|reason| FrameError::Validation {
                         reason: reason.to_owned(),
@@ -511,10 +551,10 @@ pub(super) fn response_header(
     status: u16,
 ) -> VfsResponseHeader {
     VfsResponseHeader {
-        response: VFS_RESPONSE_BIT | request.to_u16().expect("valid VFS request code"),
+        response: U16::new(VFS_RESPONSE_BIT | request.to_u16().expect("valid VFS request code")),
         servers_conn_id: header.servers_conn_id,
         requestors_conn_id: header.requestors_conn_id,
-        status,
+        status: U16::new(status),
     }
 }
 
@@ -527,10 +567,7 @@ pub(super) fn simple_response(
 }
 
 fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), FrameError> {
-    dst.write_u16(header.response)?;
-    dst.write_u16(header.servers_conn_id)?;
-    dst.write_u16(header.requestors_conn_id)?;
-    dst.write_u16(header.status)?;
+    dst.write_struct(header)?;
     Ok(())
 }
 
@@ -548,13 +585,7 @@ impl VfsResponse {
             Self::GetStatus(response) => {
                 write_header(dst, &response.header)?;
                 with_u16_len(dst, |dst| {
-                    dst.write_u8(response.open as u8)?;
-                    dst.write_u8(response.access.to_u8().expect("valid VFS access mode"))?;
-                    dst.write_u8(response.seek as u8)?;
-                    dst.write_u32(response.file_position)?;
-                    dst.write_u32(response.file_length)?;
-                    dst.write_u16(response.num_pages)?;
-                    dst.write_u16(response.num_pages_alloc)?;
+                    dst.write_struct(&response.body)?;
                     Ok(())
                 })?;
             }
@@ -570,9 +601,13 @@ impl VfsResponse {
                             });
                         }
                         let name_length = u8_len(entry.name.len(), "VFS directory entry name")?;
-                        dst.write_array([0; 4])?;
-                        dst.write_u32(9 /* What is 9??? */ as u32 + u32::from(name_length))?;
-                        dst.write_u8(name_length)?;
+                        dst.write_struct(&VfsDirEntryHeader {
+                            reserved: [0; 4],
+                            entry_length: U32::new(
+                                DIRECTORY_ENTRY_PREAMBLE_LEN as u32 + u32::from(name_length),
+                            ),
+                            name_length,
+                        })?;
                         dst.write_all(&entry.name)?;
                     }
                     Ok(())

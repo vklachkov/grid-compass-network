@@ -1,5 +1,7 @@
 use std::io;
 
+use zerocopy::{FromBytes, Immutable, IntoBytes};
+
 use super::FrameError;
 
 pub fn read_small_slice<'a>(cursor: &mut io::Cursor<&'a [u8]>) -> Result<&'a [u8], FrameError> {
@@ -38,11 +40,6 @@ pub fn u16_len(length: usize, what: &str) -> Result<u16, FrameError> {
 }
 
 pub trait ReadExt: io::Read {
-    /// Reads a bool value.
-    fn read_bool(&mut self) -> io::Result<bool> {
-        self.read_u8().map(|b| b != 0)
-    }
-
     /// Reads a u8 value.
     fn read_u8(&mut self) -> io::Result<u8> {
         let mut buffer = [0; 1];
@@ -68,6 +65,13 @@ pub trait ReadExt: io::Read {
         self.read_exact(&mut buffer)?;
         Ok(buffer)
     }
+
+    /// Reads a fixed-layout wire structure.
+    fn read_struct<T: FromBytes + IntoBytes>(&mut self) -> io::Result<T> {
+        let mut value = T::new_zeroed();
+        self.read_exact(value.as_mut_bytes())?;
+        Ok(value)
+    }
 }
 
 impl<T: io::Read + ?Sized> ReadExt for T {}
@@ -83,14 +87,9 @@ pub trait WriteExt: io::Write {
         self.write_all(&value.to_le_bytes())
     }
 
-    /// Writes a little-endian u32 value.
-    fn write_u32(&mut self, value: u32) -> io::Result<()> {
-        self.write_all(&value.to_le_bytes())
-    }
-
-    /// Writes an array of bytes.
-    fn write_array<const N: usize>(&mut self, value: [u8; N]) -> io::Result<()> {
-        self.write_all(&value)
+    /// Writes a fixed-layout wire structure.
+    fn write_struct<T: IntoBytes + Immutable + ?Sized>(&mut self, value: &T) -> io::Result<()> {
+        self.write_all(value.as_bytes())
     }
 }
 

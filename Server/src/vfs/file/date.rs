@@ -8,24 +8,33 @@ use zerocopy::{
 
 pub const DATE_LENGTH: usize = 11;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct GRiDDate(Option<GRiDDateInner>);
-
 #[derive(Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, PartialEq, Eq)]
 #[repr(C)]
-struct GRiDDateInner {
-    pub year: U16<LE>,
-    pub month: u8,
-    pub day: u8,
-    pub hour: u8,
-    pub minute: u8,
-    pub second: u8,
-    pub tenth_of_second: u8,
-    pub day_of_week: u8,
-    pub day_of_year: U16<LE>,
+pub struct GRiDDate {
+    year: U16<LE>,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    tenth_of_second: u8,
+    day_of_week: u8,
+    day_of_year: U16<LE>,
 }
 
-const _: () = assert!(size_of::<GRiDDateInner>() == DATE_LENGTH);
+const _: () = assert!(size_of::<GRiDDate>() == DATE_LENGTH);
+
+const NEVER: GRiDDate = GRiDDate {
+    year: U16::ZERO,
+    month: 0,
+    day: 0,
+    hour: 0,
+    minute: 0,
+    second: 0,
+    tenth_of_second: 0,
+    day_of_week: 0,
+    day_of_year: U16::ZERO,
+};
 
 impl GRiDDate {
     pub fn today() -> Self {
@@ -33,7 +42,7 @@ impl GRiDDate {
     }
 
     fn from_zoned(date_time: &Zoned) -> Self {
-        Self(Some(GRiDDateInner {
+        Self {
             year: U16::new(date_time.year() as u16),
             month: date_time.month() as u8,
             day: date_time.day() as u8,
@@ -43,27 +52,11 @@ impl GRiDDate {
             tenth_of_second: (date_time.subsec_nanosecond() / 100_000_000) as u8,
             day_of_week: date_time.weekday().to_sunday_one_offset() as u8,
             day_of_year: U16::new(date_time.day_of_year() as u16),
-        }))
+        }
     }
 
     pub const fn never() -> Self {
-        Self(None)
-    }
-
-    pub fn decode(bytes: [u8; DATE_LENGTH]) -> Self {
-        if bytes == [0; DATE_LENGTH] {
-            return Self::never();
-        }
-
-        Self(Some(zerocopy::transmute!(bytes)))
-    }
-
-    pub fn encode(self) -> [u8; DATE_LENGTH] {
-        let Some(date) = self.0 else {
-            return [0; DATE_LENGTH];
-        };
-
-        zerocopy::transmute!(date)
+        NEVER
     }
 }
 
@@ -78,9 +71,15 @@ impl From<SystemTime> for GRiDDate {
     }
 }
 
-impl fmt::Debug for GRiDDateInner {
+/// Hand-written so the operator log keeps showing plain numbers instead of the
+/// `U16(2024)` wrapper the byte-order types print.
+impl fmt::Debug for GRiDDate {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("GRiDDateInner")
+        if *self == NEVER {
+            return fmt.write_str("GRiDDate::never()");
+        }
+
+        fmt.debug_struct("GRiDDate")
             .field("year", &self.year.get())
             .field("month", &self.month)
             .field("day", &self.day)
@@ -94,20 +93,11 @@ impl fmt::Debug for GRiDDateInner {
     }
 }
 
-impl fmt::Debug for GRiDDate {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Some(date) => fmt.debug_tuple("GRiDDate").field(&date).finish(),
-            None => fmt.write_str("GRiDDate::never()"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ARBITRARY_DATE: GRiDDateInner = GRiDDateInner {
+    const ARBITRARY_DATE: GRiDDate = GRiDDate {
         year: U16::new(2024),
         month: 2,
         day: 29,
@@ -121,15 +111,17 @@ mod tests {
 
     #[test]
     fn never_encodes_as_all_zeroes() {
-        assert_eq!(GRiDDate::never().encode(), [0; DATE_LENGTH]);
-        assert_eq!(GRiDDate::decode([0; DATE_LENGTH]), GRiDDate::never());
-        assert_eq!(GRiDDate::never().0, None);
+        assert_eq!(GRiDDate::never().as_bytes(), [0; DATE_LENGTH]);
+        assert_eq!(
+            GRiDDate::read_from_bytes(&[0; DATE_LENGTH]).unwrap(),
+            GRiDDate::never()
+        );
     }
 
     #[test]
     fn encodes_each_numeric_field_in_the_grid_layout() {
         assert_eq!(
-            GRiDDate(Some(ARBITRARY_DATE)).encode(),
+            ARBITRARY_DATE.as_bytes(),
             [0xe8, 0x07, 2, 29, 21, 30, 5, 1, 5, 60, 0]
         );
     }
@@ -137,12 +129,12 @@ mod tests {
     #[test]
     fn decode_preserves_arbitrary_unchecked_values() {
         let bytes = [0xff, 0xff, 99, 98, 97, 96, 95, 94, 93, 0xfe, 0xff];
-        let date = GRiDDate::decode(bytes);
+        let date = GRiDDate::read_from_bytes(&bytes).unwrap();
 
-        assert_eq!(date.encode(), bytes);
+        assert_eq!(date.as_bytes(), bytes);
         assert_eq!(
-            date.0,
-            Some(GRiDDateInner {
+            date,
+            GRiDDate {
                 year: U16::new(u16::MAX),
                 month: 99,
                 day: 98,
@@ -152,21 +144,21 @@ mod tests {
                 tenth_of_second: 94,
                 day_of_week: 93,
                 day_of_year: U16::new(0xfffe),
-            })
+            }
         );
     }
 
     #[test]
     fn structured_date_round_trips() {
-        let date = GRiDDate(Some(ARBITRARY_DATE));
-
-        assert_eq!(GRiDDate::decode(date.encode()), date);
-        assert_eq!(date.0, Some(ARBITRARY_DATE));
+        assert_eq!(
+            GRiDDate::read_from_bytes(ARBITRARY_DATE.as_bytes()).unwrap(),
+            ARBITRARY_DATE
+        );
     }
 
     #[test]
     fn today_produces_a_populated_date() {
-        let date = GRiDDate::today().0.unwrap();
+        let date = GRiDDate::today();
 
         assert!(date.year.get() >= 2026);
         assert!((1..=12).contains(&date.month));
@@ -178,7 +170,7 @@ mod tests {
     #[test]
     fn debug_distinguishes_never_and_populated_dates() {
         assert_eq!(format!("{:?}", GRiDDate::never()), "GRiDDate::never()");
-        let debug = format!("{:?}", GRiDDate(Some(ARBITRARY_DATE)));
+        let debug = format!("{:?}", ARBITRARY_DATE);
         assert!(debug.contains("GRiDDate"));
         assert!(debug.contains("year: 2024"));
     }

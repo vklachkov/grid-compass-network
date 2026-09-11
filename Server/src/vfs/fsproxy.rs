@@ -10,6 +10,7 @@ use std::os::unix::ffi::OsStrExt;
 
 use bstr::{BStr, BString};
 use log::{debug, error, warn};
+use zerocopy::byteorder::{U16, U32};
 
 use crate::{
     db,
@@ -350,20 +351,21 @@ impl FsProxy {
                 let metadata = file.metadata().map_err(io::Error::from)?;
 
                 GRiDFileDescriptor {
-                    file_length: u32::try_from(file.body_length()?)
-                        .map_err(|_| Error::BadParameter)?,
+                    file_length: U32::new(
+                        u32::try_from(file.body_length()?).map_err(|_| Error::BadParameter)?,
+                    ),
                     file_name: file.name(),
                     creation_date: Self::creation_date(&metadata),
                     // The descriptor carries a single id, and for a file GRiD
                     // expects the id of the directory holding it.
-                    dir_file_id: self.dirman.parent_file_id(path)?.get(),
+                    dir_file_id: U16::new(self.dirman.parent_file_id(path)?.get()),
                     last_modified_date: metadata.modified()?.into(),
                     expiration_date: GRiDDate::never(),
-                    uses_8087: header.flags & 0b1 == 0b1,
+                    uses_8087: header.flags & 0b1,
                     version1: header.version_major,
                     version2: header.version_minor,
                     version3: header.version_patch,
-                    property_length: header.property_length.get(),
+                    property_length: header.property_length,
                     ..Default::default()
                 }
             }
@@ -379,11 +381,11 @@ impl FsProxy {
                 GRiDFileDescriptor {
                     file_name: Self::directory_name(path.path())?,
                     creation_date: Self::creation_date(&metadata),
-                    dir_file_id: self.dirman.file_id(path)?.get(),
+                    dir_file_id: U16::new(self.dirman.file_id(path)?.get()),
                     last_modified_date: metadata.modified()?.into(),
                     expiration_date: GRiDDate::never(),
-                    dir_length: u32::try_from(dir_length).unwrap_or(u32::MAX),
-                    dir_count: u16::try_from(entries.len()).unwrap_or(u16::MAX),
+                    dir_length: U32::new(u32::try_from(dir_length).unwrap_or(u32::MAX)),
+                    dir_count: U16::new(u16::try_from(entries.len()).unwrap_or(u16::MAX)),
                     ..Default::default()
                 }
             }

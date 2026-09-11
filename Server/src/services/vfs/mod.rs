@@ -9,6 +9,7 @@ use std::{collections::HashMap, num::NonZeroU16};
 
 use log::{debug, warn};
 use num_traits::ToPrimitive;
+use zerocopy::byteorder::{U16, U32};
 
 use super::protocol::status;
 use crate::shared::bitmap::IdMap;
@@ -42,7 +43,7 @@ impl<B: Backend> Vfs<B> {
     pub fn process_request(&mut self, req: VfsRequest) -> VfsResponse {
         let VfsRequest { header, body } = req;
 
-        debug!(target: "vfs", "received request {body:?} on connection {}", header.servers_conn_id);
+        debug!(target: "vfs", "received request {body:?} on connection {}", header.servers_conn_id.get());
 
         let response = match body {
             VfsRequestBody::GetStatus(body) => self.get_status(&header, body),
@@ -69,7 +70,7 @@ impl<B: Backend> Vfs<B> {
 
     #[inline]
     fn get_file<'f>(header: &VfsRequestHeader, files: &'f mut Files<B>) -> Result<&'f mut File<B>> {
-        NonZeroU16::new(header.servers_conn_id)
+        NonZeroU16::new(header.servers_conn_id.get())
             .as_ref()
             .and_then(|f| files.get_mut(f))
             .ok_or(Error::BadConnection)
@@ -84,13 +85,17 @@ impl<B: Backend> Vfs<B> {
         match self._get_status(header) {
             Ok((open, backend_status)) => VfsResponse::GetStatus(VfsGetStatusResponse {
                 header: response_header(VfsRequestCode::GetStatus, header, status::OK),
-                open,
-                access: backend_status.access.into(),
-                seek: backend_status.seek,
-                file_position: backend_status.file_position,
-                file_length: backend_status.file_length,
-                num_pages: backend_status.num_pages,
-                num_pages_alloc: backend_status.num_pages_alloc,
+                body: VfsGetStatusBody {
+                    open: u8::from(open),
+                    access: VfsAccessMode::from(backend_status.access)
+                        .to_u8()
+                        .expect("valid VFS access mode"),
+                    seek: u8::from(backend_status.seek),
+                    file_position: U32::new(backend_status.file_position),
+                    file_length: U32::new(backend_status.file_length),
+                    num_pages: U16::new(backend_status.num_pages),
+                    num_pages_alloc: U16::new(backend_status.num_pages_alloc),
+                },
             }),
             Err(error) => VfsResponse::GetStatus(VfsGetStatusResponse {
                 header: response_header(
@@ -98,13 +103,15 @@ impl<B: Backend> Vfs<B> {
                     header,
                     error::error_code(&error),
                 ),
-                open: false,
-                access: VfsAccessMode::Read,
-                seek: false,
-                file_position: 0,
-                file_length: 0,
-                num_pages: 0,
-                num_pages_alloc: 0,
+                body: VfsGetStatusBody {
+                    open: 0,
+                    access: VfsAccessMode::Read.to_u8().expect("valid VFS access mode"),
+                    seek: 0,
+                    file_position: U32::ZERO,
+                    file_length: U32::ZERO,
+                    num_pages: U16::ZERO,
+                    num_pages_alloc: U16::ZERO,
+                },
             }),
         }
     }
@@ -288,16 +295,16 @@ impl<B: Backend> Vfs<B> {
     fn attach(&mut self, header: &VfsRequestHeader, body: VfsAttachRequest<'_>) -> VfsResponse {
         match self._attach(header, body) {
             Ok(conn_id) => VfsResponse::Simple(VfsResponseHeader {
-                response: VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap(),
-                servers_conn_id: conn_id.get(),
+                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap()),
+                servers_conn_id: U16::new(conn_id.get()),
                 requestors_conn_id: header.requestors_conn_id,
-                status: status::OK,
+                status: U16::new(status::OK),
             }),
             Err(err) => VfsResponse::Simple(VfsResponseHeader {
-                response: VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap(),
-                servers_conn_id: 0,
+                response: U16::new(VFS_RESPONSE_BIT | VfsRequestCode::Attach.to_u16().unwrap()),
+                servers_conn_id: U16::ZERO,
                 requestors_conn_id: header.requestors_conn_id,
-                status: error::error_code(&err),
+                status: U16::new(error::error_code(&err)),
             }),
         }
     }
@@ -333,7 +340,7 @@ impl<B: Backend> Vfs<B> {
     }
 
     fn _detach(&mut self, header: &VfsRequestHeader) -> Result<()> {
-        let file_id = NonZeroU16::new(header.servers_conn_id).ok_or(Error::BadConnection)?;
+        let file_id = NonZeroU16::new(header.servers_conn_id.get()).ok_or(Error::BadConnection)?;
         let mut file = self.files.remove(&file_id).ok_or(Error::BadConnection)?;
 
         if let Some(handle) = file.handle.as_mut() {
@@ -394,15 +401,15 @@ impl<B: Backend> Vfs<B> {
         warn!(
             target: "vfs",
             "unsupported request {:#06x} with {} body bytes",
-            header.request,
+            header.request.get(),
             body.len()
         );
 
         VfsResponse::Simple(VfsResponseHeader {
-            response: VFS_RESPONSE_BIT | header.request,
+            response: U16::new(VFS_RESPONSE_BIT | header.request.get()),
             servers_conn_id: header.servers_conn_id,
             requestors_conn_id: header.requestors_conn_id,
-            status: VFS_ERROR_NOT_SUPPORTED,
+            status: U16::new(VFS_ERROR_NOT_SUPPORTED),
         })
     }
 }
@@ -558,9 +565,9 @@ mod tests {
 
     fn header(code: VfsRequestCode, connection_id: u16) -> VfsRequestHeader {
         VfsRequestHeader {
-            request: code.to_u16().unwrap(),
-            requestors_conn_id: 7,
-            servers_conn_id: connection_id,
+            request: U16::new(code.to_u16().unwrap()),
+            requestors_conn_id: U16::new(7),
+            servers_conn_id: U16::new(connection_id),
         }
     }
 
@@ -579,7 +586,7 @@ mod tests {
             panic!("attach must return a simple response");
         };
         assert_eq!(response.status, status::OK);
-        response.servers_conn_id
+        response.servers_conn_id.get()
     }
 
     fn open(vfs: &mut Vfs<MockBackend>, connection_id: u16) {
@@ -765,7 +772,7 @@ mod tests {
             panic!("get status must return a status response");
         };
         assert_eq!(get_status.header.status, status::OK);
-        assert!(!get_status.open);
+        assert_eq!(get_status.body.open, 0);
 
         let read_dir = vfs.process_request(VfsRequest {
             header: header(VfsRequestCode::ReadDirPage, connection_id),

@@ -1,6 +1,9 @@
 use std::{fmt, io, ops::Deref};
 
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 pub const MAX_LENGTH: usize = 80;
+pub const STORAGE_LENGTH: usize = MAX_LENGTH + 1;
 
 mod sep {
     pub const KIND: u8 = b'~';
@@ -8,11 +11,16 @@ mod sep {
     pub const PATH: u8 = b'`';
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, PartialEq, Eq,
+)]
+#[repr(C)]
 pub struct GRiDFileName {
     length: u8,
     bytes: [u8; MAX_LENGTH],
 }
+
+const _: () = assert!(size_of::<GRiDFileName>() == STORAGE_LENGTH);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GRiDFileNameError {
@@ -35,14 +43,14 @@ impl GRiDFileName {
         })
     }
 
-    pub fn from_bytes(length: u8, bytes: [u8; MAX_LENGTH]) -> Result<Self, GRiDFileNameError> {
-        if usize::from(length) > MAX_LENGTH {
+    /// Names decoded straight from the wire skip the constructor, so the
+    /// length prefix has to be checked before it is used as an index.
+    pub fn validate(&self) -> Result<(), GRiDFileNameError> {
+        if usize::from(self.length) > MAX_LENGTH {
             return Err(GRiDFileNameError::TooLong);
         }
 
-        Self::is_valid_name(&bytes[..usize::from(length)])?;
-
-        Ok(Self { length, bytes })
+        Self::is_valid_name(self.as_bytes())
     }
 
     pub fn is_valid_name(value: impl AsRef<[u8]>) -> Result<(), GRiDFileNameError> {
@@ -80,15 +88,7 @@ impl GRiDFileName {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.length)]
-    }
-
-    pub const fn len(&self) -> u8 {
-        self.length
-    }
-
-    pub const fn storage(&self) -> &[u8; MAX_LENGTH] {
-        &self.bytes
+        &self.bytes[..usize::from(self.length).min(MAX_LENGTH)]
     }
 }
 

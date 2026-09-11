@@ -1,15 +1,20 @@
 use std::{fmt, time::SystemTime};
 
 use jiff::{Timestamp, Zoned, tz::TimeZone};
+use zerocopy::{
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+    byteorder::{LE, U16},
+};
 
 pub const DATE_LENGTH: usize = 11;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GRiDDate(Option<GRiDDateInner>);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, PartialEq, Eq)]
+#[repr(C)]
 struct GRiDDateInner {
-    pub year: u16,
+    pub year: U16<LE>,
     pub month: u8,
     pub day: u8,
     pub hour: u8,
@@ -17,8 +22,10 @@ struct GRiDDateInner {
     pub second: u8,
     pub tenth_of_second: u8,
     pub day_of_week: u8,
-    pub day_of_year: u16,
+    pub day_of_year: U16<LE>,
 }
+
+const _: () = assert!(size_of::<GRiDDateInner>() == DATE_LENGTH);
 
 impl GRiDDate {
     pub fn today() -> Self {
@@ -27,7 +34,7 @@ impl GRiDDate {
 
     fn from_zoned(date_time: &Zoned) -> Self {
         Self(Some(GRiDDateInner {
-            year: date_time.year() as u16,
+            year: U16::new(date_time.year() as u16),
             month: date_time.month() as u8,
             day: date_time.day() as u8,
             hour: date_time.hour() as u8,
@@ -35,7 +42,7 @@ impl GRiDDate {
             second: date_time.second() as u8,
             tenth_of_second: (date_time.subsec_nanosecond() / 100_000_000) as u8,
             day_of_week: date_time.weekday().to_sunday_one_offset() as u8,
-            day_of_year: date_time.day_of_year() as u16,
+            day_of_year: U16::new(date_time.day_of_year() as u16),
         }))
     }
 
@@ -48,17 +55,7 @@ impl GRiDDate {
             return Self::never();
         }
 
-        Self(Some(GRiDDateInner {
-            year: u16::from_le_bytes([bytes[0], bytes[1]]),
-            month: bytes[2],
-            day: bytes[3],
-            hour: bytes[4],
-            minute: bytes[5],
-            second: bytes[6],
-            tenth_of_second: bytes[7],
-            day_of_week: bytes[8],
-            day_of_year: u16::from_le_bytes([bytes[9], bytes[10]]),
-        }))
+        Self(Some(zerocopy::transmute!(bytes)))
     }
 
     pub fn encode(self) -> [u8; DATE_LENGTH] {
@@ -66,17 +63,7 @@ impl GRiDDate {
             return [0; DATE_LENGTH];
         };
 
-        let mut bytes = [0; DATE_LENGTH];
-        bytes[..2].copy_from_slice(&date.year.to_le_bytes());
-        bytes[2] = date.month;
-        bytes[3] = date.day;
-        bytes[4] = date.hour;
-        bytes[5] = date.minute;
-        bytes[6] = date.second;
-        bytes[7] = date.tenth_of_second;
-        bytes[8] = date.day_of_week;
-        bytes[9..].copy_from_slice(&date.day_of_year.to_le_bytes());
-        bytes
+        zerocopy::transmute!(date)
     }
 }
 
@@ -88,6 +75,22 @@ impl From<SystemTime> for GRiDDate {
             Ok(timestamp) => Self::from_zoned(&timestamp.to_zoned(TimeZone::system())),
             Err(_) => Self::never(),
         }
+    }
+}
+
+impl fmt::Debug for GRiDDateInner {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("GRiDDateInner")
+            .field("year", &self.year.get())
+            .field("month", &self.month)
+            .field("day", &self.day)
+            .field("hour", &self.hour)
+            .field("minute", &self.minute)
+            .field("second", &self.second)
+            .field("tenth_of_second", &self.tenth_of_second)
+            .field("day_of_week", &self.day_of_week)
+            .field("day_of_year", &self.day_of_year.get())
+            .finish()
     }
 }
 
@@ -105,7 +108,7 @@ mod tests {
     use super::*;
 
     const ARBITRARY_DATE: GRiDDateInner = GRiDDateInner {
-        year: 2024,
+        year: U16::new(2024),
         month: 2,
         day: 29,
         hour: 21,
@@ -113,7 +116,7 @@ mod tests {
         second: 5,
         tenth_of_second: 1,
         day_of_week: 5,
-        day_of_year: 60,
+        day_of_year: U16::new(60),
     };
 
     #[test]
@@ -140,7 +143,7 @@ mod tests {
         assert_eq!(
             date.0,
             Some(GRiDDateInner {
-                year: u16::MAX,
+                year: U16::new(u16::MAX),
                 month: 99,
                 day: 98,
                 hour: 97,
@@ -148,7 +151,7 @@ mod tests {
                 second: 95,
                 tenth_of_second: 94,
                 day_of_week: 93,
-                day_of_year: 0xfffe,
+                day_of_year: U16::new(0xfffe),
             })
         );
     }
@@ -165,11 +168,11 @@ mod tests {
     fn today_produces_a_populated_date() {
         let date = GRiDDate::today().0.unwrap();
 
-        assert!(date.year >= 2026);
+        assert!(date.year.get() >= 2026);
         assert!((1..=12).contains(&date.month));
         assert!((1..=31).contains(&date.day));
         assert!((1..=7).contains(&date.day_of_week));
-        assert!((1..=366).contains(&date.day_of_year));
+        assert!((1..=366).contains(&date.day_of_year.get()));
     }
 
     #[test]

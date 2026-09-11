@@ -16,13 +16,13 @@ use std::{
 
 use thiserror::Error;
 use zerocopy::{
-    FromBytes, Immutable, IntoBytes, KnownLayout,
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
     byteorder::{LE, U32},
 };
 
 const HEADER_MAGIC: [u8; 7] = *b"GRiDiRG";
 const HEADER_FORMAT_VERSION: u8 = 1;
-const HEADER_LENGTH: usize = size_of::<GRiDFileHeader>();
+const HEADER_LENGTH: usize = 16;
 
 pub type Result<T> = std::result::Result<T, GRiDFileError>;
 
@@ -69,7 +69,7 @@ pub struct GRiDFile {
     body_pos: u64,
 }
 
-#[derive(Clone, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq, Eq)]
+#[derive(Clone, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, PartialEq, Eq)]
 #[repr(C)]
 pub struct GRiDFileHeader {
     pub magic: [u8; 7],
@@ -80,6 +80,8 @@ pub struct GRiDFileHeader {
     pub flags: u8,
     pub property_length: U32<LE>,
 }
+
+const _: () = assert!(size_of::<GRiDFileHeader>() == HEADER_LENGTH);
 
 impl GRiDFileHeader {
     pub fn new() -> Self {

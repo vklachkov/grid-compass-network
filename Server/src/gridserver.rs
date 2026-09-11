@@ -1,8 +1,9 @@
 use std::{
     io,
     net::{SocketAddr, TcpListener, TcpStream},
+    num::NonZeroU8,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -18,12 +19,42 @@ use crate::services::{
     protocol::{property, status},
     sentry::Authority,
 };
-use crate::shared::{FrameError, env::read_env};
+use crate::shared::{FrameError, bitmap::IdMap8, env::read_env};
 use crate::vfs::VfsDirManager;
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
 const STATUS_NOT_SIGNED_ON: u16 = 801; // eUserNotSignedON
+
+/// A connection id only has to be unique among the clients currently attached,
+/// so it is handed back to the pool as soon as the session holding it is gone.
+struct ConnectionId {
+    id: NonZeroU8,
+    pool: Arc<Mutex<IdMap8>>,
+}
+
+impl ConnectionId {
+    fn acquire(pool: &Arc<Mutex<IdMap8>>) -> Option<Self> {
+        let mut ids = pool.lock().expect("connection id pool");
+        let id = ids.find_free()?;
+        ids.set(id);
+
+        Some(Self {
+            id,
+            pool: pool.clone(),
+        })
+    }
+
+    fn get(&self) -> u8 {
+        self.id.get()
+    }
+}
+
+impl Drop for ConnectionId {
+    fn drop(&mut self) {
+        self.pool.lock().expect("connection id pool").clear(self.id);
+    }
+}
 
 #[derive(PartialEq, Eq)]
 enum ProcessFrameResult {
@@ -42,15 +73,21 @@ pub fn serve() -> anyhow::Result<()> {
     info!(target: "server", "using account database {db_path}");
 
     let listener = TcpListener::bind(&addr)?;
+    let connection_ids = Arc::new(Mutex::new(IdMap8::new()));
 
     info!(target: "server", "start GRiD server at {addr}");
     loop {
         match listener.accept() {
             Ok((client, addr)) => {
-                info!(target: "server", "accepted client {addr}");
+                let Some(connection_id) = ConnectionId::acquire(&connection_ids) else {
+                    error!(target: "server", "rejected client {addr}: no free connection id");
+                    continue;
+                };
+
+                info!(target: "server", "accepted client {addr} as connection {}", connection_id.get());
                 let db_path = db_path.clone();
                 let vfs_root = vfs_root.clone();
-                thread::spawn(move || worker(client, addr, &db_path, vfs_root));
+                thread::spawn(move || worker(client, addr, connection_id, &db_path, vfs_root));
             }
             Err(err) => {
                 error!(target: "server", "failed to accept client: {err}");
@@ -59,8 +96,14 @@ pub fn serve() -> anyhow::Result<()> {
     }
 }
 
-fn worker(client: TcpStream, addr: SocketAddr, db_path: &str, vfs_root: Arc<VfsDirManager>) {
-    if let Err(err) = try_worker(client, addr, db_path, vfs_root) {
+fn worker(
+    client: TcpStream,
+    addr: SocketAddr,
+    connection_id: ConnectionId,
+    db_path: &str,
+    vfs_root: Arc<VfsDirManager>,
+) {
+    if let Err(err) = try_worker(client, addr, connection_id, db_path, vfs_root) {
         error!(target: "server", "worker({addr}): fatal error: {err}");
     }
 }
@@ -68,6 +111,7 @@ fn worker(client: TcpStream, addr: SocketAddr, db_path: &str, vfs_root: Arc<VfsD
 fn try_worker(
     client: TcpStream,
     addr: SocketAddr,
+    connection_id: ConnectionId,
     db_path: &str,
     vfs_root: Arc<VfsDirManager>,
 ) -> io::Result<()> {
@@ -75,8 +119,7 @@ fn try_worker(
 
     let mut session = Session {
         client,
-        // TODO: automatically choose the connection ID from the available IDs.
-        connection_id: 0x7B,
+        connection_id,
         last_seq_number: 0x1C,
         recv_sequence: 0x1C,
         vipc: None,
@@ -110,7 +153,7 @@ fn try_worker(
 
 struct Session {
     client: TcpStream,
-    connection_id: u8,
+    connection_id: ConnectionId,
     last_seq_number: u8,
     recv_sequence: u8,
     /// Built by sign-on and dropped by sign-off: every resource this server
@@ -156,7 +199,7 @@ impl Session {
                     self.last_seq_number,
                 );
                 self.recv_sequence = self.last_seq_number;
-                self.write_frame(Frame::rfc(self.connection_id, self.last_seq_number))?;
+                self.write_frame(Frame::rfc(self.connection_id.get(), self.last_seq_number))?;
             }
             FrameBody::Ack(_) => {
                 trace!(target: "session", "acknowledged seq={}", frame.seq_number);
@@ -167,7 +210,7 @@ impl Session {
             }
             FrameBody::Ping(_) => {
                 trace!(target: "session", "pinged, seq={}", self.recv_sequence);
-                self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
+                self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
             }
             FrameBody::Data(data) => {
                 let expected = self.recv_sequence.wrapping_add(1);
@@ -185,12 +228,12 @@ impl Session {
                         "ignored out-of-sequence data frame seq={}, expected={expected}",
                         frame.seq_number
                     );
-                    self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
+                    self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
                     return Ok(ProcessFrameResult::Continue);
                 }
 
                 self.recv_sequence = frame.seq_number;
-                self.write_frame(Frame::ack(self.connection_id, self.recv_sequence))?;
+                self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
                 self.process_data_frame(data)?;
             }
         }
@@ -480,7 +523,8 @@ mod tests {
 
         let session = Session {
             client,
-            connection_id: 0x7B,
+            connection_id: ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
+                .expect("take a connection id from an empty pool"),
             last_seq_number: 0x1C,
             recv_sequence: 0x1C,
             vipc: None,

@@ -14,7 +14,7 @@ use anyhow::{Context, bail};
 use bstr::BStr;
 
 use super::{Error, Result};
-use crate::shared::bitmap::IdMap;
+use crate::shared::bitmap::IdMap16;
 
 const MAIL_DIR: &str = "Mail";
 const SENTRY_DIR: &str = "Sentry";
@@ -57,7 +57,7 @@ pub struct VfsDirManager(Inner);
 struct Inner {
     root_path: PathBuf,
     _root_fd: fs::File,
-    file_ids: Mutex<HashMap<PathBuf, IdMap>>,
+    file_ids: Mutex<HashMap<PathBuf, IdMap16>>,
 }
 
 impl VfsDirManager {
@@ -108,7 +108,7 @@ impl VfsDirManager {
     /// Ids live in an extended attribute on every object, so the allocator of a
     /// disk has to be rebuilt from its tree before handing out an id, or it
     /// would reuse one that an object created by an earlier run already owns.
-    fn collect_file_ids(path: &Path, ids: &mut IdMap) -> io::Result<()> {
+    fn collect_file_ids(path: &Path, ids: &mut IdMap16) -> io::Result<()> {
         if let Some(id) = Self::read_file_id(path)? {
             ids.set(id);
         }
@@ -157,7 +157,7 @@ impl VfsDirManager {
         let ids = match disks.entry(disk.to_path_buf()) {
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(vacant) => {
-                let mut ids = IdMap::new();
+                let mut ids = IdMap16::new();
                 Self::collect_file_ids(disk, &mut ids)?;
                 vacant.insert(ids)
             }

@@ -12,7 +12,7 @@ use num_traits::ToPrimitive;
 use zerocopy::byteorder::{U16, U32};
 
 use super::protocol::status;
-use crate::shared::bitmap::IdMap;
+use crate::shared::bitmap::IdMap16;
 use crate::vfs::{
     AccessMode, Backend, DIRECTORY_ENTRY_PREAMBLE_LEN, Error, FileStatus, Result, StatusAction,
 };
@@ -22,7 +22,7 @@ type File<B> = VfsFileDescriptor<B>;
 
 pub(crate) struct Vfs<B: Backend> {
     backend: B,
-    connection_ids: IdMap,
+    connection_ids: IdMap16,
     files: Files<B>,
 }
 
@@ -35,7 +35,7 @@ impl<B: Backend> Vfs<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
-            connection_ids: IdMap::new(),
+            connection_ids: IdMap16::new(),
             files: HashMap::new(),
         }
     }

@@ -42,25 +42,23 @@ impl DataFrameType {
 pub enum DataFrameRequest<'a> {
     // VipcConnectHeaderType
     Connect {
-        header: ConnectHeader, // VipcCommonPart
+        header: ConnectHeader,
         path: &'a BStr,
     },
 
     // VipcDiscReqType
     Disconnect {
-        header: ConnectHeader, // VipcCommonPart
-        reason: u16,           // ReasonForDisconnect
+        header: ConnectHeader,
+        reason: u16,
     },
 
     // VipcSignonType
     SignOn {
-        properties: Vec<SignOnProperty<'a>>, // PropertyList
+        properties: Vec<SignOnProperty<'a>>,
     },
 
     // VipcSignoffType
-    SignOff {
-        // empty
-    },
+    SignOff {},
 
     // VipcMsgType
     Msg {
@@ -71,13 +69,13 @@ pub enum DataFrameRequest<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ConnectHeader {
-    pub local_path_id: u16,  // localPathID
-    pub remote_path_id: u16, // remotePathID
+    pub local_path_id: u16,
+    pub remote_path_id: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SignOnProperty<'a> {
-    pub ty: u8,          // propertyType
+    pub ty: u8,
     pub value: &'a [u8], // len, value
 }
 
@@ -85,19 +83,19 @@ pub struct SignOnProperty<'a> {
 pub enum DataFrameResponse<'a> {
     // VipcConnectResponseType
     Connect {
-        header: ConnectHeader, // VipcCommonPart
-        status: u16,           // ConnectStatus
+        header: ConnectHeader,
+        status: u16,
     },
 
     // VipcDiscRespType
     Disconnect {
-        header: ConnectHeader, // VipcCommonPart
+        header: ConnectHeader,
     },
 
     // VipcSignonResponseType
     SignOn {
-        status: u16,           // signOnStatus
-        server_name: &'a BStr, // serverNameStr
+        status: u16,
+        server_name: &'a BStr,
     },
 
     Msg {

@@ -109,14 +109,10 @@ impl AsRef<[u8]> for GRiDFileName {
 impl fmt::Display for GRiDFileNameError {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooLong => {
-                write!(fmt, "file name must be at most {MAX_LENGTH} bytes") //
-            }
-            Self::InvalidFormat => {
-                fmt.write_str("file name must match title~kind~") //
-            }
+            Self::TooLong => write!(fmt, "file name must be at most {MAX_LENGTH} bytes"),
+            Self::InvalidFormat => fmt.write_str("file name must match title~kind~"),
             Self::ForbiddenCharacter(chr) => {
-                write!(fmt, "file name contains forbidden character {chr:?}") //
+                write!(fmt, "file name contains forbidden character {chr:?}")
             }
         }
     }
@@ -134,99 +130,85 @@ impl From<GRiDFileNameError> for io::Error {
 mod tests {
     use super::*;
 
+    fn decode(length: u8, value: &[u8]) -> GRiDFileName {
+        let mut bytes = [0xaa; STORAGE_LENGTH];
+        bytes[0] = length;
+        bytes[1..1 + value.len()].copy_from_slice(value);
+        GRiDFileName::read_from_bytes(&bytes).unwrap()
+    }
+
     #[test]
     fn creates_and_dereferences_a_valid_name() {
-        // let name = GRiDFileName::new(b"Report~Text~").unwrap();
+        let name = GRiDFileName::new(b"Report~Text~").unwrap();
 
-        // assert_eq!(&*name, b"Report~Text~");
-        // assert_eq!(name.as_ref(), name.as_bytes());
+        assert_eq!(&*name, b"Report~Text~");
+        assert_eq!(name.as_ref(), name.as_bytes());
     }
 
     #[test]
-    fn decodes_length_prefixed_storage() {
-        // let mut bytes = [0xaa; MAX_LENGTH + 1];
-        // bytes[0] = 12;
-        // bytes[1..13].copy_from_slice(b"Report~Text~");
+    fn the_length_prefix_bounds_the_name_within_its_storage() {
+        let name = decode(12, b"Report~Text~");
 
-        // let name = GRiDFileName::from_bytes(bytes).unwrap();
-
-        // assert_eq!(&*name, b"Report~Text~");
-        // assert_eq!(&name.storage()[12..], &[0xaa; 68]);
+        assert_eq!(&*name, b"Report~Text~");
     }
 
     #[test]
-    fn rejects_an_invalid_length_prefixed_name() {
-        // let mut too_long = [0; MAX_LENGTH + 1];
-        // too_long[0] = 81;
-        // assert_eq!(
-        //     GRiDFileName::from_bytes(too_long),
-        //     Err(GRiDFileNameError::TooLong)
-        // );
-
-        // let mut malformed = [0; MAX_LENGTH + 1];
-        // malformed[0] = 5;
-        // malformed[1..6].copy_from_slice(b"title");
-        // assert_eq!(
-        //     GRiDFileName::from_bytes(malformed),
-        //     Err(GRiDFileNameError::InvalidFormat)
-        // );
+    fn validate_rejects_a_decoded_name_the_constructor_would_refuse() {
+        assert_eq!(decode(81, b"").validate(), Err(GRiDFileNameError::TooLong));
+        assert_eq!(
+            decode(5, b"title").validate(),
+            Err(GRiDFileNameError::InvalidFormat)
+        );
     }
 
     #[test]
     fn accepts_a_name_of_exactly_eighty_bytes() {
-        // let mut value = vec![b'a'; 78];
-        // value.extend_from_slice(b"~~");
+        let mut value = vec![b'a'; 78];
+        value.extend_from_slice(b"~~");
 
-        // let name = GRiDFileName::new(&value).unwrap();
+        let name = GRiDFileName::new(&value).unwrap();
 
-        // assert_eq!(name.as_bytes(), value.as_slice());
+        assert_eq!(name.as_bytes(), value.as_slice());
     }
 
     #[test]
     fn rejects_an_overlong_name() {
-        // let mut value = vec![b'a'; 79];
-        // value.extend_from_slice(b"~~");
+        let mut value = vec![b'a'; 79];
+        value.extend_from_slice(b"~~");
 
-        // assert_eq!(GRiDFileName::new(value), Err(GRiDFileNameError::TooLong));
+        assert_eq!(GRiDFileName::new(value), Err(GRiDFileNameError::TooLong));
     }
 
     #[test]
     fn rejects_names_outside_the_title_kind_template() {
-        // for value in [b"title".as_slice(), b"title~kind".as_slice()] {
-        //     assert_eq!(
-        //         GRiDFileName::new(value),
-        //         Err(GRiDFileNameError::InvalidFormat)
-        //     );
-        // }
+        for value in [b"title".as_slice(), b"title~kind".as_slice()] {
+            assert_eq!(
+                GRiDFileName::new(value),
+                Err(GRiDFileNameError::InvalidFormat)
+            );
+        }
     }
 
     #[test]
     fn rejects_forbidden_component_characters() {
-        // for (value, chr) in [
-        //     (b"ti|tle~kind~".as_slice(), '|'),
-        //     (b"title~ki`nd~".as_slice(), '`'),
-        //     (b"title~~kind~".as_slice(), '~'),
-        // ] {
-        //     assert_eq!(
-        //         GRiDFileName::new(value),
-        //         Err(GRiDFileNameError::ForbiddenCharacter(chr))
-        //     );
-        // }
+        for (value, chr) in [
+            (b"ti|tle~kind~".as_slice(), '|'),
+            (b"title~ki`nd~".as_slice(), '`'),
+            (b"title~~kind~".as_slice(), '~'),
+        ] {
+            assert_eq!(
+                GRiDFileName::new(value),
+                Err(GRiDFileNameError::ForbiddenCharacter(chr))
+            );
+        }
     }
 
     #[test]
     fn validates_without_constructing_a_name() {
-        // assert_eq!(GRiDFileName::is_valid_name(b"Report~Text~"), Ok(()));
-        // assert_eq!(
-        //     GRiDFileName::is_valid_name(b"Report|Draft~Text~"),
-        //     Err(GRiDFileNameError::ForbiddenCharacter('|'))
-        // );
-    }
-
-    #[test]
-    fn converts_its_error_to_an_io_error() {
-        // let error: io::Error = GRiDFileNameError::InvalidFormat.into();
-
-        // assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(GRiDFileName::is_valid_name(b"Report~Text~"), Ok(()));
+        assert_eq!(
+            GRiDFileName::is_valid_name(b"Report|Draft~Text~"),
+            Err(GRiDFileNameError::ForbiddenCharacter('|'))
+        );
     }
 }

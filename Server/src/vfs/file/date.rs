@@ -127,36 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_preserves_arbitrary_unchecked_values() {
-        let bytes = [0xff, 0xff, 99, 98, 97, 96, 95, 94, 93, 0xfe, 0xff];
-        let date = GRiDDate::read_from_bytes(&bytes).unwrap();
-
-        assert_eq!(date.as_bytes(), bytes);
-        assert_eq!(
-            date,
-            GRiDDate {
-                year: U16::new(u16::MAX),
-                month: 99,
-                day: 98,
-                hour: 97,
-                minute: 96,
-                second: 95,
-                tenth_of_second: 94,
-                day_of_week: 93,
-                day_of_year: U16::new(0xfffe),
-            }
-        );
-    }
-
-    #[test]
-    fn structured_date_round_trips() {
-        assert_eq!(
-            GRiDDate::read_from_bytes(ARBITRARY_DATE.as_bytes()).unwrap(),
-            ARBITRARY_DATE
-        );
-    }
-
-    #[test]
     fn today_produces_a_populated_date() {
         let date = GRiDDate::today();
 

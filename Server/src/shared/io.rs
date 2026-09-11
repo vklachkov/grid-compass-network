@@ -40,33 +40,28 @@ pub fn u16_len(length: usize, what: &str) -> Result<u16, FrameError> {
 }
 
 pub trait ReadExt: io::Read {
-    /// Reads a u8 value.
     fn read_u8(&mut self) -> io::Result<u8> {
         let mut buffer = [0; 1];
         self.read_exact(&mut buffer)?;
         Ok(buffer[0])
     }
 
-    /// Reads a little-endian u16 value.
     fn read_u16(&mut self) -> io::Result<u16> {
         let buffer = ReadExt::read_array(self)?;
         Ok(u16::from_le_bytes(buffer))
     }
 
-    /// Reads a little-endian u32 value.
     fn read_u32(&mut self) -> io::Result<u32> {
         let buffer = ReadExt::read_array(self)?;
         Ok(u32::from_le_bytes(buffer))
     }
 
-    /// Reads an array of bytes.
     fn read_array<const N: usize>(&mut self) -> io::Result<[u8; N]> {
         let mut buffer = [0; N];
         self.read_exact(&mut buffer)?;
         Ok(buffer)
     }
 
-    /// Reads a fixed-layout wire structure.
     fn read_struct<T: FromBytes + IntoBytes>(&mut self) -> io::Result<T> {
         let mut value = T::new_zeroed();
         self.read_exact(value.as_mut_bytes())?;
@@ -77,17 +72,14 @@ pub trait ReadExt: io::Read {
 impl<T: io::Read + ?Sized> ReadExt for T {}
 
 pub trait WriteExt: io::Write {
-    /// Writes a u8 value.
     fn write_u8(&mut self, value: u8) -> io::Result<()> {
         self.write_all(&[value])
     }
 
-    /// Writes a little-endian u16 value.
     fn write_u16(&mut self, value: u16) -> io::Result<()> {
         self.write_all(&value.to_le_bytes())
     }
 
-    /// Writes a fixed-layout wire structure.
     fn write_struct<T: IntoBytes + Immutable + ?Sized>(&mut self, value: &T) -> io::Result<()> {
         self.write_all(value.as_bytes())
     }
@@ -96,10 +88,8 @@ pub trait WriteExt: io::Write {
 impl<T: io::Write + ?Sized> WriteExt for T {}
 
 pub trait CursorExt<'a> {
-    /// Reads the unread bytes from the current cursor position.
     fn read_remainder(&mut self) -> &'a [u8];
 
-    /// Reads a byte slice with the given length from the current cursor position.
     fn read_slice(&mut self, length: usize) -> io::Result<&'a [u8]>;
 }
 

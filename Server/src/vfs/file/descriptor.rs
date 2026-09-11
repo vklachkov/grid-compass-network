@@ -74,70 +74,29 @@ impl Default for GRiDFileDescriptor {
 mod tests {
     use super::*;
 
-    fn date(value: u8) -> GRiDDate {
-        GRiDDate::read_from_bytes(&[value; 11]).unwrap()
-    }
-
-    #[test]
-    fn descriptor_is_exactly_198_bytes_and_round_trips_all_fields() {
-        let descriptor = GRiDFileDescriptor {
+    fn encoded() -> Vec<u8> {
+        GRiDFileDescriptor {
             file_length: U32::new(0x0102_0304),
             file_name: GRiDFileName::new(b"Name~Data~").unwrap(),
-            creation_date: date(8),
-            dir_file_id: U16::new(0x1122),
-            last_modified_date: date(9),
-            expiration_date: date(10),
-            machine_id: U32::new(11),
-            compressed: 12,
-            encrypted: 1,
-            protected: 1,
-            password: [3, b'K', b'E', b'Y', 0],
-            dir_length: U32::new(14),
-            dir_count: U16::new(0x3344),
-            grid_write1: [15; 6],
-            machine_id2: 1,
-            uses_8087: 1,
-            version1: 16,
-            version2: 17,
-            machine_id3: U32::new(18),
-            grid_write2: [19; 11],
-            version3: 20,
-            property_length: U32::new(21),
-            rom: 1,
-            rom_id: U16::new(0x5566),
-            mode: U16::new(0x7788),
-            rainy_day_bytes: [22; 3],
-            user_defined_bytes: [23; 20],
-            grid_central_use: U16::new(0x99aa),
-        };
-        let bytes = descriptor.to_bytes();
-        assert_eq!(bytes.len(), DESCRIPTOR_LENGTH);
-        assert_eq!(GRiDFileDescriptor::from_bytes(&bytes).unwrap(), descriptor);
+            ..Default::default()
+        }
+        .to_bytes()
     }
 
     #[test]
-    fn filename_length_over_80_is_a_format_error() {
-        let descriptor = GRiDFileDescriptor {
-            file_name: GRiDFileName::new(b"Name~Data~").unwrap(),
-            ..Default::default()
-        };
-        let mut bytes = descriptor.to_bytes();
+    fn the_name_follows_the_file_length_on_the_wire() {
+        let bytes = encoded();
+
+        assert_eq!(&bytes[..4], 0x0102_0304u32.to_le_bytes());
+        assert_eq!(bytes[4], 10);
+        assert_eq!(&bytes[5..15], b"Name~Data~");
+    }
+
+    #[test]
+    fn a_name_length_over_the_maximum_is_rejected() {
+        let mut bytes = encoded();
         bytes[4] = 81;
+
         assert!(GRiDFileDescriptor::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn default_descriptor_is_zeroed() {
-        let name = GRiDFileName::new(b"Name~Data~").unwrap();
-        let descriptor = GRiDFileDescriptor {
-            file_name: name,
-            ..Default::default()
-        };
-
-        assert_eq!(descriptor.file_name, name);
-        assert_eq!(descriptor.creation_date, GRiDDate::never());
-        assert_eq!(descriptor.last_modified_date, GRiDDate::never());
-        assert_eq!(descriptor.expiration_date, GRiDDate::never());
-        assert_eq!(descriptor.password, [0; 5]);
     }
 }

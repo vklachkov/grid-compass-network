@@ -11,10 +11,10 @@ const PDL_VERSION: [u8; 2] = *b"02";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Frame<'a> {
-    pub flags: u8,           // flags
-    pub window_size: u8,     // windowSize
-    pub seq_number: u8,      // seqNumber
-    pub body: FrameBody<'a>, // frameType combined with data
+    pub flags: u8,
+    pub window_size: u8,
+    pub seq_number: u8,
+    pub body: FrameBody<'a>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,14 +52,14 @@ pub enum FrameBody<'a> {
 // RxShortBufferDescType
 #[derive(Clone, Copy, Debug)]
 pub struct RfcFrameBody {
-    pub connection_id: u8, // pdlConn
-    pub version: [u8; 2],  // pdlVersion
+    pub connection_id: u8,
+    pub version: [u8; 2],
 }
 
 // RxShortBufferDescType
 #[derive(Clone, Copy, Debug)]
 pub struct ShortFrameBody {
-    pub connection_id: u8, // pdlConn
+    pub connection_id: u8,
 }
 
 impl<'a> Frame<'a> {

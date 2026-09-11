@@ -35,6 +35,8 @@ pub(super) const VFS_ERROR_NOT_SUPPORTED: u16 = 35; // eNotSupport
 pub(super) const VFS_ERROR_ACCESS_DENIED: u16 = 38; // eAccess
 pub(super) const VFS_ERROR_FILE_EXISTS: u16 = 32; // eFileExists
 pub(super) const VFS_ERROR_DEVICE_FULL: u16 = 41; // eDeviceFull
+pub(super) const VFS_ERROR_FILE_NOT_FOUND: u16 = 33; // eFileNotFound
+pub(super) const VFS_ERROR_WRITE_PROTECTED: u16 = 106; // eWriteProtect
 pub(super) const VFS_ERROR_FILE_NOT_OPEN: u16 = 205; // eFileNotOpen
 pub(super) const VFS_ERROR_BAD_CONNECTION: u16 = 221; // eBadConn
 pub(super) const VFS_ERROR_ALREADY_OPEN: u16 = 222; // eOpen
@@ -127,7 +129,6 @@ pub struct VfsAttachRequest<'a> {
     pub path: &'a GRiDPath,
 }
 
-/// The fixed part of an attach request; the variable-length path follows it.
 #[derive(Clone, Copy, Debug, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
 #[repr(C)]
 struct VfsAttachHeader {
@@ -572,11 +573,6 @@ fn write_header(dst: &mut Vec<u8>, header: &VfsResponseHeader) -> Result<(), Fra
 }
 
 impl VfsResponse {
-    /// Appends the wire form of this response to `dst`.
-    ///
-    /// Every length prefix is patched in after its body has been written, so a
-    /// prefix cannot disagree with the bytes it describes the way a separate
-    /// counting pass over the same data could.
     pub fn write_into(&self, dst: &mut Vec<u8>) -> Result<(), FrameError> {
         let start = dst.len();
 

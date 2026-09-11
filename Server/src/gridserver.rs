@@ -56,6 +56,19 @@ impl Drop for ConnectionId {
     }
 }
 
+/// Both sides of a link start counting from the number the server picks here and
+/// announces in its RFC response, so a link that outlives a reboot of either end
+/// cannot be resumed by a stale peer that guessed where the count was. The
+/// original drew it from one shared generator per server, reproduced here.
+fn next_initial_seq_number() -> u8 {
+    static STATE: Mutex<u16> = Mutex::new(5);
+
+    let mut state = STATE.lock().expect("initial sequence generator");
+    *state = state.wrapping_mul(2005).wrapping_add(4227);
+
+    *state as u8
+}
+
 #[derive(PartialEq, Eq)]
 enum ProcessFrameResult {
     Continue,
@@ -117,11 +130,13 @@ fn try_worker(
 ) -> io::Result<()> {
     let conn = Rc::new(db::open(db_path).map_err(io::Error::other)?);
 
+    let initial_seq_number = next_initial_seq_number();
+
     let mut session = Session {
         client,
         connection_id,
-        last_seq_number: 0x1C,
-        recv_sequence: 0x1C,
+        last_seq_number: initial_seq_number,
+        recv_sequence: initial_seq_number,
         vipc: None,
         conn,
         vfs_root,
@@ -518,6 +533,8 @@ mod tests {
         let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
         let (client, _) = listener.accept().expect("accept the loopback connection");
 
+        let initial_seq_number = next_initial_seq_number();
+
         let fs_root = TempDir::new().expect("create test FS root");
         let vfs_root = Arc::new(VfsDirManager::new(fs_root.path()).expect("open the test FS root"));
 
@@ -525,8 +542,8 @@ mod tests {
             client,
             connection_id: ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
                 .expect("take a connection id from an empty pool"),
-            last_seq_number: 0x1C,
-            recv_sequence: 0x1C,
+            last_seq_number: initial_seq_number,
+            recv_sequence: initial_seq_number,
             vipc: None,
             conn: Rc::new(db::open_in_memory()),
             vfs_root,

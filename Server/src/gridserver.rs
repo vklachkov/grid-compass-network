@@ -119,9 +119,28 @@ fn worker(
     db_path: &str,
     vfs_root: Arc<VfsDirManager>,
 ) {
-    if let Err(err) = try_worker(client, addr, connection_id, db_path, vfs_root) {
-        error!(target: "server", "worker({addr}): fatal error: {err}");
+    // A session is the only thing a bug in request handling is allowed to cost:
+    // unwinding here drops the socket and returns the connection id, and the
+    // client is free to connect again.
+    let served = panic::catch_unwind(AssertUnwindSafe(|| {
+        try_worker(client, addr, connection_id, db_path, vfs_root)
+    }));
+
+    match served {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => error!(target: "server", "worker({addr}): fatal error: {err}"),
+        Err(payload) => {
+            error!(target: "server", "worker({addr}): panicked: {}", panic_reason(&payload));
+        }
     }
+}
+
+fn panic_reason(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown reason")
 }
 
 fn try_worker(

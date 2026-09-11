@@ -638,10 +638,12 @@ impl<'a> VfsSetStatusAction<'a> {
         };
         match ty {
             VfsSetStatusType::SetDirection => {
-                let direction = VfsReadDirection::from_u8(read_single_byte(raw, "direction")?)
-                    .ok_or_else(|| FrameError::Validation {
-                        reason: format!("invalid VFS read direction: {}", raw[0]),
-                    })?;
+                let raw_direction = read_single_byte(raw, "direction")?;
+                let direction = VfsReadDirection::from_u8(raw_direction).ok_or_else(|| {
+                    FrameError::Validation {
+                        reason: format!("invalid VFS read direction: {raw_direction}"),
+                    }
+                })?;
                 Ok(Self::SetDirection { direction })
             }
             VfsSetStatusType::SetWildcard => Ok(Self::SetWildcard {

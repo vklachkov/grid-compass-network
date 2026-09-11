@@ -1,6 +1,6 @@
 use std::fmt;
 
-use bstr::{BStr, ByteSlice};
+use bstr::BStr;
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq)]
@@ -58,13 +58,8 @@ impl GRiDPath {
             return Err("path must start with `");
         };
 
-        let (path_body, password) = match path_body
-            .iter()
-            .position(|&byte| byte == Self::PASSWORD_SEPARATOR)
-        {
-            Some(separator) => (&path_body[..separator], Some(&path_body[separator + 1..])),
-            None => (path_body, None),
-        };
+        let mut split = path_body.splitn(2, |&byte| byte == Self::PASSWORD_SEPARATOR);
+        let (path_body, password) = (split.next().unwrap_or_default(), split.next());
 
         if password.is_some_and(|password| {
             password.is_empty() || password.contains(&Self::PASSWORD_SEPARATOR)
@@ -72,7 +67,8 @@ impl GRiDPath {
             return Err("path password must not be empty or contain |");
         }
 
-        let Some((server, components)) = path_body.split_once_str(&[Self::SERVER_SEPARATOR]) else {
+        let mut split = path_body.splitn(2, |&byte| byte == Self::SERVER_SEPARATOR);
+        let (server, Some(components)) = (split.next().unwrap_or_default(), split.next()) else {
             return Err("path must contain a server name followed by :");
         };
 

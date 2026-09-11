@@ -1,5 +1,7 @@
 use std::{io, mem::size_of};
 
+use log::error;
+
 use crate::shared::{
     Tlv,
     io::{CursorExt, ReadExt, u16_len},
@@ -66,10 +68,12 @@ impl MailId {
 
     pub fn value(self) -> Option<u32> {
         let (value, reserved) = self.0.split_at(size_of::<u32>());
+        let value = *value.first_chunk()?;
+
         reserved
             .iter()
             .all(|byte| *byte == 0)
-            .then(|| u32::from_le_bytes(value.try_into().unwrap()))
+            .then(|| u32::from_le_bytes(value))
     }
 }
 
@@ -100,14 +104,22 @@ pub fn single_record(data: &[u8], marker: u8, tag: u8) -> Option<&[u8]> {
     }
 }
 
+/// The length field cannot describe a payload this long, so the record is cut
+/// down to what the field can name: a client reading a truncated record stays in
+/// sync with the stream, one reading a record whose header lies does not.
 pub fn app_frame(marker: u8, payload: &[u8]) -> Vec<u8> {
+    let length = match u16_len(payload.len(), "Mail application record") {
+        Ok(length) => length,
+        Err(err) => {
+            error!(target: "mail", "truncated an application record: {err}");
+            u16::MAX
+        }
+    };
+    let payload = &payload[..length as usize];
+
     let mut frame = Vec::with_capacity(payload.len() + RECORD_HEADER_LEN);
     frame.push(marker);
-    frame.extend(
-        u16_len(payload.len(), "Mail application record")
-            .expect("application records must fit their u16 wire length")
-            .to_le_bytes(),
-    );
+    frame.extend(length.to_le_bytes());
     frame.extend_from_slice(payload);
     frame
 }

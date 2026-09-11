@@ -4,7 +4,6 @@ use std::{
     fs, io,
     num::NonZeroU16,
     path::{Path, PathBuf},
-    sync::Mutex,
 };
 
 #[cfg(unix)]
@@ -12,6 +11,7 @@ use std::os::unix::ffi::OsStrExt;
 
 use anyhow::{Context, bail};
 use bstr::BStr;
+use parking_lot::Mutex;
 
 use super::{Error, Result};
 use crate::shared::bitmap::IdMap16;
@@ -148,11 +148,7 @@ impl VfsDirManager {
             return Ok(id);
         }
 
-        let mut disks = self
-            .0
-            .file_ids
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut disks = self.0.file_ids.lock();
 
         let ids = match disks.entry(disk.to_path_buf()) {
             Entry::Occupied(occupied) => occupied.into_mut(),

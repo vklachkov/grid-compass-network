@@ -1,15 +1,18 @@
 use std::{
+    any::Any,
     io,
     net::{SocketAddr, TcpListener, TcpStream},
     num::NonZeroU8,
+    panic::{self, AssertUnwindSafe},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
 };
 
 use anyhow::Context;
 use bstr::BStr;
 use log::{debug, error, info, trace, warn};
+use parking_lot::Mutex;
 use rusqlite::Connection;
 
 use crate::db;
@@ -35,7 +38,7 @@ struct ConnectionId {
 
 impl ConnectionId {
     fn acquire(pool: &Arc<Mutex<IdMap8>>) -> Option<Self> {
-        let mut ids = pool.lock().expect("connection id pool");
+        let mut ids = pool.lock();
         let id = ids.find_free()?;
         ids.set(id);
 
@@ -52,7 +55,7 @@ impl ConnectionId {
 
 impl Drop for ConnectionId {
     fn drop(&mut self) {
-        self.pool.lock().expect("connection id pool").clear(self.id);
+        self.pool.lock().clear(self.id);
     }
 }
 
@@ -63,7 +66,7 @@ impl Drop for ConnectionId {
 fn next_initial_seq_number() -> u8 {
     static STATE: Mutex<u16> = Mutex::new(5);
 
-    let mut state = STATE.lock().expect("initial sequence generator");
+    let mut state = STATE.lock();
     *state = state.wrapping_mul(2005).wrapping_add(4227);
 
     *state as u8

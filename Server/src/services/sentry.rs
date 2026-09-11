@@ -514,12 +514,9 @@ impl SentryServer {
             BStr::new(user),
         );
 
-        let names = match ascii_names(&[company, group, user, password]) {
+        let [company, group, user, password] = match ascii_names([company, group, user, password]) {
             Ok(names) => names,
-            Err(response) => return response,
-        };
-        let [company, group, user, password] = names[..] else {
-            unreachable!()
+            Err(status) => return status_response(status),
         };
 
         // Changing one's own password is the one operation every account may
@@ -661,11 +658,10 @@ impl SentryServer {
             return denied;
         }
 
-        let names = match ascii_names(&[company]) {
-            Ok(names) => names,
-            Err(response) => return response,
+        let company = match ascii_name(company) {
+            Ok(name) => name,
+            Err(status) => return status_response(status),
         };
-        let [company] = names[..] else { unreachable!() };
 
         self.store(|conn| db::insert_company(conn, company, quota))
     }
@@ -688,12 +684,9 @@ impl SentryServer {
             return denied;
         }
 
-        let names = match ascii_names(&[company, group]) {
+        let [company, group] = match ascii_names([company, group]) {
             Ok(names) => names,
-            Err(response) => return response,
-        };
-        let [company, group] = names[..] else {
-            unreachable!()
+            Err(status) => return status_response(status),
         };
 
         let company_id = match db::find_company(&self.conn, company) {
@@ -752,12 +745,9 @@ impl SentryServer {
             return status_response(STATUS_INSUFFICIENT_AUTHORITY);
         }
 
-        let names = match ascii_names(&[company, group, user, password]) {
+        let [company, group, user, password] = match ascii_names([company, group, user, password]) {
             Ok(names) => names,
-            Err(response) => return response,
-        };
-        let [company, group, user, password] = names[..] else {
-            unreachable!()
+            Err(status) => return status_response(status),
         };
 
         let group_id = match db::find_group(&self.conn, company, group) {
@@ -907,23 +897,28 @@ fn is_constraint_violation(err: &rusqlite::Error) -> bool {
 /// An empty field is refused here too: an absent record reads as an empty value,
 /// and an empty name would create an account that sign-on then matches against
 /// its own empty properties.
-fn ascii_names<'a>(fields: &[&'a [u8]]) -> Result<Vec<&'a str>, Vec<u8>> {
-    fields
-        .iter()
-        .map(|field| {
-            if field.is_empty() {
-                return Err(status_response(status::PROPERTY_MISSING));
-            }
+fn ascii_name(field: &[u8]) -> Result<&str, u16> {
+    if field.is_empty() {
+        return Err(status::PROPERTY_MISSING);
+    }
 
-            str::from_utf8(field)
-                .ok()
-                .filter(|name| name.is_ascii())
-                .ok_or_else(|| {
-                    warn!(target: "sentry", "refused the non-ASCII name {:?}", BStr::new(field));
-                    status_response(STATUS_INVALID_NAME)
-                })
+    str::from_utf8(field)
+        .ok()
+        .filter(|name| name.is_ascii())
+        .ok_or_else(|| {
+            warn!(target: "sentry", "refused the non-ASCII name {:?}", BStr::new(field));
+            STATUS_INVALID_NAME
         })
-        .collect()
+}
+
+fn ascii_names<'a, const N: usize>(fields: [&'a [u8]; N]) -> Result<[&'a str; N], u16> {
+    let mut names = [""; N];
+
+    for (name, field) in names.iter_mut().zip(fields) {
+        *name = ascii_name(field)?;
+    }
+
+    Ok(names)
 }
 
 fn records(data: &[u8]) -> Option<Vec<TlvEntry<'_>>> {

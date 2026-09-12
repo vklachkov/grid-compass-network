@@ -4,7 +4,6 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     num::NonZeroU8,
     panic::{self, AssertUnwindSafe},
-    rc::Rc,
     sync::Arc,
     thread,
 };
@@ -16,13 +15,14 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 
 use crate::db;
+use crate::env::Environment;
 use crate::gridlink::*;
 use crate::services::{
     Vipc,
     protocol::{property, status},
     sentry::Authority,
 };
-use crate::shared::{FrameError, bitmap::IdMap8, env::read_env};
+use crate::shared::{FrameError, bitmap::IdMap8};
 use crate::vfs::VfsDirManager;
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
@@ -78,20 +78,13 @@ enum ProcessFrameResult {
     Disconnect,
 }
 
-pub fn serve() -> anyhow::Result<()> {
-    let addr = read_env("LISTEN_ADDR")?;
-    let db_path = read_env("DB_PATH")?;
-    let fs_root = read_env("FS_ROOT")?;
+pub fn serve(environment: Arc<Environment>, conn: Arc<db::Database>) -> anyhow::Result<()> {
+    let vfs_root = Arc::new(VfsDirManager::new(&environment.fs_root).context("vfs root")?);
 
-    let vfs_root = Arc::new(VfsDirManager::new(fs_root).context("vfs root")?);
-
-    db::open(&db_path).map_err(io::Error::other)?;
-    info!(target: "server", "using account database {db_path}");
-
-    let listener = TcpListener::bind(&addr)?;
+    let listener = TcpListener::bind(&environment.listen_addr)?;
     let connection_ids = Arc::new(Mutex::new(IdMap8::new()));
 
-    info!(target: "server", "start GRiD server at {addr}");
+    info!(target: "server", "start GRiD server at {}", environment.listen_addr);
     loop {
         match listener.accept() {
             Ok((client, addr)) => {
@@ -101,9 +94,9 @@ pub fn serve() -> anyhow::Result<()> {
                 };
 
                 info!(target: "server", "accepted client {addr} as connection {}", connection_id.get());
-                let db_path = db_path.clone();
+                let conn = conn.clone();
                 let vfs_root = vfs_root.clone();
-                thread::spawn(move || worker(client, addr, connection_id, &db_path, vfs_root));
+                thread::spawn(move || worker(client, addr, connection_id, conn, vfs_root));
             }
             Err(err) => {
                 error!(target: "server", "failed to accept client: {err}");
@@ -116,14 +109,14 @@ fn worker(
     client: TcpStream,
     addr: SocketAddr,
     connection_id: ConnectionId,
-    db_path: &str,
+    conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
 ) {
     // A session is the only thing a bug in request handling is allowed to cost:
     // unwinding here drops the socket and returns the connection id, and the
     // client is free to connect again.
     let served = panic::catch_unwind(AssertUnwindSafe(|| {
-        try_worker(client, addr, connection_id, db_path, vfs_root)
+        try_worker(client, addr, connection_id, conn, vfs_root)
     }));
 
     match served {
@@ -147,11 +140,9 @@ fn try_worker(
     client: TcpStream,
     addr: SocketAddr,
     connection_id: ConnectionId,
-    db_path: &str,
+    conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
 ) -> io::Result<()> {
-    let conn = Rc::new(db::open(db_path).map_err(io::Error::other)?);
-
     let initial_seq_number = next_initial_seq_number();
 
     let mut session = Session {
@@ -197,7 +188,7 @@ struct Session {
     /// offers is reached through it, so an unauthenticated link has nothing to
     /// address at all.
     vipc: Option<Box<Vipc>>,
-    conn: Rc<Connection>,
+    conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
     /// Reused for serializing outgoing frames, one buffer per nesting level:
     /// the VIPC message, the data frame around it and the PDL frame around
@@ -348,7 +339,7 @@ impl Session {
     }
 
     fn sign_on(&mut self, properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
-        let status = match authenticate(&self.conn, &properties) {
+        let status = match authenticate(&self.conn.get_conn(), &properties) {
             Ok(account) => {
                 let authority = Authority::from_stored(account.authority);
                 info!(
@@ -361,7 +352,7 @@ impl Session {
                 );
 
                 self.vipc = Some(Box::new(Vipc::new(
-                    Rc::clone(&self.conn),
+                    self.conn.clone(),
                     account,
                     self.vfs_root.clone(),
                 )?));
@@ -567,7 +558,7 @@ mod tests {
             last_seq_number: initial_seq_number,
             recv_sequence: initial_seq_number,
             vipc: None,
-            conn: Rc::new(db::open_in_memory()),
+            conn: db::users::tests::demo_database(),
             vfs_root,
             scratch: Scratch::default(),
         };
@@ -691,10 +682,10 @@ mod tests {
 
     #[test]
     fn accepts_a_known_user_and_reports_their_authority() {
-        let conn = db::open_in_memory();
+        let conn = db::users::tests::demo_database();
 
         let account = authenticate(
-            &conn,
+            &conn.get_conn(),
             &properties(b"GRiD", b"Systems", b"MANAGER", b"MANAGER"),
         )
         .expect("MANAGER should be able to sign on");
@@ -709,10 +700,13 @@ mod tests {
     /// to compare them the way the client itself does.
     #[test]
     fn accepts_a_known_user_whatever_the_case_of_the_names() {
-        let conn = db::open_in_memory();
+        let conn = db::users::tests::demo_database();
 
-        let account = authenticate(&conn, &properties(b"grid", b"demo", b"guest", b"GUEST"))
-            .expect("GUEST should be able to sign on whatever the case");
+        let account = authenticate(
+            &conn.get_conn(),
+            &properties(b"grid", b"demo", b"guest", b"GUEST"),
+        )
+        .expect("GUEST should be able to sign on whatever the case");
 
         assert_eq!(account.user, "GUEST");
         assert_eq!(Authority::from_stored(account.authority), Authority::NORMAL);
@@ -720,10 +714,10 @@ mod tests {
 
     #[test]
     fn rejects_a_wrong_password() {
-        let conn = db::open_in_memory();
+        let conn = db::users::tests::demo_database();
 
         let status = authenticate(
-            &conn,
+            &conn.get_conn(),
             &properties(b"GRiD", b"Systems", b"MANAGER", b"WRONG"),
         )
         .err()
@@ -734,11 +728,14 @@ mod tests {
 
     #[test]
     fn rejects_an_unknown_user() {
-        let conn = db::open_in_memory();
+        let conn = db::users::tests::demo_database();
 
-        let status = authenticate(&conn, &properties(b"GRiD", b"Demo", b"NOBODY", b""))
-            .err()
-            .expect("an unknown user should be refused");
+        let status = authenticate(
+            &conn.get_conn(),
+            &properties(b"GRiD", b"Demo", b"NOBODY", b""),
+        )
+        .err()
+        .expect("an unknown user should be refused");
 
         assert_eq!(status, STATUS_UNKNOWN_USER);
     }
@@ -747,9 +744,9 @@ mod tests {
     /// match an empty property and answer with the group's own authority.
     #[test]
     fn refuses_to_sign_on_as_a_group() {
-        let conn = db::open_in_memory();
+        let conn = db::Database::open_in_memory();
 
-        let status = authenticate(&conn, &properties(b"GRiD", b"Systems", b"", b""))
+        let status = authenticate(&conn.get_conn(), &properties(b"GRiD", b"Systems", b"", b""))
             .err()
             .expect("a group should not be an account");
 

@@ -1,7 +1,6 @@
-use std::{io, rc::Rc, sync::Arc};
+use std::{io, sync::Arc};
 
 use log::{debug, warn};
-use rusqlite::Connection;
 
 use mail::{MailBroadcastServer, MailServer};
 use sentry::SentryServer;
@@ -34,7 +33,7 @@ pub struct Vipc {
 
 impl Vipc {
     pub fn new(
-        conn: Rc<Connection>,
+        conn: Arc<db::Database>,
         actor: db::Account,
         vfs_root: Arc<VfsDirManager>,
     ) -> io::Result<Self> {
@@ -123,8 +122,8 @@ mod tests {
     /// The root is returned along with the services: dropping it would delete
     /// the directory the VFS keeps open.
     fn vipc() -> (TempDir, Vipc) {
-        let conn = Rc::new(db::open_in_memory());
-        let actor = db::find_user(&conn, "GRiD", "Systems", "MANAGER")
+        let conn = db::users::tests::demo_database();
+        let actor = db::find_user(&conn.get_conn(), "GRiD", "Systems", "MANAGER")
             .expect("read the demo directory")
             .expect("MANAGER should exist");
 

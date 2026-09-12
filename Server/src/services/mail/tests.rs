@@ -1,13 +1,11 @@
-use std::rc::Rc;
-
 use super::{broadcast::*, postoffice::*, protocol::*};
 use crate::{db, db::mailbox, db::mailbox::Message};
 
 const STORED_BODY: &str = "Stored body";
 
 fn mail_server() -> MailServer {
-    let conn = Rc::new(db::open_in_memory());
-    let owner = db::find_user(&conn, "GRiD", "Demo", "GUEST")
+    let conn = db::users::tests::demo_database();
+    let owner = db::find_user(&conn.get_conn(), "GRiD", "Demo", "GUEST")
         .expect("read the demo directory")
         .expect("GUEST should exist");
 
@@ -33,7 +31,7 @@ fn outgoing(subject: &str, body: &str) -> Vec<u8> {
 }
 
 fn stored_message(mail: &MailServer, mail_id: u32) -> Message {
-    mailbox::find(&mail.conn, mail.owner_id, mail_id)
+    mailbox::find(&mail.conn.get_conn(), mail.owner_id, mail_id)
         .expect("read the mailbox")
         .expect("the message should be stored")
 }
@@ -318,7 +316,11 @@ fn rejects_mail_that_cannot_fit_in_one_vipc_response() {
     let mut mail = mail_server();
 
     assert!(!mail.accept_outgoing(outgoing("Large", &"x".repeat(40_000))));
-    assert!(mailbox::list(&mail.conn, mail.owner_id).unwrap().is_empty());
+    assert!(
+        mailbox::list(&mail.conn.get_conn(), mail.owner_id)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// The mailbox belongs to the account that signed on, so a message stored
@@ -326,13 +328,13 @@ fn rejects_mail_that_cannot_fit_in_one_vipc_response() {
 #[test]
 fn a_mailbox_is_not_shared_between_accounts() {
     let mail = with_one_message();
-    let other = db::find_user(&mail.conn, "GRiD", "Systems", "MANAGER")
+    let other = db::find_user(&mail.conn.get_conn(), "GRiD", "Systems", "MANAGER")
         .unwrap()
         .unwrap();
     let mut other_mail = MailServer::new(mail.conn.clone(), other.id, other.user);
 
     assert!(
-        mailbox::list(&other_mail.conn, other.id)
+        mailbox::list(&other_mail.conn.get_conn(), other.id)
             .unwrap()
             .is_empty()
     );

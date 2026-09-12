@@ -294,7 +294,9 @@ impl VfsDirManager {
             path.push(OsStr::from_bytes(component));
 
             #[cfg(not(unix))]
-            const { unreachable!() };
+            const {
+                unreachable!()
+            };
 
             Ok(())
         }

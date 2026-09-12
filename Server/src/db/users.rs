@@ -337,16 +337,18 @@ pub fn delete_user(
     )
 }
 
-/// The seeded administrator alone cannot exercise the listing walk, which needs
-/// a company holding more than one group and a group holding more than one user
-/// — so the tests replace the seed with a directory that has both.
 #[cfg(test)]
-pub fn open_in_memory() -> Connection {
-    let mut conn = Connection::open_in_memory().expect("open in-memory database");
-    super::migrate(&mut conn).expect("migrate in-memory database");
+pub(crate) mod tests {
+    use std::sync::Arc;
 
-    conn.execute_batch(
-        r#"
+    use super::*;
+
+    pub(crate) fn demo_database() -> Arc<crate::db::Database> {
+        let database = crate::db::Database::open_in_memory();
+        database
+            .get_conn()
+            .execute_batch(
+                r#"
 DELETE FROM users;
 DELETE FROM groups;
 DELETE FROM companies;
@@ -360,23 +362,23 @@ INSERT INTO users (group_id, name, password, authority, quota, used) VALUES
     (1, 'OPERATOR', 'OPERATOR', 20, 4294967295, 1048576),
     (2, 'MANAGER', 'MANAGER', 40, 4294967295, 4194304);
 "#,
-    )
-    .expect("seed the test directory");
+            )
+            .expect("seed the test directory");
 
-    conn
-}
+        database
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    fn open_in_memory() -> Arc<crate::db::Database> {
+        demo_database()
+    }
 
     /// A fresh database has to be one an administrator can sign on to: every
     /// other account is created through the Sentry, which refuses every command
     /// below `SYSTEM_ADMIN`.
     #[test]
     fn a_fresh_database_holds_only_the_seeded_administrator() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        super::super::migrate(&mut conn).unwrap();
+        let database = super::super::Database::in_memory().unwrap();
+        let conn = database.get_conn();
 
         let rows: Vec<_> = load(&conn)
             .unwrap()
@@ -417,7 +419,8 @@ mod tests {
 
     #[test]
     fn loads_the_demo_directory_in_client_order() {
-        let conn = open_in_memory();
+        let database = open_in_memory();
+        let conn = database.get_conn();
 
         let names: Vec<_> = load(&conn)
             .unwrap()
@@ -440,7 +443,8 @@ mod tests {
 
     #[test]
     fn finds_a_user_ignoring_case() {
-        let conn = open_in_memory();
+        let database = open_in_memory();
+        let conn = database.get_conn();
 
         let account = find_user(&conn, "grid", "DEMO", "guest")
             .unwrap()
@@ -452,7 +456,8 @@ mod tests {
 
     #[test]
     fn does_not_find_an_unknown_user() {
-        let conn = open_in_memory();
+        let database = open_in_memory();
+        let conn = database.get_conn();
 
         assert!(
             find_user(&conn, "GRiD", "Demo", "NOBODY")
@@ -463,7 +468,8 @@ mod tests {
 
     #[test]
     fn inserted_rows_appear_in_order() {
-        let conn = open_in_memory();
+        let database = open_in_memory();
+        let conn = database.get_conn();
         let group = find_group(&conn, "grid", "demo").unwrap().unwrap();
 
         insert_user(&conn, group, "BOB", "PW", 0, 1024).unwrap();
@@ -480,7 +486,8 @@ mod tests {
 
     #[test]
     fn refuses_a_duplicate_whatever_the_case() {
-        let conn = open_in_memory();
+        let database = open_in_memory();
+        let conn = database.get_conn();
 
         assert!(insert_company(&conn, "grid", 1024).is_err());
         assert!(insert_group(&conn, 1, "DEMO", 1024).is_err());

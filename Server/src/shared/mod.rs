@@ -1,7 +1,6 @@
 mod error;
 
 pub mod bitmap;
-pub mod env;
 pub mod io;
 pub mod tlv;
 

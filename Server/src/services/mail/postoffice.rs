@@ -1,4 +1,4 @@
-use std::{io, rc::Rc};
+use std::{io, sync::Arc};
 
 use log::{debug, error, warn};
 use rusqlite::Connection;
@@ -9,6 +9,7 @@ use super::protocol::{
     app_frame, single_record, transport,
 };
 use crate::{
+    db,
     db::mailbox::{self, Message, NewMessage},
     shared::{
         Tlv,
@@ -54,7 +55,7 @@ const READ_NEW_OPERATION: u8 = 1;
 
 pub struct MailServer {
     fragments: Vec<Pending>,
-    pub(super) conn: Rc<Connection>,
+    pub(super) conn: Arc<db::Database>,
     /// The mailbox every request in this session reads and writes, and the
     /// sender of everything it writes: mail is stored per account, so a session
     /// can only ever reach the one it signed on to.
@@ -132,7 +133,7 @@ struct MailHeader {
 }
 
 impl MailServer {
-    pub fn new(conn: Rc<Connection>, owner_id: i64, owner_name: String) -> Self {
+    pub fn new(conn: Arc<db::Database>, owner_id: i64, owner_name: String) -> Self {
         Self {
             fragments: vec![Pending::default(); CHANNEL_COUNT],
             conn,
@@ -153,7 +154,7 @@ impl MailServer {
         }
 
         let recipient_id = match mailbox::find_recipient(
-            &self.conn,
+            &self.conn.get_conn(),
             self.owner_id,
             outgoing.recipient,
         ) {
@@ -169,7 +170,7 @@ impl MailServer {
         };
 
         match mailbox::insert(
-            &self.conn,
+            &self.conn.get_conn(),
             &outgoing.as_new_message(self.owner_id, recipient_id),
         ) {
             Ok(mail_id) => {
@@ -201,7 +202,7 @@ impl MailServer {
             SRequest::ReadNew => {
                 let message = self.read(mailbox::first_unread)?;
                 if let Some(message) = &message
-                    && let Err(err) = mailbox::mark_read(&self.conn, message.id)
+                    && let Err(err) = mailbox::mark_read(&self.conn.get_conn(), message.id)
                 {
                     error!(target: "mail", "failed to mark mail {} read: {err}", message.mail_id);
                     return None;
@@ -216,7 +217,7 @@ impl MailServer {
     }
 
     fn read<T>(&self, query: impl FnOnce(&Connection, i64) -> rusqlite::Result<T>) -> Option<T> {
-        match query(&self.conn, self.owner_id) {
+        match query(&self.conn.get_conn(), self.owner_id) {
             Ok(value) => Some(value),
             Err(err) => {
                 error!(target: "mail", "failed to read the mailbox: {err}");

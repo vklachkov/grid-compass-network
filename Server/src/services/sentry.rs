@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use bstr::BStr;
 use log::{debug, error, warn};
@@ -219,7 +219,7 @@ impl Level {
 }
 
 pub struct SentryServer {
-    conn: Rc<Connection>,
+    conn: Arc<db::Database>,
     /// The account this session signed on as, carried whole rather than looked
     /// up per command. It cannot change while the session lives: a sign-off
     /// drops the whole server.
@@ -251,7 +251,7 @@ impl Directory {
 }
 
 impl SentryServer {
-    pub fn new(conn: Rc<Connection>, actor: db::Account) -> Self {
+    pub fn new(conn: Arc<db::Database>, actor: db::Account) -> Self {
         Self { conn, actor }
     }
 
@@ -529,7 +529,7 @@ impl SentryServer {
             }
         }
 
-        match db::set_password(&self.conn, company, group, user, password) {
+        match db::set_password(&self.conn.get_conn(), company, group, user, password) {
             Ok(0) => {
                 warn!(target: "sentry", "the account whose password to change is not defined");
                 status_response(STATUS_ACCOUNT_NOT_DEFINED)
@@ -626,7 +626,7 @@ impl SentryServer {
     /// Update and Delete want a bare acknowledgement rather than the status word
     /// the add commands answer with.
     fn write(&self, apply: impl FnOnce(&Connection) -> rusqlite::Result<usize>) -> Vec<u8> {
-        match apply(&self.conn) {
+        match apply(&self.conn.get_conn()) {
             Ok(0) => {
                 warn!(target: "sentry", "the addressed record vanished before the write");
                 status_response(STATUS_ACCOUNT_NOT_DEFINED)
@@ -686,7 +686,7 @@ impl SentryServer {
             Err(status) => return status_response(status),
         };
 
-        let company_id = match db::find_company(&self.conn, company) {
+        let company_id = match db::find_company(&self.conn.get_conn(), company) {
             Ok(Some(id)) => id,
             Ok(None) => {
                 warn!(target: "sentry", "company {company:?} is not defined");
@@ -747,7 +747,7 @@ impl SentryServer {
             Err(status) => return status_response(status),
         };
 
-        let group_id = match db::find_group(&self.conn, company, group) {
+        let group_id = match db::find_group(&self.conn.get_conn(), company, group) {
             Ok(Some(id)) => id,
             Ok(None) => {
                 warn!(target: "sentry", "group {group:?} is not defined");
@@ -763,7 +763,7 @@ impl SentryServer {
     /// empty one, and answering as if it were would invite the client to
     /// recreate accounts that are still there.
     fn directory(&self) -> Result<Directory, Vec<u8>> {
-        Directory::load(&self.conn).map_err(|err| {
+        Directory::load(&self.conn.get_conn()).map_err(|err| {
             error!(target: "sentry", "failed to load the directory: {err}");
             status_response(status::AUTHORIZATION_FILE)
         })
@@ -796,7 +796,7 @@ impl SentryServer {
     /// The unique indexes are case insensitive, so the insert *is* the duplicate
     /// check: a lookup first would only add a race between the two.
     fn store(&self, insert: impl FnOnce(&Connection) -> rusqlite::Result<()>) -> Vec<u8> {
-        match insert(&self.conn) {
+        match insert(&self.conn.get_conn()) {
             Ok(()) => status_response(status::OK),
             Err(err) => {
                 if is_constraint_violation(&err) {
@@ -1075,8 +1075,8 @@ mod tests {
     }
 
     fn sentry_as(authority: Authority) -> SentryServer {
-        let conn = Rc::new(db::open_in_memory());
-        let actor = signed_on(&conn, authority);
+        let conn = db::users::tests::demo_database();
+        let actor = signed_on(&conn.get_conn(), authority);
 
         SentryServer::new(conn, actor)
     }
@@ -1325,7 +1325,7 @@ mod tests {
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
         assert!(
-            db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
+            db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "Lenin")
                 .unwrap()
                 .is_none()
         );
@@ -1420,7 +1420,7 @@ mod tests {
             status_response(status::OK)
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "Lenin")
             .unwrap()
             .expect("the created user should be stored");
         assert_eq!(account.company, "GRiD");
@@ -1474,8 +1474,8 @@ mod tests {
     /// created has to be a user the other then accepts.
     #[test]
     fn a_created_user_can_sign_on() {
-        let conn = Rc::new(db::open_in_memory());
-        let actor = signed_on(&conn, Authority::SYSTEM_ADMIN);
+        let conn = db::users::tests::demo_database();
+        let actor = signed_on(&conn.get_conn(), Authority::SYSTEM_ADMIN);
         let mut sentry = SentryServer::new(conn.clone(), actor);
 
         assert_eq!(
@@ -1491,7 +1491,7 @@ mod tests {
         );
 
         let account = crate::gridserver::authenticate(
-            &conn,
+            &conn.get_conn(),
             &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"Lenin", b"SECRET"),
         )
         .expect("the created user should be able to sign on");
@@ -1514,7 +1514,7 @@ mod tests {
             Authority::NORMAL,
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "Lenin")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "Lenin")
             .unwrap()
             .expect("the created user should be stored");
         assert_eq!(account.password, "SECRET");
@@ -1906,7 +1906,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response, [COMMAND_ACK]);
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "GUEST")
             .unwrap()
             .unwrap();
         assert_eq!(account.authority, Authority::GROUP_ADMIN.0);
@@ -1952,7 +1952,7 @@ mod tests {
         assert_eq!(sentry.process(&delete(&cursor)).unwrap(), [COMMAND_ACK]);
 
         assert!(
-            db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+            db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "GUEST")
                 .unwrap()
                 .is_none()
         );
@@ -1987,7 +1987,7 @@ mod tests {
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
         assert!(
-            db::find_user(&sentry.conn, "GRiD", "Systems", "MANAGER")
+            db::find_user(&sentry.conn.get_conn(), "GRiD", "Systems", "MANAGER")
                 .unwrap()
                 .is_some()
         );
@@ -2059,7 +2059,7 @@ mod tests {
             Authority::GROUP_ADMIN,
         );
 
-        let actor = db::find_user(&sentry.conn, "GRiD", "Demo Group", "Lenin")
+        let actor = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo Group", "Lenin")
             .unwrap()
             .unwrap();
         let mut admin = SentryServer::new(sentry.conn.clone(), actor);
@@ -2155,9 +2155,14 @@ mod tests {
             Authority::GROUP_ADMIN,
         );
 
-        let actor = db::find_user(&sentry.conn, "Test Company", "Demo Group", "Lenin")
-            .unwrap()
-            .unwrap();
+        let actor = db::find_user(
+            &sentry.conn.get_conn(),
+            "Test Company",
+            "Demo Group",
+            "Lenin",
+        )
+        .unwrap()
+        .unwrap();
         let mut admin = SentryServer::new(sentry.conn.clone(), actor);
 
         // The company and the group the actor hangs from stay in the listing —
@@ -2207,7 +2212,7 @@ mod tests {
             status_response(status::OK)
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "GUEST")
             .unwrap()
             .unwrap();
         assert_eq!(account.password, "NEW");
@@ -2231,7 +2236,7 @@ mod tests {
             status_response(status::OK)
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Demo", "GUEST")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Demo", "GUEST")
             .unwrap()
             .unwrap();
         assert_eq!(account.password, "NEW");
@@ -2255,7 +2260,7 @@ mod tests {
             status_response(STATUS_INSUFFICIENT_AUTHORITY)
         );
 
-        let account = db::find_user(&sentry.conn, "GRiD", "Systems", "MANAGER")
+        let account = db::find_user(&sentry.conn.get_conn(), "GRiD", "Systems", "MANAGER")
             .unwrap()
             .unwrap();
         assert_eq!(account.password, "MANAGER");
@@ -2294,8 +2299,8 @@ mod tests {
     /// so a change has to carry through to the next sign-on.
     #[test]
     fn a_changed_password_is_the_one_sign_on_accepts() {
-        let conn = Rc::new(db::open_in_memory());
-        let actor = signed_on(&conn, Authority::SYSTEM_ADMIN);
+        let conn = db::users::tests::demo_database();
+        let actor = signed_on(&conn.get_conn(), Authority::SYSTEM_ADMIN);
         let mut sentry = SentryServer::new(conn.clone(), actor);
 
         sentry
@@ -2311,14 +2316,14 @@ mod tests {
 
         assert!(
             crate::gridserver::authenticate(
-                &conn,
+                &conn.get_conn(),
                 &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"GUEST"),
             )
             .is_err()
         );
         assert!(
             crate::gridserver::authenticate(
-                &conn,
+                &conn.get_conn(),
                 &crate::gridserver::sign_on_properties(b"GRiD", b"Demo", b"GUEST", b"NEW"),
             )
             .is_ok()

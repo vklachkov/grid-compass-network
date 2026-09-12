@@ -6,16 +6,16 @@ use std::{
 
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
-use minijinja::{Environment, context};
+use minijinja::{Environment as MinijinjaEnv, context};
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::{db, db::mailbox, services::sentry::Authority, shared};
+use crate::{db, db::mailbox, services::sentry::Authority};
 
 /// Templates are compiled in so a missing file fails the build rather than
 /// every page at runtime.
-fn environment() -> Result<Environment<'static>> {
-    let mut env = Environment::new();
+fn environment() -> Result<MinijinjaEnv<'static>> {
+    let mut env = MinijinjaEnv::new();
 
     // Otherwise every control tag leaves its own blank line in the output, and
     // the rendered page reads nothing like the templates it came from.
@@ -31,10 +31,7 @@ fn environment() -> Result<Environment<'static>> {
     Ok(env)
 }
 
-pub fn serve() -> Result<()> {
-    let addr = shared::env::read_env("WEB_LISTEN_ADDR")?;
-    let db_path = shared::env::read_env("DB_PATH")?;
-
+pub fn serve(addr: String, conn: Arc<db::Database>) -> Result<()> {
     let env = Arc::new(environment().context("compile the frontend templates")?);
 
     let server = Server::http(&addr)
@@ -45,7 +42,7 @@ pub fn serve() -> Result<()> {
 
     for request in server.incoming_requests() {
         let env = Arc::clone(&env);
-        let db_path = db_path.clone();
+        let conn = Arc::clone(&conn);
 
         thread::spawn(move || {
             let addr = request
@@ -54,7 +51,7 @@ pub fn serve() -> Result<()> {
 
             debug!(target: "web", "{addr}: {} {}", request.method(), request.url());
 
-            if let Err(err) = handle(request, &env, &db_path) {
+            if let Err(err) = handle(request, &env, &conn) {
                 error!(target: "web", "{addr}: failed to answer: {err}");
             }
         });
@@ -63,7 +60,7 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 
-fn handle(mut request: Request, env: &Environment<'_>, db_path: &str) -> Result<()> {
+fn handle(mut request: Request, env: &MinijinjaEnv<'_>, conn: &Arc<db::Database>) -> Result<()> {
     let url = request.url().to_owned();
     let mut parts = url.splitn(2, '?');
     let path = parts.next().unwrap_or("");
@@ -72,29 +69,29 @@ fn handle(mut request: Request, env: &Environment<'_>, db_path: &str) -> Result<
 
     match path {
         "/" => respond(request, redirect("/users")),
-        "/users" => respond(request, page(env, db_path, "users.html", users)),
+        "/users" => respond(request, page(env, conn, "users.html", users)),
         "/users/new" if posted => {
             let form = read_body(&mut request);
             respond(
                 request,
-                page(env, db_path, "new_user.html", |conn| {
+                page(env, conn, "new_user.html", |conn| {
                     create_user(conn, &query(&form))
                 }),
             )
         }
         "/users/new" => respond(
             request,
-            page(env, db_path, "new_user.html", |_| Ok(new_user_form())),
+            page(env, conn, "new_user.html", |_| Ok(new_user_form())),
         ),
         "/mailbox" => respond(
             request,
-            page(env, db_path, "mailbox.html", |conn| {
+            page(env, conn, "mailbox.html", |conn| {
                 mailbox(conn, &query(raw_query))
             }),
         ),
         "/mailbox/message" => respond(
             request,
-            page(env, db_path, "message.html", |conn| {
+            page(env, conn, "message.html", |conn| {
                 message(conn, &query(raw_query))
             }),
         ),
@@ -120,12 +117,12 @@ fn logo() -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn page(
-    env: &Environment<'_>,
-    db_path: &str,
+    env: &MinijinjaEnv<'_>,
+    conn: &Arc<db::Database>,
     template: &str,
     build: impl FnOnce(&rusqlite::Connection) -> Result<minijinja::Value>,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
-    match render(env, db_path, template, build) {
+    match render(env, conn, template, build) {
         Ok(html) => html_response(200, html),
         Err(err) => {
             warn!(target: "web", "failed to render {template}: {err}");
@@ -135,16 +132,14 @@ fn page(
 }
 
 fn render(
-    env: &Environment<'_>,
-    db_path: &str,
+    env: &MinijinjaEnv<'_>,
+    conn: &Arc<db::Database>,
     template: &str,
     build: impl FnOnce(&rusqlite::Connection) -> Result<minijinja::Value>,
 ) -> Result<String> {
-    // A connection per request instead of one behind a lock: WAL lets these
-    // reads run alongside the session threads' writes.
-    let conn = db::open(db_path)?;
-
-    Ok(env.get_template(template)?.render(build(&conn)?)?)
+    Ok(env
+        .get_template(template)?
+        .render(build(&conn.get_conn())?)?)
 }
 
 fn users(conn: &rusqlite::Connection) -> Result<minijinja::Value> {

@@ -3,17 +3,18 @@ use std::{io, sync::Arc};
 use log::{debug, warn};
 
 use mail::{MailBroadcastServer, MailServer};
+use message::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody};
 use sentry::SentryServer;
 use vfs::{Vfs, VfsRequest};
 
 use crate::{
     db,
-    gridlink::vipc::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody},
     shared::FrameError,
     vfs::{FsProxy, VfsDirManager},
 };
 
 mod mail;
+mod message;
 mod vfs;
 
 pub mod protocol;

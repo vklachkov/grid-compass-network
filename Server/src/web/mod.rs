@@ -10,7 +10,7 @@ use minijinja::{Environment as MinijinjaEnv, context};
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::{db, db::mailbox, services::sentry::Authority};
+use crate::{db, db::mailbox, vipc::sentry::Authority};
 
 /// Templates are compiled in so a missing file fails the build rather than
 /// every page at runtime.
@@ -165,7 +165,7 @@ fn row(account: &db::Account) -> minijinja::Value {
     // constant rather than a property of the row, so printing it only invites
     // the reader to look for a difference that is not there.
     let authority = if account.level == db::LEVEL_USER {
-        crate::services::sentry::Authority::from_stored(account.authority).name()
+        crate::vipc::sentry::Authority::from_stored(account.authority).name()
     } else {
         ""
     };

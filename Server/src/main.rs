@@ -3,10 +3,9 @@ compile_error!("This project is only supported on Unix-like systems.");
 
 mod db;
 mod env;
-mod gridlink;
-mod gridserver;
+mod server;
 mod logger;
-mod services;
+mod vipc;
 mod shared;
 mod vfs;
 mod web;
@@ -39,7 +38,7 @@ fn run() -> anyhow::Result<()> {
         start_web(addr, Arc::clone(&conn));
     }
 
-    gridserver::serve(env, conn)
+    server::serve(env, conn)
 }
 
 fn read_and_log_env() -> anyhow::Result<Arc<Environment>> {

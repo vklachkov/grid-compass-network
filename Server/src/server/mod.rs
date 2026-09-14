@@ -1,3 +1,10 @@
+mod data_frame;
+mod frame;
+mod raw_frame;
+
+pub use data_frame::{ConnectHeader, DataFrameRequest, DataFrameResponse, SignOnProperty};
+pub use frame::{EOM_FLAG_ON, Frame, FrameBody};
+pub use raw_frame::RawFrame;
 use std::{
     any::Any,
     io,
@@ -16,8 +23,7 @@ use rusqlite::Connection;
 
 use crate::db;
 use crate::env::Environment;
-use crate::gridlink::*;
-use crate::services::{
+use crate::vipc::{
     Vipc,
     protocol::{property, status},
     sentry::Authority,

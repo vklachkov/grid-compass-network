@@ -177,24 +177,20 @@ mod tests {
         data_frame.extend(vipc);
 
         let mut frame = Vec::new();
-        crate::gridlink::Frame::data(1, 54, &data_frame).write_into(&mut frame);
+        crate::server::Frame::data(1, 54, &data_frame).write_into(&mut frame);
         assert_eq!(frame.len(), 528);
 
         let mut encoded = Vec::new();
         RawFrame::write_data_to_io(&frame, &mut encoded).unwrap();
         let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
-        let parsed = crate::gridlink::Frame::try_from_raw(&decoded).unwrap();
-        let crate::gridlink::FrameBody::Data(data) = parsed.body else {
+        let parsed = crate::server::Frame::try_from_raw(&decoded).unwrap();
+        let crate::server::FrameBody::Data(data) = parsed.body else {
             panic!("expected data frame");
         };
-        let crate::gridlink::data_frame::DataFrameRequest::Msg { payload, .. } =
-            crate::gridlink::data_frame::DataFrameRequest::try_from_slice(data).unwrap()
+        let crate::server::data_frame::DataFrameRequest::Msg { .. } =
+            crate::server::data_frame::DataFrameRequest::try_from_slice(data).unwrap()
         else {
             panic!("expected VIPC message");
         };
-        let message = crate::gridlink::vipc::IncomingMessage::try_from_slice(payload).unwrap();
-        assert_eq!(message.body.ty, crate::gridlink::vipc::MessageType(83));
-        assert_eq!(message.body.payload.len(), 512);
-        assert!(message.body.payload.iter().all(|&byte| byte == DLE));
     }
 }

@@ -23,13 +23,13 @@ use rusqlite::Connection;
 
 use crate::db;
 use crate::env::Environment;
+use crate::shared::{FrameError, bitmap::IdMap8};
+use crate::vfs::VfsDirManager;
 use crate::vipc::{
     Vipc,
     protocol::{property, status},
     sentry::Authority,
 };
-use crate::shared::{FrameError, bitmap::IdMap8};
-use crate::vfs::VfsDirManager;
 
 const STATUS_INVALID_PASSWORD: u16 = 1003; // eInvalidPassword
 const STATUS_UNKNOWN_USER: u16 = 1005; // eUnknownUser
@@ -122,7 +122,7 @@ fn worker(
     // unwinding here drops the socket and returns the connection id, and the
     // client is free to connect again.
     let served = panic::catch_unwind(AssertUnwindSafe(|| {
-        try_worker(client, addr, connection_id, conn, vfs_root)
+        try_worker(addr, client, connection_id, conn, vfs_root)
     }));
 
     match served {
@@ -143,15 +143,16 @@ fn panic_reason(payload: &(dyn Any + Send)) -> &str {
 }
 
 fn try_worker(
-    client: TcpStream,
     addr: SocketAddr,
+    client: TcpStream,
     connection_id: ConnectionId,
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
 ) -> io::Result<()> {
     let initial_seq_number = next_initial_seq_number();
 
-    let mut session = Session {
+    let session = Session {
+        addr,
         client,
         connection_id,
         last_seq_number: initial_seq_number,
@@ -162,30 +163,11 @@ fn try_worker(
         scratch: Scratch::default(),
     };
 
-    loop {
-        match RawFrame::read_from_io(&mut session.client) {
-            Ok(frame) => {
-                // println!("worker({addr}): received new frame");
-                if session.process_frame(frame)? == ProcessFrameResult::Disconnect {
-                    info!(target: "server", "worker({addr}): disconnect");
-                    return Ok(());
-                }
-            }
-            Err(FrameError::UnexpectedEof) => {
-                info!(target: "server", "worker({addr}): connection closed");
-                return Ok(());
-            }
-            Err(FrameError::Io(err)) => {
-                return Err(err);
-            }
-            Err(err) => {
-                return Err(io::Error::other(err));
-            }
-        }
-    }
+    session.run()
 }
 
 struct Session {
+    addr: SocketAddr,
     client: TcpStream,
     connection_id: ConnectionId,
     last_seq_number: u8,
@@ -211,6 +193,34 @@ struct Scratch {
 }
 
 impl Session {
+    fn run(mut self) -> io::Result<()> {
+        loop {
+            match self.read_frame() {
+                Ok(frame) => {
+                    // println!("worker({addr}): received new frame", addr=self.addr);
+                    if self.process_frame(frame)? == ProcessFrameResult::Disconnect {
+                        info!(target: "server", "worker({addr}): disconnect", addr=self.addr);
+                        return Ok(());
+                    }
+                }
+                Err(FrameError::UnexpectedEof) => {
+                    info!(target: "server", "worker({addr}): connection closed", addr=self.addr);
+                    return Ok(());
+                }
+                Err(FrameError::Io(err)) => {
+                    return Err(err);
+                }
+                Err(err) => {
+                    return Err(io::Error::other(err));
+                }
+            }
+        }
+    }
+
+    fn read_frame(&mut self) -> Result<RawFrame, FrameError> {
+        RawFrame::read_from_io(&mut self.client)
+    }
+
     fn process_frame(&mut self, raw: RawFrame) -> io::Result<ProcessFrameResult> {
         match self.process_frame_(raw) {
             Ok(result) => Ok(result),
@@ -233,7 +243,7 @@ impl Session {
                     self.last_seq_number,
                 );
                 self.recv_sequence = self.last_seq_number;
-                self.write_frame(Frame::rfc(self.connection_id.get(), self.last_seq_number))?;
+                self.write_frame(Frame::rfc)?;
             }
             FrameBody::Ack(_) => {
                 trace!(target: "session", "acknowledged seq={}", frame.seq_number);
@@ -244,7 +254,7 @@ impl Session {
             }
             FrameBody::Ping(_) => {
                 trace!(target: "session", "pinged, seq={}", self.recv_sequence);
-                self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
+                self.write_frame(Frame::ack)?;
             }
             FrameBody::Data(data) => {
                 let expected = self.recv_sequence.wrapping_add(1);
@@ -262,12 +272,12 @@ impl Session {
                         "ignored out-of-sequence data frame seq={}, expected={expected}",
                         frame.seq_number
                     );
-                    self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
+                    self.write_frame(Frame::ack)?;
                     return Ok(ProcessFrameResult::Continue);
                 }
 
                 self.recv_sequence = frame.seq_number;
-                self.write_frame(Frame::ack(self.connection_id.get(), self.recv_sequence))?;
+                self.write_frame(Frame::ack)?;
                 self.process_data_frame(data)?;
             }
         }
@@ -323,7 +333,7 @@ impl Session {
         self.scratch.body.clear();
         body.write_into(&mut self.scratch.body)?;
 
-        self.write_response()
+        self.send_response()
     }
 
     fn disconnect(&mut self, remote_path_id: u16, _reason: u16) -> Result<(), FrameError> {
@@ -341,7 +351,7 @@ impl Session {
         self.scratch.body.clear();
         body.write_into(&mut self.scratch.body)?;
 
-        self.write_response()
+        self.send_response()
     }
 
     fn sign_on(&mut self, properties: Vec<SignOnProperty<'_>>) -> Result<(), FrameError> {
@@ -376,7 +386,7 @@ impl Session {
         self.scratch.body.clear();
         body.write_into(&mut self.scratch.body)?;
 
-        self.write_response()
+        self.send_response()
     }
 
     fn sign_off(&mut self) -> Result<(), FrameError> {
@@ -416,13 +426,13 @@ impl Session {
             body.clear();
             response.write_into(body)?;
 
-            self.write_response()?;
+            self.send_response()?;
         }
 
         Ok(())
     }
 
-    fn write_response(&mut self) -> Result<(), FrameError> {
+    fn send_response(&mut self) -> Result<(), FrameError> {
         self.last_seq_number = self.last_seq_number.wrapping_add(1);
 
         let Scratch { body, frame, .. } = &mut self.scratch;
@@ -430,11 +440,31 @@ impl Session {
         frame.clear();
         Frame::data(EOM_FLAG_ON, self.last_seq_number, body).write_into(frame);
 
-        RawFrame::write_data_to_io(frame, &mut self.client)
+        RawFrame::write_data_to_io(frame, &mut self.client)?;
+
+        self.read_ack()
     }
 
-    fn write_frame(&mut self, frame: Frame<'_>) -> Result<(), FrameError> {
+    fn read_ack(&mut self) -> Result<(), FrameError> {
+        let raw_frame = self.read_frame()?;
+        let frame = Frame::try_from_raw(&raw_frame)?;
+
+        if let FrameBody::Ack(_) = frame.body {
+            Ok(())
+        } else {
+            Err(FrameError::Validation {
+                reason: "expected ack, got something else".to_owned(),
+            })
+        }
+    }
+
+    fn write_frame<'a, F>(&mut self, frame: F) -> Result<(), FrameError>
+    where
+        F: FnOnce(/* connection_id */ u8, /* seq_number */ u8) -> Frame<'a>,
+    {
         self.scratch.frame.clear();
+
+        let frame = frame(self.connection_id.get(), self.recv_sequence);
         frame.write_into(&mut self.scratch.frame);
 
         RawFrame::write_data_to_io(&self.scratch.frame, &mut self.client)
@@ -558,6 +588,7 @@ mod tests {
         let vfs_root = Arc::new(VfsDirManager::new(fs_root.path()).expect("open the test FS root"));
 
         let session = Session {
+            addr,
             client,
             connection_id: ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
                 .expect("take a connection id from an empty pool"),

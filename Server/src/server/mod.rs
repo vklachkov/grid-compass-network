@@ -8,22 +8,20 @@ pub use raw_frame::RawFrame;
 use std::{
     any::Any,
     io,
-    net::{SocketAddr, TcpListener, TcpStream},
     num::NonZeroU8,
     panic::{self, AssertUnwindSafe},
     sync::Arc,
     thread,
 };
 
-use anyhow::Context;
 use bstr::BStr;
 use log::{debug, error, info, trace, warn};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
 use crate::db;
-use crate::env::Environment;
 use crate::shared::{FrameError, bitmap::IdMap8};
+use crate::transport::Transport;
 use crate::vfs::VfsDirManager;
 use crate::vipc::{
     Vipc,
@@ -84,52 +82,53 @@ enum ProcessFrameResult {
     Disconnect,
 }
 
-pub fn serve(environment: Arc<Environment>, conn: Arc<db::Database>) -> anyhow::Result<()> {
-    let vfs_root = Arc::new(VfsDirManager::new(&environment.fs_root).context("vfs root")?);
+pub struct Server {
+    conn: Arc<db::Database>,
+    vfs_root: Arc<VfsDirManager>,
+    connection_ids: Arc<Mutex<IdMap8>>,
+}
 
-    let listener = TcpListener::bind(&environment.listen_addr)?;
-    let connection_ids = Arc::new(Mutex::new(IdMap8::new()));
+impl Server {
+    pub fn new(conn: Arc<db::Database>, vfs_root: Arc<VfsDirManager>) -> Self {
+        Self {
+            conn,
+            vfs_root,
+            connection_ids: Arc::new(Mutex::new(IdMap8::new())),
+        }
+    }
 
-    info!(target: "server", "start GRiD server at {}", environment.listen_addr);
-    loop {
-        match listener.accept() {
-            Ok((client, addr)) => {
-                let Some(connection_id) = ConnectionId::acquire(&connection_ids) else {
-                    error!(target: "server", "rejected client {addr}: no free connection id");
-                    continue;
-                };
-
-                info!(target: "server", "accepted client {addr} as connection {}", connection_id.get());
-                let conn = conn.clone();
-                let vfs_root = vfs_root.clone();
-                thread::spawn(move || worker(client, addr, connection_id, conn, vfs_root));
-            }
-            Err(err) => {
-                error!(target: "server", "failed to accept client: {err}");
-            }
+    pub fn spawn(&self, transport: impl Transport, peer: String) {
+        let Some(connection_id) = ConnectionId::acquire(&self.connection_ids) else {
+            error!(target: "server", "rejected client {peer}: no free connection id");
+            return;
         };
+
+        info!(target: "server", "accepted client {peer} as connection {}", connection_id.get());
+        let conn = self.conn.clone();
+        let vfs_root = self.vfs_root.clone();
+        thread::spawn(move || worker(transport, peer, connection_id, conn, vfs_root));
     }
 }
 
 fn worker(
-    client: TcpStream,
-    addr: SocketAddr,
+    transport: impl Transport,
+    peer: String,
     connection_id: ConnectionId,
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
 ) {
     // A session is the only thing a bug in request handling is allowed to cost:
-    // unwinding here drops the socket and returns the connection id, and the
+    // unwinding here drops the transport and returns the connection id, and the
     // client is free to connect again.
     let served = panic::catch_unwind(AssertUnwindSafe(|| {
-        try_worker(addr, client, connection_id, conn, vfs_root)
+        try_worker(peer.clone(), transport, connection_id, conn, vfs_root)
     }));
 
     match served {
         Ok(Ok(())) => {}
-        Ok(Err(err)) => error!(target: "server", "worker({addr}): fatal error: {err}"),
+        Ok(Err(err)) => error!(target: "server", "worker({peer}): fatal error: {err}"),
         Err(payload) => {
-            error!(target: "server", "worker({addr}): panicked: {}", panic_reason(&payload));
+            error!(target: "server", "worker({peer}): panicked: {}", panic_reason(&payload));
         }
     }
 }
@@ -143,8 +142,8 @@ fn panic_reason(payload: &(dyn Any + Send)) -> &str {
 }
 
 fn try_worker(
-    addr: SocketAddr,
-    client: TcpStream,
+    peer: String,
+    transport: impl Transport,
     connection_id: ConnectionId,
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
@@ -152,8 +151,8 @@ fn try_worker(
     let initial_seq_number = next_initial_seq_number();
 
     let session = Session {
-        addr,
-        client,
+        peer,
+        transport,
         connection_id,
         last_seq_number: initial_seq_number,
         recv_sequence: initial_seq_number,
@@ -166,9 +165,9 @@ fn try_worker(
     session.run()
 }
 
-struct Session {
-    addr: SocketAddr,
-    client: TcpStream,
+struct Session<T: Transport> {
+    peer: String,
+    transport: T,
     connection_id: ConnectionId,
     last_seq_number: u8,
     recv_sequence: u8,
@@ -192,19 +191,18 @@ struct Scratch {
     frame: Vec<u8>,
 }
 
-impl Session {
+impl<T: Transport> Session<T> {
     fn run(mut self) -> io::Result<()> {
         loop {
             match self.read_frame() {
                 Ok(frame) => {
-                    // println!("worker({addr}): received new frame", addr=self.addr);
                     if self.process_frame(frame)? == ProcessFrameResult::Disconnect {
-                        info!(target: "server", "worker({addr}): disconnect", addr=self.addr);
+                        info!(target: "server", "worker({peer}): disconnect", peer=self.peer);
                         return Ok(());
                     }
                 }
                 Err(FrameError::UnexpectedEof) => {
-                    info!(target: "server", "worker({addr}): connection closed", addr=self.addr);
+                    info!(target: "server", "worker({peer}): connection closed", peer=self.peer);
                     return Ok(());
                 }
                 Err(FrameError::Io(err)) => {
@@ -218,7 +216,7 @@ impl Session {
     }
 
     fn read_frame(&mut self) -> Result<RawFrame, FrameError> {
-        RawFrame::read_from_io(&mut self.client)
+        RawFrame::read_from_io(&mut self.transport)
     }
 
     fn process_frame(&mut self, raw: RawFrame) -> io::Result<ProcessFrameResult> {
@@ -440,7 +438,7 @@ impl Session {
         frame.clear();
         Frame::data(EOM_FLAG_ON, self.last_seq_number, body).write_into(frame);
 
-        RawFrame::write_data_to_io(frame, &mut self.client)?;
+        RawFrame::write_data_to_io(frame, &mut self.transport)?;
 
         self.read_ack()
     }
@@ -467,7 +465,7 @@ impl Session {
         let frame = frame(self.connection_id.get(), self.recv_sequence);
         frame.write_into(&mut self.scratch.frame);
 
-        RawFrame::write_data_to_io(&self.scratch.frame, &mut self.client)
+        RawFrame::write_data_to_io(&self.scratch.frame, &mut self.transport)
     }
 }
 
@@ -565,7 +563,7 @@ pub(crate) fn authenticate(
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
+    use std::{io::Read, os::unix::net::UnixStream};
 
     use tempfile::TempDir;
 
@@ -573,14 +571,8 @@ mod tests {
 
     use super::sign_on_properties as properties;
 
-    /// The gate lives in the session, not in `authenticate`, so binding it takes
-    /// a real session — and a session answers into a socket. A loopback pair is
-    /// the cheapest way to give it one and still read back what it wrote.
-    fn loopback() -> (TempDir, Session, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
-        let addr = listener.local_addr().expect("read the loopback address");
-        let peer = TcpStream::connect(addr).expect("connect to the loopback listener");
-        let (client, _) = listener.accept().expect("accept the loopback connection");
+    fn session_pair() -> (TempDir, Session<UnixStream>, UnixStream) {
+        let (transport, peer) = UnixStream::pair().expect("create a transport pair");
 
         let initial_seq_number = next_initial_seq_number();
 
@@ -588,8 +580,8 @@ mod tests {
         let vfs_root = Arc::new(VfsDirManager::new(fs_root.path()).expect("open the test FS root"));
 
         let session = Session {
-            addr,
-            client,
+            peer: "test".to_owned(),
+            transport,
             connection_id: ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
                 .expect("take a connection id from an empty pool"),
             last_seq_number: initial_seq_number,
@@ -603,7 +595,7 @@ mod tests {
         (fs_root, session, peer)
     }
 
-    fn read_response(peer: &mut TcpStream) -> Vec<u8> {
+    fn read_response(peer: &mut UnixStream) -> Vec<u8> {
         let raw = RawFrame::read_from_io(peer).expect("read a response frame");
         let frame = Frame::try_from_raw(&raw).expect("parse a response frame");
 
@@ -614,7 +606,8 @@ mod tests {
     }
 
     /// `<type:u16><local:u16><remote:u16><status:u16>`.
-    fn connect_status(session: &mut Session, peer: &mut TcpStream) -> u16 {
+    fn connect_status(session: &mut Session<UnixStream>, peer: &mut UnixStream) -> u16 {
+        acknowledge_response(session, peer);
         session
             .connect(1, BStr::new(b"Sentry"))
             .expect("answer the connect");
@@ -624,7 +617,12 @@ mod tests {
     }
 
     /// `<type:u16><status:u16><name>`.
-    fn sign_on_status(session: &mut Session, peer: &mut TcpStream, password: &[u8]) -> u16 {
+    fn sign_on_status(
+        session: &mut Session<UnixStream>,
+        peer: &mut UnixStream,
+        password: &[u8],
+    ) -> u16 {
+        acknowledge_response(session, peer);
         session
             .sign_on(properties(b"GRiD", b"Systems", b"MANAGER", password))
             .expect("answer the sign on");
@@ -633,7 +631,17 @@ mod tests {
         u16::from_le_bytes([body[2], body[3]])
     }
 
-    fn assert_silent(peer: &mut TcpStream) {
+    fn acknowledge_response(session: &Session<UnixStream>, peer: &mut UnixStream) {
+        let mut frame = Vec::new();
+        Frame::ack(
+            session.connection_id.get(),
+            session.last_seq_number.wrapping_add(1),
+        )
+        .write_into(&mut frame);
+        RawFrame::write_data_to_io(&frame, peer).expect("queue the response acknowledgement");
+    }
+
+    fn assert_silent(peer: &mut UnixStream) {
         peer.set_nonblocking(true).expect("stop blocking on reads");
 
         let read = peer.read(&mut [0; 1]);
@@ -648,7 +656,7 @@ mod tests {
 
     #[test]
     fn refuses_a_connect_before_sign_on() {
-        let (_fs_root, mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = session_pair();
 
         assert_eq!(
             connect_status(&mut session, &mut peer),
@@ -658,7 +666,7 @@ mod tests {
 
     #[test]
     fn refuses_a_connect_after_a_failed_sign_on() {
-        let (_fs_root, mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = session_pair();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"WRONG"),
@@ -672,7 +680,7 @@ mod tests {
 
     #[test]
     fn accepts_a_connect_once_signed_on() {
-        let (_fs_root, mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = session_pair();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"MANAGER"),
@@ -685,7 +693,7 @@ mod tests {
     /// would keep its reach over a link somebody else can now sign on to.
     #[test]
     fn signing_off_closes_the_gate_again() {
-        let (_fs_root, mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = session_pair();
 
         assert_eq!(
             sign_on_status(&mut session, &mut peer, b"MANAGER"),
@@ -703,7 +711,7 @@ mod tests {
     /// only be silence — and silence is what has to be asserted.
     #[test]
     fn drops_a_message_before_sign_on() {
-        let (_fs_root, mut session, mut peer) = loopback();
+        let (_fs_root, mut session, mut peer) = session_pair();
 
         let header = ConnectHeader {
             local_path_id: 1,

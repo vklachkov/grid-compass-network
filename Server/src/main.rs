@@ -3,11 +3,12 @@ compile_error!("This project is only supported on Unix-like systems.");
 
 mod db;
 mod env;
-mod server;
 mod logger;
-mod vipc;
+mod server;
 mod shared;
+mod transport;
 mod vfs;
+mod vipc;
 mod web;
 
 use std::{process::ExitCode, sync::Arc, thread};
@@ -38,7 +39,10 @@ fn run() -> anyhow::Result<()> {
         start_web(addr, Arc::clone(&conn));
     }
 
-    server::serve(env, conn)
+    let vfs_root = Arc::new(vfs::VfsDirManager::new(&env.fs_root).context("vfs root")?);
+    let server = server::Server::new(conn, vfs_root);
+
+    transport::tcp::serve(&env.listen_addr, server).context("TCP transport")
 }
 
 fn read_and_log_env() -> anyhow::Result<Arc<Environment>> {

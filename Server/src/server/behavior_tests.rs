@@ -226,25 +226,24 @@ impl Harness {
         for id in 1..CONNECTION_ID {
             ids.lock().set(NonZeroU8::new(id).unwrap());
         }
+        let transport = TestTransport {
+            input: Cursor::new(input),
+            capture: capture.clone(),
+            max_read: usize::MAX,
+            max_write: usize::MAX,
+            read_error: None,
+            write_error: None,
+        };
+        let connection_id = ConnectionId::acquire(&ids).expect("connection id");
+        assert_eq!(connection_id.get(), CONNECTION_ID);
         let session = Session {
             peer: "scripted transport".to_owned(),
-            transport: TestTransport {
-                input: Cursor::new(input),
-                capture: capture.clone(),
-                max_read: usize::MAX,
-                max_write: usize::MAX,
-                read_error: None,
-                write_error: None,
-            },
-            connection_id: ConnectionId::acquire(&ids).expect("connection id"),
-            last_seq_number: INITIAL_SEQUENCE,
-            recv_sequence: INITIAL_SEQUENCE,
+            link: PdlLink::new(transport, connection_id, INITIAL_SEQUENCE),
             vipc: None,
             conn: db::Database::open_in_memory(),
             vfs_root: Arc::new(VfsDirManager::new(root.path()).expect("open VFS root")),
             scratch: Scratch::default(),
         };
-        assert_eq!(session.connection_id.get(), CONNECTION_ID);
         Self {
             session,
             capture,
@@ -315,8 +314,8 @@ mod link {
         exchange.disconnect();
         for (read, write) in [(1, 1), (2, 3), (7, 5)] {
             let mut harness = Harness::new(exchange.incoming.clone());
-            harness.session.transport.max_read = read;
-            harness.session.transport.max_write = write;
+            harness.session.link.transport_mut().max_read = read;
+            harness.session.link.transport_mut().max_write = write;
             let (result, capture) = harness.run();
             result.expect("serve with partial I/O");
             assert_eq!(
@@ -348,7 +347,7 @@ mod link {
         let mut exchange = Conversation::new();
         exchange.handshake();
         let mut harness = Harness::new(exchange.incoming.clone());
-        harness.session.transport.read_error =
+        harness.session.link.transport_mut().read_error =
             Some((exchange.incoming.len(), io::ErrorKind::ConnectionReset));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
@@ -362,7 +361,7 @@ mod link {
         let failure_at = exchange.expected.len() + wire(&ack(0x1d)).len() + 3;
         exchange.sign_on();
         let mut harness = Harness::new(exchange.incoming);
-        harness.session.transport.write_error =
+        harness.session.link.transport_mut().write_error =
             Some((failure_at, io::ErrorKind::BrokenPipe));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);

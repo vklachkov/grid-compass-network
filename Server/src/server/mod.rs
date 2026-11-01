@@ -1,13 +1,17 @@
 mod data_frame;
 mod frame;
+mod link;
 mod raw_frame;
 
 #[cfg(test)]
 mod behavior_tests;
 
 pub use data_frame::{ConnectHeader, DataFrameRequest, DataFrameResponse, SignOnProperty};
-pub use frame::{EOM_FLAG_ON, Frame, FrameBody};
-pub use raw_frame::RawFrame;
+#[cfg(test)]
+use frame::{Frame, FrameBody};
+use link::{PdlLink, next_initial_seq_number};
+#[cfg(test)]
+use raw_frame::RawFrame;
 use std::{
     any::Any,
     io,
@@ -18,7 +22,7 @@ use std::{
 };
 
 use bstr::BStr;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
@@ -64,25 +68,6 @@ impl Drop for ConnectionId {
     fn drop(&mut self) {
         self.pool.lock().clear(self.id);
     }
-}
-
-/// Both sides of a link start counting from the number the server picks here and
-/// announces in its RFC response, so a link that outlives a reboot of either end
-/// cannot be resumed by a stale peer that guessed where the count was. The
-/// original drew it from one shared generator per server, reproduced here.
-fn next_initial_seq_number() -> u8 {
-    static STATE: Mutex<u16> = Mutex::new(5);
-
-    let mut state = STATE.lock();
-    *state = state.wrapping_mul(2005).wrapping_add(4227);
-
-    *state as u8
-}
-
-#[derive(PartialEq, Eq)]
-enum ProcessFrameResult {
-    Continue,
-    Disconnect,
 }
 
 pub struct Server {
@@ -155,10 +140,7 @@ fn try_worker(
 
     let session = Session {
         peer,
-        transport,
-        connection_id,
-        last_seq_number: initial_seq_number,
-        recv_sequence: initial_seq_number,
+        link: PdlLink::new(transport, connection_id, initial_seq_number),
         vipc: None,
         conn,
         vfs_root,
@@ -170,20 +152,13 @@ fn try_worker(
 
 struct Session<T: Transport> {
     peer: String,
-    transport: T,
-    connection_id: ConnectionId,
-    last_seq_number: u8,
-    recv_sequence: u8,
+    link: PdlLink<T>,
     /// Built by sign-on and dropped by sign-off: every resource this server
     /// offers is reached through it, so an unauthenticated link has nothing to
     /// address at all.
     vipc: Option<Box<Vipc>>,
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
-    /// Reused for serializing outgoing frames, one buffer per nesting level:
-    /// the VIPC message, the data frame around it and the PDL frame around
-    /// that. Frames are bounded by `MAX_FRAME_SIZE`, so after the first few
-    /// responses these stop growing and the send path allocates nothing.
     scratch: Scratch,
 }
 
@@ -191,20 +166,19 @@ struct Session<T: Transport> {
 struct Scratch {
     message: Vec<u8>,
     body: Vec<u8>,
-    frame: Vec<u8>,
 }
 
 impl<T: Transport> Session<T> {
     fn run(mut self) -> io::Result<()> {
         loop {
-            match self.read_frame() {
-                Ok(frame) => {
-                    if self.process_frame(frame)? == ProcessFrameResult::Disconnect {
-                        info!(target: "server", "worker({peer}): disconnect", peer=self.peer);
-                        return Ok(());
-                    }
+            match self.link.receive_data() {
+                Ok(Some(data)) => {
+                    self.process_data_frame(&data).map_err(|err| match err {
+                        FrameError::Io(err) => err,
+                        err => io::Error::other(err),
+                    })?;
                 }
-                Err(FrameError::UnexpectedEof) => {
+                Ok(None) => {
                     info!(target: "server", "worker({peer}): connection closed", peer=self.peer);
                     return Ok(());
                 }
@@ -216,74 +190,6 @@ impl<T: Transport> Session<T> {
                 }
             }
         }
-    }
-
-    fn read_frame(&mut self) -> Result<RawFrame, FrameError> {
-        RawFrame::read_from_io(&mut self.transport)
-    }
-
-    fn process_frame(&mut self, raw: RawFrame) -> io::Result<ProcessFrameResult> {
-        match self.process_frame_(raw) {
-            Ok(result) => Ok(result),
-            Err(FrameError::Io(err)) => Err(err),
-            Err(err) => Err(io::Error::other(err)),
-        }
-    }
-
-    fn process_frame_(&mut self, raw: RawFrame) -> Result<ProcessFrameResult, FrameError> {
-        let frame = Frame::try_from_raw(&raw)?;
-
-        trace!(target: "session", "received {frame:?}");
-
-        match frame.body {
-            FrameBody::Rfc(body) => {
-                debug!(
-                    target: "session",
-                    "requested a connection, version {:?}, seq={}",
-                    BStr::new(&body.version),
-                    self.last_seq_number,
-                );
-                self.recv_sequence = self.last_seq_number;
-                self.write_frame(Frame::rfc)?;
-            }
-            FrameBody::Ack(_) => {
-                trace!(target: "session", "acknowledged seq={}", frame.seq_number);
-            }
-            FrameBody::Disc(_) => {
-                debug!(target: "session", "requested a link disconnect");
-                return Ok(ProcessFrameResult::Disconnect);
-            }
-            FrameBody::Ping(_) => {
-                trace!(target: "session", "pinged, seq={}", self.recv_sequence);
-                self.write_frame(Frame::ack)?;
-            }
-            FrameBody::Data(data) => {
-                let expected = self.recv_sequence.wrapping_add(1);
-                if frame.seq_number == self.recv_sequence {
-                    trace!(
-                        target: "session",
-                        "ignored duplicate data frame seq={}",
-                        frame.seq_number
-                    );
-                    return Ok(ProcessFrameResult::Continue);
-                }
-                if frame.seq_number != expected {
-                    warn!(
-                        target: "session",
-                        "ignored out-of-sequence data frame seq={}, expected={expected}",
-                        frame.seq_number
-                    );
-                    self.write_frame(Frame::ack)?;
-                    return Ok(ProcessFrameResult::Continue);
-                }
-
-                self.recv_sequence = frame.seq_number;
-                self.write_frame(Frame::ack)?;
-                self.process_data_frame(data)?;
-            }
-        }
-
-        Ok(ProcessFrameResult::Continue)
     }
 
     #[rustfmt::skip]
@@ -434,41 +340,7 @@ impl<T: Transport> Session<T> {
     }
 
     fn send_response(&mut self) -> Result<(), FrameError> {
-        self.last_seq_number = self.last_seq_number.wrapping_add(1);
-
-        let Scratch { body, frame, .. } = &mut self.scratch;
-
-        frame.clear();
-        Frame::data(EOM_FLAG_ON, self.last_seq_number, body).write_into(frame);
-
-        RawFrame::write_data_to_io(frame, &mut self.transport)?;
-
-        self.read_ack()
-    }
-
-    fn read_ack(&mut self) -> Result<(), FrameError> {
-        let raw_frame = self.read_frame()?;
-        let frame = Frame::try_from_raw(&raw_frame)?;
-
-        if let FrameBody::Ack(_) = frame.body {
-            Ok(())
-        } else {
-            Err(FrameError::Validation {
-                reason: "expected ack, got something else".to_owned(),
-            })
-        }
-    }
-
-    fn write_frame<'a, F>(&mut self, frame: F) -> Result<(), FrameError>
-    where
-        F: FnOnce(/* connection_id */ u8, /* seq_number */ u8) -> Frame<'a>,
-    {
-        self.scratch.frame.clear();
-
-        let frame = frame(self.connection_id.get(), self.recv_sequence);
-        frame.write_into(&mut self.scratch.frame);
-
-        RawFrame::write_data_to_io(&self.scratch.frame, &mut self.transport)
+        self.link.send_data(&self.scratch.body)
     }
 }
 
@@ -584,11 +456,12 @@ mod tests {
 
         let session = Session {
             peer: "test".to_owned(),
-            transport,
-            connection_id: ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
-                .expect("take a connection id from an empty pool"),
-            last_seq_number: initial_seq_number,
-            recv_sequence: initial_seq_number,
+            link: PdlLink::new(
+                transport,
+                ConnectionId::acquire(&Arc::new(Mutex::new(IdMap8::new())))
+                    .expect("take a connection id from an empty pool"),
+                initial_seq_number,
+            ),
             vipc: None,
             conn: db::users::tests::demo_database(),
             vfs_root,
@@ -635,12 +508,7 @@ mod tests {
     }
 
     fn acknowledge_response(session: &Session<UnixStream>, peer: &mut UnixStream) {
-        let mut frame = Vec::new();
-        Frame::ack(
-            session.connection_id.get(),
-            session.last_seq_number.wrapping_add(1),
-        )
-        .write_into(&mut frame);
+        let frame = session.link.next_response_ack();
         RawFrame::write_data_to_io(&frame, peer).expect("queue the response acknowledgement");
     }
 

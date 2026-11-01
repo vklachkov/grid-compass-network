@@ -183,7 +183,7 @@ mod tests {
         let mut encoded = Vec::new();
         RawFrame::write_data_to_io(&frame, &mut encoded).unwrap();
         let decoded = RawFrame::read_from_io(encoded.as_slice()).unwrap();
-        let parsed = crate::server::Frame::try_from_raw(&decoded).unwrap();
+        let parsed = crate::server::Frame::try_from_slice(&decoded.data).unwrap();
         let crate::server::FrameBody::Data(data) = parsed.body else {
             panic!("expected data frame");
         };

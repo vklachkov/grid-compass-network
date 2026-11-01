@@ -1,6 +1,5 @@
 use std::io;
 
-use super::raw_frame::RawFrame;
 use crate::shared::{FrameError, io::ReadExt};
 
 /// End-of-message flag.
@@ -10,11 +9,11 @@ pub const EOM_FLAG_ON: u8 = 1;
 const PDL_VERSION: [u8; 2] = *b"02";
 
 #[derive(Clone, Copy, Debug)]
-pub struct Frame<'a> {
+pub struct Frame<D> {
     pub flags: u8,
     pub window_size: u8,
     pub seq_number: u8,
-    pub body: FrameBody<'a>,
+    pub body: FrameBody<D>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -41,12 +40,12 @@ impl FrameType {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum FrameBody<'a> {
+pub enum FrameBody<D> {
     Rfc(RfcFrameBody),
     Ack(ShortFrameBody),
     Disc(ShortFrameBody),
     Ping(ShortFrameBody),
-    Data(&'a [u8]),
+    Data(D),
 }
 
 // RxShortBufferDescType
@@ -62,7 +61,7 @@ pub struct ShortFrameBody {
     pub connection_id: u8,
 }
 
-impl<'a> Frame<'a> {
+impl<'a> Frame<&'a [u8]> {
     pub fn rfc(conn_id: u8, seq_number: u8) -> Self {
         Frame {
             flags: EOM_FLAG_ON,
@@ -95,8 +94,8 @@ impl<'a> Frame<'a> {
         }
     }
 
-    pub fn try_from_raw(raw: &'a RawFrame) -> Result<Self, FrameError> {
-        let mut cursor = io::Cursor::new(&raw.data);
+    pub fn try_from_slice(data: &'a [u8]) -> Result<Self, FrameError> {
+        let mut cursor = io::Cursor::new(data);
 
         let [ty, flags, window_size, seq_number] = cursor.read_array()?;
 
@@ -121,10 +120,7 @@ impl<'a> Frame<'a> {
                 connection_id: cursor.read_u8()?,
             }),
             FrameType::Data => {
-                let body = raw
-                    .data
-                    .get(cursor.position() as usize..)
-                    .unwrap_or_default();
+                let body = data.get(cursor.position() as usize..).unwrap_or_default();
                 FrameBody::Data(body)
             }
         };
@@ -138,16 +134,46 @@ impl<'a> Frame<'a> {
             body,
         })
     }
+}
 
-    /// Writing into a caller owned buffer lets a session reuse one allocation
-    /// for every frame it sends instead of building a fresh `Vec` per response.
+impl Frame<Vec<u8>> {
+    pub fn try_from_vec(mut data: Vec<u8>) -> Result<Self, FrameError> {
+        let frame = Frame::try_from_slice(&data)?;
+        let body = match frame.body {
+            FrameBody::Rfc(body) => FrameBody::Rfc(body),
+            FrameBody::Ack(body) => FrameBody::Ack(body),
+            FrameBody::Disc(body) => FrameBody::Disc(body),
+            FrameBody::Ping(body) => FrameBody::Ping(body),
+            FrameBody::Data(_) => {
+                let flags = frame.flags;
+                let window_size = frame.window_size;
+                let seq_number = frame.seq_number;
+                data.drain(..4);
+                return Ok(Self {
+                    flags,
+                    window_size,
+                    seq_number,
+                    body: FrameBody::Data(data),
+                });
+            }
+        };
+        Ok(Self {
+            flags: frame.flags,
+            window_size: frame.window_size,
+            seq_number: frame.seq_number,
+            body,
+        })
+    }
+}
+
+impl<D: AsRef<[u8]>> Frame<D> {
     pub fn write_into(&self, dst: &mut Vec<u8>) {
         dst.push(self.body.repr());
         dst.push(self.flags);
         dst.push(self.window_size);
         dst.push(self.seq_number);
 
-        match self.body {
+        match &self.body {
             FrameBody::Rfc(body) => {
                 dst.push(body.connection_id);
                 dst.extend_from_slice(&body.version);
@@ -156,14 +182,14 @@ impl<'a> Frame<'a> {
                 dst.push(body.connection_id);
             }
             FrameBody::Data(body) => {
-                dst.extend_from_slice(body);
+                dst.extend_from_slice(body.as_ref());
             }
         }
     }
 }
 
-impl FrameBody<'_> {
-    fn repr(self) -> u8 {
+impl<D> FrameBody<D> {
+    fn repr(&self) -> u8 {
         (match self {
             FrameBody::Rfc(_) => FrameType::Rfc,
             FrameBody::Ack(_) => FrameType::Ack,

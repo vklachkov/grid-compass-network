@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use super::{
     ConnectionId,
     frame::{EOM_FLAG_ON, Frame, FrameBody},
-    raw_frame::RawFrame,
+    frame_io::FrameIo,
 };
 use crate::{shared::FrameError, transport::Transport};
 
@@ -21,39 +21,36 @@ pub(super) fn next_initial_seq_number() -> u8 {
 }
 
 pub(super) struct PdlLink<T: Transport> {
-    transport: T,
+    io: FrameIo<T>,
     connection_id: ConnectionId,
     last_seq_number: u8,
     recv_sequence: u8,
-    frame: Vec<u8>,
 }
 
 #[cfg(test)]
 impl<T: Transport> PdlLink<T> {
     pub(super) fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
+        self.io.transport_mut()
     }
 }
 
 impl<T: Transport> PdlLink<T> {
     pub(super) fn new(transport: T, connection_id: ConnectionId, initial_sequence: u8) -> Self {
         Self {
-            transport,
+            io: FrameIo::new(transport),
             connection_id,
             last_seq_number: initial_sequence,
             recv_sequence: initial_sequence,
-            frame: Vec::new(),
         }
     }
 
     pub(super) fn receive_data(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
         loop {
-            let mut raw = match self.read_frame() {
-                Ok(raw) => raw,
-                Err(FrameError::UnexpectedEof) => return Ok(None),
+            let frame = match self.io.receive_frame() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => return Ok(None),
                 Err(err) => return Err(err),
             };
-            let frame = Frame::try_from_raw(&raw)?;
 
             trace!(target: "session", "received {frame:?}");
 
@@ -99,11 +96,9 @@ impl<T: Transport> PdlLink<T> {
                         continue;
                     }
 
-                    let header_length = raw.data.len() - data.len();
                     self.recv_sequence = frame.seq_number;
                     self.write_frame(Frame::ack)?;
-                    raw.data.drain(..header_length);
-                    return Ok(Some(raw.data));
+                    return Ok(Some(data));
                 }
             }
         }
@@ -111,19 +106,13 @@ impl<T: Transport> PdlLink<T> {
 
     pub(super) fn send_data(&mut self, data: &[u8]) -> Result<(), FrameError> {
         self.last_seq_number = self.last_seq_number.wrapping_add(1);
-        self.frame.clear();
-        Frame::data(EOM_FLAG_ON, self.last_seq_number, data).write_into(&mut self.frame);
-        RawFrame::write_data_to_io(&self.frame, &mut self.transport)?;
+        self.io
+            .send_frame(Frame::data(EOM_FLAG_ON, self.last_seq_number, data))?;
         self.read_ack()
     }
 
-    fn read_frame(&mut self) -> Result<RawFrame, FrameError> {
-        RawFrame::read_from_io(&mut self.transport)
-    }
-
     fn read_ack(&mut self) -> Result<(), FrameError> {
-        let raw = self.read_frame()?;
-        let frame = Frame::try_from_raw(&raw)?;
+        let frame = self.io.receive_frame()?.ok_or(FrameError::UnexpectedEof)?;
         if let FrameBody::Ack(_) = frame.body {
             Ok(())
         } else {
@@ -135,11 +124,9 @@ impl<T: Transport> PdlLink<T> {
 
     fn write_frame<'a>(
         &mut self,
-        frame: impl FnOnce(u8, u8) -> Frame<'a>,
+        frame: impl FnOnce(u8, u8) -> Frame<&'a [u8]>,
     ) -> Result<(), FrameError> {
-        self.frame.clear();
         let frame = frame(self.connection_id.get(), self.recv_sequence);
-        frame.write_into(&mut self.frame);
-        RawFrame::write_data_to_io(&self.frame, &mut self.transport)
+        self.io.send_frame(frame)
     }
 }

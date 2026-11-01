@@ -1,5 +1,6 @@
 mod data_frame;
 mod frame;
+mod frame_io;
 mod link;
 mod raw_frame;
 mod session;

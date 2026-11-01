@@ -33,16 +33,6 @@ impl<T: Transport> PdlLink<T> {
     pub(super) fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }
-
-    pub(super) fn next_response_ack(&self) -> Vec<u8> {
-        let mut frame = Vec::new();
-        Frame::ack(
-            self.connection_id.get(),
-            self.last_seq_number.wrapping_add(1),
-        )
-        .write_into(&mut frame);
-        frame
-    }
 }
 
 impl<T: Transport> PdlLink<T> {

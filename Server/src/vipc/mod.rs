@@ -3,7 +3,8 @@ use std::{io, sync::Arc};
 use log::{debug, warn};
 
 use mail::{MailBroadcastServer, MailServer};
-use message::{IncomingMessage, MessageType, OutgoingMessage, OutgoingMessageBody};
+pub(crate) use message::OutgoingMessage;
+use message::{IncomingMessage, MessageType, OutgoingMessageBody};
 use sentry::SentryServer;
 use vfs::{Vfs, VfsRequest};
 

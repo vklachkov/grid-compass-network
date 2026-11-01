@@ -2,6 +2,7 @@ use std::io::{self, Cursor, Read, Write};
 
 use tempfile::TempDir;
 
+use super::raw_frame::RawFrame;
 use super::*;
 
 const INITIAL_SEQUENCE: u8 = 0x1c;
@@ -212,7 +213,9 @@ impl Write for TestTransport {
 }
 
 struct Harness {
-    session: Session<TestTransport>,
+    session: Session,
+    link: PdlLink<TestTransport>,
+    conn: Arc<db::Database>,
     capture: Arc<Mutex<Capture>>,
     ids: Arc<Mutex<IdMap8>>,
     _root: TempDir,
@@ -236,16 +239,16 @@ impl Harness {
         };
         let connection_id = ConnectionId::acquire(&ids).expect("connection id");
         assert_eq!(connection_id.get(), CONNECTION_ID);
-        let session = Session {
-            peer: "scripted transport".to_owned(),
-            link: PdlLink::new(transport, connection_id, INITIAL_SEQUENCE),
-            vipc: None,
-            conn: db::Database::open_in_memory(),
-            vfs_root: Arc::new(VfsDirManager::new(root.path()).expect("open VFS root")),
-            scratch: Scratch::default(),
-        };
+        let link = PdlLink::new(transport, connection_id, INITIAL_SEQUENCE);
+        let conn = db::Database::open_in_memory();
+        let session = Session::new(
+            conn.clone(),
+            Arc::new(VfsDirManager::new(root.path()).expect("open VFS root")),
+        );
         Self {
             session,
+            link,
+            conn,
             capture,
             ids,
             _root: root,
@@ -253,7 +256,7 @@ impl Harness {
     }
 
     fn run(self) -> (io::Result<()>, Capture) {
-        let result = self.session.run();
+        let result = run_session("scripted transport", self.link, self.session);
         assert!(
             !self
                 .ids
@@ -314,8 +317,8 @@ mod link {
         exchange.disconnect();
         for (read, write) in [(1, 1), (2, 3), (7, 5)] {
             let mut harness = Harness::new(exchange.incoming.clone());
-            harness.session.link.transport_mut().max_read = read;
-            harness.session.link.transport_mut().max_write = write;
+            harness.link.transport_mut().max_read = read;
+            harness.link.transport_mut().max_write = write;
             let (result, capture) = harness.run();
             result.expect("serve with partial I/O");
             assert_eq!(
@@ -347,7 +350,7 @@ mod link {
         let mut exchange = Conversation::new();
         exchange.handshake();
         let mut harness = Harness::new(exchange.incoming.clone());
-        harness.session.link.transport_mut().read_error =
+        harness.link.transport_mut().read_error =
             Some((exchange.incoming.len(), io::ErrorKind::ConnectionReset));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
@@ -361,8 +364,7 @@ mod link {
         let failure_at = exchange.expected.len() + wire(&ack(0x1d)).len() + 3;
         exchange.sign_on();
         let mut harness = Harness::new(exchange.incoming);
-        harness.session.link.transport_mut().write_error =
-            Some((failure_at, io::ErrorKind::BrokenPipe));
+        harness.link.transport_mut().write_error = Some((failure_at, io::ErrorKind::BrokenPipe));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(capture.bytes, exchange.expected[..failure_at]);
@@ -418,7 +420,7 @@ mod link {
         let harness = Harness::new(exchange.incoming);
         for subject in ["first", "other"] {
             db::mailbox::insert(
-                &harness.session.conn.get_conn(),
+                &harness.conn.get_conn(),
                 &db::mailbox::NewMessage {
                     sender_id: 1,
                     recipient_id: 1,

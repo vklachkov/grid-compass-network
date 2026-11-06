@@ -1,0 +1,9 @@
+docs/
+logs/
+target/
+target-data/
+
+.gitignore
+rustfmt.toml
+
+Dockerfile

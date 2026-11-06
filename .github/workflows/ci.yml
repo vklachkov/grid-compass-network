@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Build
+        working-directory: Server
+        run: cargo build --locked --release
+
+      - name: Test
+        working-directory: Server
+        run: cargo test --locked
+
+      - name: Come up with the artifact name
+        run: echo "ARTIFACT_NAME=setochka-${GITHUB_SHA::7}-linux_x86-64" >> "$GITHUB_ENV"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: Server/target/release/setochka

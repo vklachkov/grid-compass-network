@@ -1,3 +1,4 @@
+pub mod serial;
 pub mod tcp;
 
 use std::io::{Read, Write};

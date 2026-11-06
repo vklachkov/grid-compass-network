@@ -38,6 +38,8 @@ Do not write code, tests or something that user does not request.
 
 Avoid comments, write self-documenting code, except adding comments where they are really necessary and explain the reasoning behind a particular decision.
 
+When reimplementing, should regularly refer to the original GRiD source code as a reference.
+
 ## Issue and PR Guidelines
 
 - Never create a PR.

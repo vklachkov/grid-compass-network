@@ -1,4 +1,7 @@
-use std::io;
+use std::{borrow::Cow, io};
+
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 
 use crate::shared::{FrameError, io::ReadExt};
 
@@ -8,15 +11,15 @@ pub const EOM_FLAG_ON: u8 = 1;
 /// Phone data link protocol version bytes.
 const PDL_VERSION: [u8; 2] = *b"02";
 
-#[derive(Clone, Copy, Debug)]
-pub struct Frame<D> {
+#[derive(Clone, Debug)]
+pub struct Frame<'body> {
     pub flags: u8,
     pub window_size: u8,
     pub seq_number: u8,
-    pub body: FrameBody<D>,
+    pub body: FrameBody<'body>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromPrimitive)]
 #[repr(u8)]
 enum FrameType {
     Rfc = 1,
@@ -26,48 +29,35 @@ enum FrameType {
     Data = 5,
 }
 
-impl FrameType {
-    fn from_repr(value: u8) -> Option<Self> {
-        Some(match value {
-            1 => Self::Rfc,
-            2 => Self::Ack,
-            3 => Self::Disc,
-            4 => Self::Ping,
-            5 => Self::Data,
-            _ => return None,
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum FrameBody<D> {
-    Rfc(RfcFrameBody),
-    Ack(ShortFrameBody),
-    Disc(ShortFrameBody),
-    Ping(ShortFrameBody),
-    Data(D),
+#[derive(Clone, Debug)]
+pub enum FrameBody<'data> {
+    Rfc(RfcBody),
+    Ack(ConnectionBody),
+    Disc(ConnectionBody),
+    Ping(ConnectionBody),
+    Data(Cow<'data, [u8]>),
 }
 
 // RxShortBufferDescType
 #[derive(Clone, Copy, Debug)]
-pub struct RfcFrameBody {
+pub struct RfcBody {
     pub connection_id: u8,
     pub version: [u8; 2],
 }
 
 // RxShortBufferDescType
 #[derive(Clone, Copy, Debug)]
-pub struct ShortFrameBody {
+pub struct ConnectionBody {
     pub connection_id: u8,
 }
 
-impl<'a> Frame<&'a [u8]> {
+impl<'body> Frame<'body> {
     pub fn rfc(conn_id: u8, seq_number: u8) -> Self {
         Frame {
             flags: EOM_FLAG_ON,
             window_size: 1,
             seq_number,
-            body: FrameBody::Rfc(RfcFrameBody {
+            body: FrameBody::Rfc(RfcBody {
                 connection_id: conn_id,
                 version: PDL_VERSION,
             }),
@@ -79,13 +69,13 @@ impl<'a> Frame<&'a [u8]> {
             flags: EOM_FLAG_ON,
             window_size: b'A',
             seq_number,
-            body: FrameBody::Ack(ShortFrameBody {
+            body: FrameBody::Ack(ConnectionBody {
                 connection_id: conn_id,
             }),
         }
     }
 
-    pub fn data(flags: u8, seq_number: u8, body: &'a [u8]) -> Self {
+    pub fn data(flags: u8, seq_number: u8, body: Cow<'body, [u8]>) -> Self {
         Self {
             flags,
             window_size: b'D',
@@ -94,38 +84,54 @@ impl<'a> Frame<&'a [u8]> {
         }
     }
 
-    pub fn try_from_slice(data: &'a [u8]) -> Result<Self, FrameError> {
-        let mut cursor = io::Cursor::new(data);
+    pub fn deserialize(data: Cow<'body, [u8]>) -> Result<Self, FrameError> {
+        let mut cursor = io::Cursor::new(data.as_ref());
 
         let [ty, flags, window_size, seq_number] = cursor.read_array()?;
 
-        let Some(ty) = FrameType::from_repr(ty) else {
+        let Some(ty) = FrameType::from_u8(ty) else {
             return Err(FrameError::Validation {
                 reason: format!("unknown frame type {ty:#04x}"),
             });
         };
 
         let body = match ty {
-            FrameType::Rfc => FrameBody::Rfc(RfcFrameBody {
+            FrameType::Rfc => FrameBody::Rfc(RfcBody {
                 connection_id: cursor.read_u8()?,
                 version: cursor.read_array()?,
             }),
-            FrameType::Ack => FrameBody::Ack(ShortFrameBody {
+            FrameType::Ack => FrameBody::Ack(ConnectionBody {
                 connection_id: cursor.read_u8()?,
             }),
-            FrameType::Disc => FrameBody::Disc(ShortFrameBody {
+            FrameType::Disc => FrameBody::Disc(ConnectionBody {
                 connection_id: cursor.read_u8()?,
             }),
-            FrameType::Ping => FrameBody::Ping(ShortFrameBody {
+            FrameType::Ping => FrameBody::Ping(ConnectionBody {
                 connection_id: cursor.read_u8()?,
             }),
             FrameType::Data => {
-                let body = data.get(cursor.position() as usize..).unwrap_or_default();
-                FrameBody::Data(body)
+                let offset = cursor.position() as usize;
+                let body = match data {
+                    Cow::Borrowed(bytes) => Cow::Borrowed(&bytes[offset..]),
+                    Cow::Owned(mut bytes) => {
+                        bytes.drain(..offset);
+                        Cow::Owned(bytes)
+                    }
+                };
+                return Ok(Self {
+                    flags,
+                    window_size,
+                    seq_number,
+                    body: FrameBody::Data(body),
+                });
             }
         };
 
-        // TODO: check that the buffer has no unparsed fields left.
+        if cursor.position() != data.len() as u64 {
+            return Err(FrameError::Validation {
+                reason: "trailing bytes in a control frame".to_owned(),
+            });
+        }
 
         Ok(Self {
             flags,
@@ -136,59 +142,40 @@ impl<'a> Frame<&'a [u8]> {
     }
 }
 
-impl Frame<Vec<u8>> {
-    pub fn try_from_vec(mut data: Vec<u8>) -> Result<Self, FrameError> {
-        let frame = Frame::try_from_slice(&data)?;
-        let body = match frame.body {
-            FrameBody::Rfc(body) => FrameBody::Rfc(body),
-            FrameBody::Ack(body) => FrameBody::Ack(body),
-            FrameBody::Disc(body) => FrameBody::Disc(body),
-            FrameBody::Ping(body) => FrameBody::Ping(body),
-            FrameBody::Data(_) => {
-                let flags = frame.flags;
-                let window_size = frame.window_size;
-                let seq_number = frame.seq_number;
-                data.drain(..4);
-                return Ok(Self {
-                    flags,
-                    window_size,
-                    seq_number,
-                    body: FrameBody::Data(data),
-                });
-            }
-        };
-        Ok(Self {
-            flags: frame.flags,
-            window_size: frame.window_size,
-            seq_number: frame.seq_number,
-            body,
-        })
+impl Frame<'_> {
+    pub fn serialized_len(&self) -> usize {
+        4 + match &self.body {
+            FrameBody::Rfc(_) => 3,
+            FrameBody::Ack(_) | FrameBody::Disc(_) | FrameBody::Ping(_) => 1,
+            FrameBody::Data(body) => body.as_ref().len(),
+        }
     }
-}
 
-impl<D: AsRef<[u8]>> Frame<D> {
-    pub fn write_into(&self, dst: &mut Vec<u8>) {
-        dst.push(self.body.repr());
-        dst.push(self.flags);
-        dst.push(self.window_size);
-        dst.push(self.seq_number);
+    pub fn write_into(&self, mut dst: impl io::Write) -> io::Result<()> {
+        dst.write_all(&[
+            self.body.repr(),
+            self.flags,
+            self.window_size,
+            self.seq_number,
+        ])?;
 
         match &self.body {
             FrameBody::Rfc(body) => {
-                dst.push(body.connection_id);
-                dst.extend_from_slice(&body.version);
+                dst.write_all(&[body.connection_id])?;
+                dst.write_all(&body.version)?;
             }
             FrameBody::Ack(body) | FrameBody::Disc(body) | FrameBody::Ping(body) => {
-                dst.push(body.connection_id);
+                dst.write_all(&[body.connection_id])?;
             }
             FrameBody::Data(body) => {
-                dst.extend_from_slice(body.as_ref());
+                dst.write_all(body.as_ref())?;
             }
         }
+        Ok(())
     }
 }
 
-impl<D> FrameBody<D> {
+impl FrameBody<'_> {
     fn repr(&self) -> u8 {
         (match self {
             FrameBody::Rfc(_) => FrameType::Rfc,

@@ -10,13 +10,7 @@ pub enum FrameError {
         max: usize,
     },
     UnexpectedEof,
-    MalformedFrameMarker {
-        marker: u8,
-    },
-    InvalidCrc {
-        expected: u16,
-        found: u16,
-    },
+    Framing(crate::frame::Error),
     Io(io::Error),
 }
 
@@ -26,15 +20,7 @@ impl fmt::Display for FrameError {
             Self::Validation { reason } => write!(f, "validation error: {reason}"),
             Self::FrameTooLarge { max } => write!(f, "frame is too large: max {max} bytes"),
             Self::UnexpectedEof => f.write_str("unexpected end of frame"),
-            Self::MalformedFrameMarker { marker } => {
-                write!(f, "malformed frame marker {marker:#04x}")
-            }
-            Self::InvalidCrc { expected, found } => {
-                write!(
-                    f,
-                    "invalid frame CRC: expected {expected:#06x}, found {found:#06x}"
-                )
-            }
+            Self::Framing(err) => err.fmt(f),
             Self::Io(err) => err.fmt(f),
         }
     }
@@ -45,8 +31,18 @@ impl std::error::Error for FrameError {
     /// error's, so reporting itself as the source would print it twice.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Framing(err) => Some(err),
             Self::Io(err) => err.source(),
             _ => None,
+        }
+    }
+}
+
+impl From<crate::frame::Error> for FrameError {
+    fn from(err: crate::frame::Error) -> Self {
+        match err {
+            crate::frame::Error::Io(err) => Self::from(err),
+            err => Self::Framing(err),
         }
     }
 }

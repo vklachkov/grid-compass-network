@@ -2,8 +2,9 @@ use std::io::{self, Cursor, Read, Write};
 
 use tempfile::TempDir;
 
-use super::raw_frame::RawFrame;
 use super::*;
+use crate::frame::{self, FrameTransport};
+use crate::shared::Poll;
 
 const INITIAL_SEQUENCE: u8 = 0x1c;
 const CONNECTION_ID: u8 = 0x7b;
@@ -214,7 +215,8 @@ impl Write for TestTransport {
 
 struct Harness {
     session: Session,
-    link: PdlLink<TestTransport>,
+    transport: TestTransport,
+    connection_id: ConnectionId,
     conn: Arc<db::Database>,
     capture: Arc<Mutex<Capture>>,
     ids: Arc<Mutex<IdMap8>>,
@@ -239,7 +241,6 @@ impl Harness {
         };
         let connection_id = ConnectionId::acquire(&ids).expect("connection id");
         assert_eq!(connection_id.get(), CONNECTION_ID);
-        let link = PdlLink::new(transport, connection_id, INITIAL_SEQUENCE);
         let conn = db::Database::open_in_memory();
         let session = Session::new(
             conn.clone(),
@@ -247,7 +248,8 @@ impl Harness {
         );
         Self {
             session,
-            link,
+            transport,
+            connection_id,
             conn,
             capture,
             ids,
@@ -255,8 +257,9 @@ impl Harness {
         }
     }
 
-    fn run(self) -> (io::Result<()>, Capture) {
-        let result = run_session("scripted transport", self.link, self.session);
+    fn run(mut self) -> (io::Result<()>, Capture) {
+        let link = FrameLink::new(&mut self.transport, self.connection_id, INITIAL_SEQUENCE);
+        let result = run_session("scripted transport", link, self.session);
         assert!(
             !self
                 .ids
@@ -297,7 +300,11 @@ mod link {
         exchange.disconnect();
         let disconnect_end = exchange.incoming.len();
         exchange.receive(&[0xff]);
-        let capture = exchange.run();
+        let mut harness = Harness::new(exchange.incoming);
+        harness.transport.max_read = 1;
+        let (result, capture) = harness.run();
+        result.expect("disconnect without processing further input");
+        assert_eq!(capture.bytes, exchange.expected);
         assert_eq!(capture.input_position, disconnect_end);
     }
 
@@ -317,8 +324,8 @@ mod link {
         exchange.disconnect();
         for (read, write) in [(1, 1), (2, 3), (7, 5)] {
             let mut harness = Harness::new(exchange.incoming.clone());
-            harness.link.transport_mut().max_read = read;
-            harness.link.transport_mut().max_write = write;
+            harness.transport.max_read = read;
+            harness.transport.max_write = write;
             let (result, capture) = harness.run();
             result.expect("serve with partial I/O");
             assert_eq!(
@@ -340,7 +347,7 @@ mod link {
         let error = result.expect_err("CRC failure");
         assert!(matches!(
             error.get_ref().unwrap().downcast_ref::<FrameError>(),
-            Some(FrameError::InvalidCrc { .. })
+            Some(FrameError::Framing(frame::Error::CrcMismatch))
         ));
         assert_eq!(capture.bytes, exchange.expected);
     }
@@ -350,7 +357,7 @@ mod link {
         let mut exchange = Conversation::new();
         exchange.handshake();
         let mut harness = Harness::new(exchange.incoming.clone());
-        harness.link.transport_mut().read_error =
+        harness.transport.read_error =
             Some((exchange.incoming.len(), io::ErrorKind::ConnectionReset));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
@@ -364,7 +371,7 @@ mod link {
         let failure_at = exchange.expected.len() + wire(&ack(0x1d)).len() + 3;
         exchange.sign_on();
         let mut harness = Harness::new(exchange.incoming);
-        harness.link.transport_mut().write_error = Some((failure_at, io::ErrorKind::BrokenPipe));
+        harness.transport.write_error = Some((failure_at, io::ErrorKind::BrokenPipe));
         let (result, capture) = harness.run();
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(capture.bytes, exchange.expected[..failure_at]);
@@ -381,7 +388,11 @@ mod link {
             .request(&hex(LOG_CONNECT_VFS), Some(&hex("02 00 01 00 41 65 00 00")))
             .unwrap();
         exchange.disconnect();
-        let capture = exchange.run();
+        let mut harness = Harness::new(exchange.incoming);
+        harness.transport.max_read = 1;
+        let (result, capture) = harness.run();
+        result.expect("send responses before reading their acknowledgements");
+        assert_eq!(capture.bytes, exchange.expected);
         assert!(capture.input_position_at_output(first_start) < first_ack_end);
         assert!(capture.input_position_at_output(second_start) >= first_ack_end);
     }
@@ -417,7 +428,8 @@ mod link {
         }
         exchange.disconnect();
 
-        let harness = Harness::new(exchange.incoming);
+        let mut harness = Harness::new(exchange.incoming);
+        harness.transport.max_read = 1;
         for subject in ["first", "other"] {
             db::mailbox::insert(
                 &harness.conn.get_conn(),
@@ -557,7 +569,9 @@ mod session {
             let request_end = exchange.incoming.len();
             exchange.sign_on();
 
-            let (result, capture) = Harness::new(exchange.incoming).run();
+            let mut harness = Harness::new(exchange.incoming);
+            harness.transport.max_read = 1;
+            let (result, capture) = harness.run();
             let error = result.expect_err("truncated session request");
             assert!(matches!(
                 error.get_ref().unwrap().downcast_ref::<FrameError>(),
@@ -622,12 +636,23 @@ mod session {
         // Do not freeze the missing duplicate ACK as correct behavior: compare
         // application responses only, so a future duplicate ACK remains valid.
         let application_frames = |bytes: &[u8]| {
-            let mut input = Cursor::new(bytes);
+            let mut input = Cursor::new(bytes.to_vec());
+            let mut transport = FrameTransport::new(&mut input);
             let mut frames = Vec::new();
-            while input.position() < bytes.len() as u64 {
-                let raw = RawFrame::read_from_io(&mut input).expect("outgoing frame");
-                if raw.data[0] == 5 {
-                    frames.push(raw.data);
+            loop {
+                let mut task = transport.receive_frame();
+                let raw = loop {
+                    match task.poll() {
+                        Poll::Ready(raw) => break Some(raw),
+                        Poll::Failed(frame::Error::ConnectionClosed) => break None,
+                        Poll::Failed(err) => panic!("outgoing frame: {err}"),
+                        Poll::Pending => {}
+                        Poll::Finished => unreachable!(),
+                    }
+                };
+                let Some(raw) = raw else { break };
+                if raw[0] == 5 {
+                    frames.push(raw.to_vec());
                 }
             }
             frames

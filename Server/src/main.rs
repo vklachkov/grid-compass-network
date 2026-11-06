@@ -3,6 +3,7 @@ compile_error!("This project is only supported on Unix-like systems.");
 
 mod db;
 mod env;
+mod frame;
 mod logger;
 mod server;
 mod shared;
@@ -10,6 +11,9 @@ mod transport;
 mod vfs;
 mod vipc;
 mod web;
+
+#[cfg(test)]
+mod tests;
 
 use std::{process::ExitCode, sync::Arc, thread};
 

@@ -1,17 +1,12 @@
 mod data_frame;
 mod frame;
-mod frame_io;
 mod link;
-mod raw_frame;
 mod session;
-
-#[cfg(test)]
-use frame::{Frame, FrameBody};
 
 #[cfg(test)]
 mod behavior_tests;
 
-use link::{PdlLink, next_initial_seq_number};
+use link::{FrameLink, next_initial_seq_number};
 use std::{
     any::Any,
     io,
@@ -86,12 +81,15 @@ impl Server {
         info!(target: "server", "accepted client {peer} as connection {}", connection_id.get());
         let conn = self.conn.clone();
         let vfs_root = self.vfs_root.clone();
-        thread::spawn(move || worker(transport, peer, connection_id, conn, vfs_root));
+        thread::spawn(move || {
+            let mut transport = transport;
+            worker(&mut transport, peer, connection_id, conn, vfs_root)
+        });
     }
 }
 
 fn worker(
-    transport: impl Transport,
+    transport: &mut impl Transport,
     peer: String,
     connection_id: ConnectionId,
     conn: Arc<db::Database>,
@@ -123,23 +121,19 @@ fn panic_reason(payload: &(dyn Any + Send)) -> &str {
 
 fn try_worker(
     peer: String,
-    transport: impl Transport,
+    transport: &mut impl Transport,
     connection_id: ConnectionId,
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
 ) -> io::Result<()> {
     let initial_seq_number = next_initial_seq_number();
 
-    let link = PdlLink::new(transport, connection_id, initial_seq_number);
+    let link = FrameLink::new(transport, connection_id, initial_seq_number);
     let session = Session::new(conn, vfs_root);
     run_session(&peer, link, session)
 }
 
-fn run_session<T: Transport>(
-    peer: &str,
-    mut link: PdlLink<T>,
-    mut session: Session,
-) -> io::Result<()> {
+fn run_session(peer: &str, mut link: FrameLink<'_>, mut session: Session) -> io::Result<()> {
     let mut message = Vec::new();
     let mut body = Vec::new();
     let result = (|| -> Result<(), FrameError> {

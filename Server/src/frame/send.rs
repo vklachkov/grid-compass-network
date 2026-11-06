@@ -77,12 +77,7 @@ impl Sender {
                 }
 
                 self.state = State::Idle;
-
-                if let Err(err) = dest.flush() {
-                    Poll::Failed(super::Error::Io(err))
-                } else {
-                    Poll::Ready(())
-                }
+                Poll::Ready(())
             }
             Err(err)
                 if err.kind() == io::ErrorKind::WouldBlock

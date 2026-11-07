@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 
-use log::{error, info};
+use log::error;
 
 use crate::server::Server;
 
@@ -30,17 +30,16 @@ impl Write for TcpTransport {
     }
 }
 
-pub fn serve(addr: &str, server: Server) -> io::Result<()> {
+pub fn serve(server: Server, addr: SocketAddr) -> io::Result<()> {
     let listener = TcpListener::bind(addr)?;
 
-    info!(target: "server", "start GRiD server at {addr}");
     loop {
         match listener.accept() {
             Ok((client, addr)) => match TcpTransport::new(client) {
                 Ok(client) => server.spawn(client, addr.to_string()),
-                Err(err) => error!(target: "server", "failed to configure client {addr}: {err}"),
+                Err(err) => error!("failed to configure client {addr}: {err}"),
             },
-            Err(err) => error!(target: "server", "failed to accept client: {err}"),
+            Err(err) => error!("failed to accept client: {err}"),
         }
     }
 }

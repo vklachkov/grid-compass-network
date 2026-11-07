@@ -57,6 +57,7 @@ impl Drop for ConnectionId {
     }
 }
 
+#[derive(Clone)]
 pub struct Server {
     conn: Arc<db::Database>,
     vfs_root: Arc<VfsDirManager>,
@@ -73,18 +74,41 @@ impl Server {
     }
 
     pub fn spawn(&self, transport: impl Transport, peer: String) {
-        let Some(connection_id) = ConnectionId::acquire(&self.connection_ids) else {
-            error!(target: "server", "rejected client {peer}: no free connection id");
+        let Some(connection_id) = self.accept(&peer) else {
             return;
         };
 
-        info!(target: "server", "accepted client {peer} as connection {}", connection_id.get());
         let conn = self.conn.clone();
         let vfs_root = self.vfs_root.clone();
         thread::spawn(move || {
             let mut transport = transport;
             worker(&mut transport, peer, connection_id, conn, vfs_root)
         });
+    }
+
+    pub fn serve(&self, mut transport: impl Transport, peer: String) {
+        let Some(connection_id) = self.accept(&peer) else {
+            return;
+        };
+
+        worker(
+            &mut transport,
+            peer,
+            connection_id,
+            self.conn.clone(),
+            self.vfs_root.clone(),
+        );
+    }
+
+    fn accept(&self, peer: &str) -> Option<ConnectionId> {
+        let Some(connection_id) = ConnectionId::acquire(&self.connection_ids) else {
+            error!(target: "server", "rejected client {peer}: no free connection id");
+            return None;
+        };
+
+        info!(target: "server", "accepted client {peer} as connection {}", connection_id.get());
+
+        Some(connection_id)
     }
 }
 

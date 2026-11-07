@@ -1,7 +1,7 @@
 pub mod mailbox;
 pub mod users;
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::Context;
 use parking_lot::{Mutex, MutexGuard};
@@ -15,9 +15,12 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn open(path: &str) -> anyhow::Result<Arc<Self>> {
-        let conn = Connection::open(path).with_context(|| format!("open database {path}"))?;
-        Self::new(conn)
+    pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Arc<Self>> {
+        let path = path.as_ref();
+
+        Connection::open(path)
+            .with_context(|| format!("open database {}", path.display()))
+            .and_then(Self::new)
     }
 
     #[cfg(test)]

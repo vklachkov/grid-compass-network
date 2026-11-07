@@ -1,8 +1,8 @@
 #[cfg(not(unix))]
 compile_error!("This project is only supported on Unix-like systems.");
 
+mod config;
 mod db;
-mod env;
 mod frame;
 mod logger;
 mod server;
@@ -15,11 +15,19 @@ mod web;
 #[cfg(test)]
 mod tests;
 
-use std::{process::ExitCode, sync::Arc, thread};
+use std::{
+    env, io,
+    net::SocketAddr,
+    path::PathBuf,
+    process::{self, ExitCode},
+    sync::Arc,
+    thread,
+};
 
-use anyhow::Context;
-use env::Environment;
-use log::{error, info};
+use anyhow::{Context, bail};
+use log::{debug, error};
+
+use crate::config::{Config, SerialConfig, Transport};
 
 fn main() -> ExitCode {
     logger::init();
@@ -36,36 +44,90 @@ fn main() -> ExitCode {
 }
 
 fn run() -> anyhow::Result<()> {
-    let env = read_and_log_env()?;
-    let conn = db::Database::open(&env.db_path).context("database")?;
+    let config = read_config()?;
 
-    if let Some(addr) = env.web_listen_addr.clone() {
-        start_web(addr, Arc::clone(&conn));
+    let db_conn = db::Database::open(&config.database_path).context("database")?;
+    let vfs_root = Arc::new(vfs::VfsDirManager::new(&config.filesystem_root).context("vfs root")?);
+
+    let server = server::Server::new(Arc::clone(&db_conn), vfs_root);
+
+    if let Some(frontend) = config.frontend {
+        start_web(frontend.listen_address, db_conn);
     }
 
-    let vfs_root = Arc::new(vfs::VfsDirManager::new(&env.fs_root).context("vfs root")?);
-    let server = server::Server::new(conn, vfs_root);
+    for transport in config.transport {
+        start_transport(transport, server.clone());
+    }
 
-    transport::tcp::serve(&env.listen_addr, server).context("TCP transport")
+    // TODO: Handle SIGTERM, SIGINT gracefully.
+    loop {
+        thread::park();
+    }
 }
 
-fn read_and_log_env() -> anyhow::Result<Arc<Environment>> {
-    let env = Environment::read()?;
+fn read_config() -> anyhow::Result<Config> {
+    let Some(path) = env::args_os().nth(1).map(PathBuf::from) else {
+        bail!("expected config file path as first argument")
+    };
 
-    info!(
-        target: "server",
-        "start server at {}, web at {}, use database from '{}'",
-        env.listen_addr,
-        env.web_listen_addr.as_deref().unwrap_or("[disabled]"),
-        env.db_path,
-    );
+    let config =
+        Config::read(&path).with_context(|| format!("read config from {}", path.display()))?;
 
-    Ok(env)
+    debug!("Use configuration {config:#?}");
+
+    Ok(config)
 }
 
-fn start_web(web_listen_addr: String, conn: Arc<db::Database>) {
+fn start_transport(transport: Transport, server: server::Server) {
     thread::spawn(move || {
-        if let Err(err) = web::serve(web_listen_addr, conn) {
+        let result = match &transport {
+            Transport::Tcp(config) => {
+                transport::tcp::serve(server, config.listen_address) //
+            }
+            Transport::Serial(config) => {
+                transport::serial::serve(server, &config.path, |settings| {
+                    apply_serial_settings(config, settings)
+                })
+            }
+        };
+
+        if let Err(err) = result {
+            error!(target: "server", "transport {transport:?} crashed: {err}");
+            process::abort();
+        }
+    });
+}
+
+fn apply_serial_settings(
+    config: &SerialConfig,
+    mut settings: serial2::Settings,
+) -> io::Result<serial2::Settings> {
+    settings.set_raw();
+
+    settings.set_baud_rate(config.baud_rate)?;
+
+    if let Some(value) = config.char_size {
+        settings.set_char_size(value);
+    }
+
+    if let Some(value) = config.parity {
+        settings.set_parity(value);
+    }
+
+    if let Some(value) = config.stop_bits {
+        settings.set_stop_bits(value);
+    }
+
+    if let Some(value) = config.flow_control {
+        settings.set_flow_control(value);
+    }
+
+    Ok(settings)
+}
+
+fn start_web(web_listen_addr: SocketAddr, conn: Arc<db::Database>) {
+    thread::spawn(move || {
+        if let Err(err) = web::serve(web_listen_addr.to_string(), conn) {
             error!(target: "web", "frontend stopped: {err}");
         }
     });

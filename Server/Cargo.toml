@@ -18,9 +18,10 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled"] 
 rusqlite_migration = "2.6"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_urlencoded = "0.7.1"
-serial2 = "0.2.39"
+serial2 = { version = "0.2.39", features = ["serde"] }
 thiserror = "2.0.20"
 tiny_http = "0.12.0"
+toml = { version = "1.2.1", default-features = false, features = ["serde", "parse"] }
 wide = "1.7.0"
 xattr = "1.6.1"
 zerocopy = { version = "0.8.56", features = ["derive"] }

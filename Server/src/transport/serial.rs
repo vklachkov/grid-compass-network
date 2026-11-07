@@ -2,8 +2,12 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use serial2::SerialPort;
+
+use crate::server::Server;
+
 pub struct SerialTransport {
-    port: serial2::SerialPort,
+    port: SerialPort,
 }
 
 impl SerialTransport {
@@ -41,4 +45,17 @@ fn nonblocking_error(err: io::Error) -> io::Error {
     } else {
         err
     }
+}
+
+pub fn serve(
+    server: Server,
+    path: impl AsRef<Path>,
+    settings: impl serial2::IntoSettings,
+) -> io::Result<()> {
+    let path = path.as_ref();
+    let transport = SerialTransport::open(path, settings)?;
+
+    server.serve(transport, path.display().to_string());
+
+    Ok(())
 }

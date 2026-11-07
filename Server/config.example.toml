@@ -1,0 +1,26 @@
+# Path to the database storing users and service data.
+database_path = "server.db"
+
+# Path to the directory storing all Compass files.
+filesystem_root = "filesystem"
+
+# Web frontend. Uncomment both lines to enable.
+# [frontend]
+# listen_address = "127.0.0.1:8080"
+
+# List of transports.
+# Any number of transports can be configured.
+
+[[transport]]
+type = "serial"
+path = "/dev/ttyUSB0"
+baud_rate = 9600
+char_size = 8
+parity = "none"
+stop_bits = 1
+flow_control = "none"  # or "xon/xoff", "rts/cts".
+
+# TCP transport. Uncomment all three lines to enable.
+# [[transport]]
+# type = "tcp"
+# listen_address = "127.0.0.1:8000"

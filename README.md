@@ -1,24 +1,39 @@
-# Connecting the GRiD Compass to the Network
+# GRiD Compass
 
-A project to reimplement GRiD Server and reverse-engineer the built-in modem of the world's first laptop.
+A reimplementation of GRiD Server and other projects focused on the built-in modem and applications of the GRiD Compass laptop.
 
-![GRiD Compass connected to the server](./Screenshot.jpg)
+![GRiD Compass connected to the server](./Screenshot.png)
 
-## Server Status
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=FKbSp-bifZE">Video demo of an early server version with a very slow modem.</a>
+</p>
 
-> [!WARNING]
-> The server is an experimental, incomplete reimplementation intended for protocol research rather than production use.
+## Setochka Server
 
-The new server implements the GRiDLink transport, VIPC framing, a subset of VFS, and the GRiDMail workflows needed to list, read, and send messages, including attachments. Authentication, multi-user mail routing, most server applications, and full protocol compatibility are not implemented yet.
+Setochka is a software reimplementation of the original GRiD Server. It lets you exchange files and mail between these iconic laptops, even 50 years later.
 
-## Modem Reverse Engineering
+The first public release is in preparation.
 
-The GRiD Compass modem drivers for MS-DOS have been reverse-engineered. This work also led to a [MAME pull request for HLE emulation of the internal modem](https://github.com/mamedev/mame/pull/15627).
+See [Server/README.md](Server/README.md) for build, setup, and configuration instructions.
 
-No original modem schematic or technical documentation is currently available, so some hardware behavior remains uncertain.
+If you find a problem, [open an issue](https://github.com/vklachkov/grid-compass-network/issues/new). I will try to respond soon.
 
-## Reverse-Engineering Process
+## Modem
 
-The modem was reverse-engineered manually from its MS-DOS and GRiD-OS drivers.
+The original modem schematics and technical documentation have not been found yet. I do not have a physical modem, so I do not know how its hardware works.
 
-The server software is being analyzed with an LLM through [ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) and the project-specific [ida-grid-os-loader](https://github.com/vklachkov/ida-grid-os-loader), with runtime traces and recovered GRiD sources used to verify the results.
+But the built-in modem driver from MS-DOS 2.11C was reverse-engineered. This work led to a [MAME pull request with a proof-of-concept modem emulator](https://github.com/mamedev/mame/pull/15627).
+
+A Wi-Fi card is being developed to replace the original slow modem.
+
+## Reverse Engineering
+
+See [Reverse Engineering/README.md](Reverse%20Engineering/README.md) for details on reverse engineering GRiD Server applications and protocols.
+
+## LLM Disclosure
+
+I used LLM-based tools to help with reverse engineering and programming parts of this project. I reviewed their contributions and made the technical decisions myself. This is not unchecked "vibe coding": I take full responsibility for the code, research, and any remaining errors.
+
+## License
+
+The project code is released under the [MIT License](LICENSE). Original firmware, third-party articles, and technical documentation remain the property of their respective copyright holders and are not covered by this license.
